@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-IMPORT-CYCLE-DEFECT",
+  "title": "Import cycle defective control",
+  "category": "synthetic_structural",
+  "label": "REPRODUCED_BAD",
+  "critical": false,
+  "expected_decision": "BLOCK_TECHNICAL",
+  "fixture_path": "fixtures/synthetic/import_cycle/defective",
+  "detectors": ["import_cycle"],
+  "required_evidence": ["import_cycle"]
+}

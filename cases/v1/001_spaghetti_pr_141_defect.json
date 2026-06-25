@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "id": "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-DEFECT",
+  "title": "PR #141 partial metadata route interleaving defect",
+  "category": "historical_behavior",
+  "label": "REPRODUCED_BAD",
+  "critical": true,
+  "expected_decision": "BLOCK_TECHNICAL",
+  "fixture_path": "fixtures/historical/spaghetti_pr_141_defect",
+  "detectors": ["spaghetti_lock", "route_interleaving"],
+  "required_evidence": ["spaghetti_lock", "route_interleaving"],
+  "sources": [
+    "targets/spaghetti.toml",
+    "targets/spaghetti.lock.toml",
+    "docs/spec/resolve_failure.md"
+  ]
+}

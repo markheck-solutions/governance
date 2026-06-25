@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-IMPORT-CYCLE-CLEAN",
+  "title": "Acyclic import clean control",
+  "category": "synthetic_structural",
+  "label": "VERIFIED_SAFE",
+  "critical": false,
+  "expected_decision": "MERGE",
+  "fixture_path": "fixtures/synthetic/import_cycle/clean",
+  "detectors": ["import_cycle"],
+  "required_evidence": ["import_cycle"]
+}

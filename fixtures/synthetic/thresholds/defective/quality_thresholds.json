@@ -1,0 +1,6 @@
+{
+  "thresholds": [
+    {"name": "coverage_percent", "direction": "minimum", "baseline": 95, "candidate": 80},
+    {"name": "max_mccabe_complexity", "direction": "maximum", "baseline": 10, "candidate": 12}
+  ]
+}

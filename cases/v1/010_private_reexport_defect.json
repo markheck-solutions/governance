@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-PRIVATE-REEXPORT-DEFECT",
+  "title": "Private helper re-export defective control",
+  "category": "synthetic_structural",
+  "label": "REPRODUCED_BAD",
+  "critical": false,
+  "expected_decision": "BLOCK_TECHNICAL",
+  "fixture_path": "fixtures/synthetic/private_reexport/defective",
+  "detectors": ["private_reexport"],
+  "required_evidence": ["private_reexport"]
+}

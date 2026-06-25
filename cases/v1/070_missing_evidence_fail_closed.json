@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "FAIL-CLOSED-MISSING-EVIDENCE",
+  "title": "Missing required evidence fails closed",
+  "category": "fail_closed",
+  "label": "UNKNOWN",
+  "critical": false,
+  "expected_decision": "BLOCK_TECHNICAL",
+  "fixture_path": "fixtures/fail_closed/missing_required_evidence",
+  "detectors": ["required_evidence"],
+  "required_evidence": ["required_evidence"]
+}

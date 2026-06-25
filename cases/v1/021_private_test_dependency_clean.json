@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-PRIVATE-TEST-DEPENDENCY-CLEAN",
+  "title": "Test dependency on public production boundary clean control",
+  "category": "synthetic_structural",
+  "label": "VERIFIED_SAFE",
+  "critical": false,
+  "expected_decision": "MERGE",
+  "fixture_path": "fixtures/synthetic/private_test_dependency/clean",
+  "detectors": ["private_test_dependency"],
+  "required_evidence": ["private_test_dependency"]
+}

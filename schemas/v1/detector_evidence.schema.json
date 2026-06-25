@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/governance/schemas/v1/detector_evidence.schema.json",
+  "title": "Detector evidence",
+  "type": "object",
+  "required": ["evidence_id", "case_id", "detector_id", "status", "message", "observed", "findings"],
+  "properties": {
+    "evidence_id": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "detector_id": {"type": "string", "minLength": 1},
+    "status": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "UNKNOWN", "MALFORMED", "UNVERIFIABLE", "BUSINESS_AMBIGUITY"]
+    },
+    "message": {"type": "string"},
+    "observed": {"type": "object"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "category", "message", "evidence_id", "status"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "severity": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+          "category": {"type": "string", "minLength": 1},
+          "message": {"type": "string", "minLength": 1},
+          "evidence_id": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["REPRODUCED", "UNRESOLVED", "RESOLVED"]}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

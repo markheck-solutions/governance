@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/governance/schemas/v1/evaluation_case.schema.json",
+  "title": "Governance evaluation case",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "category",
+    "label",
+    "critical",
+    "expected_decision",
+    "fixture_path",
+    "detectors",
+    "required_evidence"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "id": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "category": {
+      "type": "string",
+      "enum": ["historical_behavior", "synthetic_structural", "fail_closed", "business_ambiguity"]
+    },
+    "label": {"type": "string", "enum": ["REPRODUCED_BAD", "VERIFIED_SAFE", "UNKNOWN"]},
+    "critical": {"type": "boolean"},
+    "expected_decision": {"type": "string", "enum": ["MERGE", "BLOCK_TECHNICAL", "ASK_BUSINESS"]},
+    "fixture_path": {"type": "string", "minLength": 1},
+    "detectors": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "required_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "sources": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "id": "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-CLEAN",
+  "title": "PR #141 partial metadata approved interleaving oracle",
+  "category": "historical_behavior",
+  "label": "VERIFIED_SAFE",
+  "critical": false,
+  "expected_decision": "MERGE",
+  "fixture_path": "fixtures/historical/spaghetti_pr_141_clean",
+  "detectors": ["spaghetti_lock", "route_interleaving"],
+  "required_evidence": ["spaghetti_lock", "route_interleaving"],
+  "sources": [
+    "targets/spaghetti.toml",
+    "targets/spaghetti.lock.toml",
+    "docs/spec/resolve_failure.md"
+  ]
+}

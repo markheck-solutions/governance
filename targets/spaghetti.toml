@@ -1,0 +1,18 @@
+schema_version = 1
+name = "Spaghetti"
+repository_url = "https://github.com/markheck-solutions/Spaghetti.git"
+access = "read_only"
+historical_pull_request = 141
+historical_case_id = "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING"
+
+[pinning]
+required = true
+lock_file = "targets/spaghetti.lock.toml"
+allow_floating_refs_in_evidence = false
+
+[historical_case]
+summary = "Partially ranked route with an unranked A-B OL01 trunk must preserve approved interleaving behavior."
+expected_sequence = ["A1", "B1", "A3", "B3"]
+defective_sequence = ["A1", "A3", "B1", "B3"]
+require_executable_reproduction = true
+review_comment_alone_is_evidence = false

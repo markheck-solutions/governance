@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-NARROWED-GATE-SCOPE-DEFECT",
+  "title": "Narrowed validation gate scope defective control",
+  "category": "synthetic_structural",
+  "label": "REPRODUCED_BAD",
+  "critical": false,
+  "expected_decision": "BLOCK_TECHNICAL",
+  "fixture_path": "fixtures/synthetic/gate_scope/defective",
+  "detectors": ["gate_scope"],
+  "required_evidence": ["gate_scope"]
+}

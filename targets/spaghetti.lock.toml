@@ -1,0 +1,15 @@
+schema_version = 1
+generated_at = '2026-06-25T19:46:06Z'
+evidence_source = 'GitHub REST pull #141 and git ls-remote, resolved 2026-06-25'
+repository_url = 'https://github.com/markheck-solutions/Spaghetti.git'
+
+[pull_request_141]
+number = 141
+html_url = "https://github.com/markheck-solutions/Spaghetti/pull/141"
+base_sha = '60da7dbe2fad70836f15ed7ec4d7969c6ad436f1'
+head_sha = '43f96f395b8a0acb4d323943b6fc68727bf21121'
+merge_commit_sha = 'dce7cd0397341c87a2c16d5681db586da1c85c75'
+approved_oracle_sha = '60da7dbe2fad70836f15ed7ec4d7969c6ad436f1'
+observed_main_sha = '9b05ec90140ee65f4c82e8f63cf0c6d50c3a380d'
+historical_case_id = "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING"
+oracle_reason = "TASK.md and targets/spaghetti.toml define approved sequence; PR base SHA pins the pre-change oracle."

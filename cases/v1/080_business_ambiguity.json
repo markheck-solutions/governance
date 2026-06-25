@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "ASK-BUSINESS-ROUTE-ORDER",
+  "title": "Genuine business route-order ambiguity",
+  "category": "business_ambiguity",
+  "label": "UNKNOWN",
+  "critical": false,
+  "expected_decision": "ASK_BUSINESS",
+  "fixture_path": "fixtures/business_ambiguity/route_order",
+  "detectors": ["business_ambiguity"],
+  "required_evidence": ["business_ambiguity"]
+}

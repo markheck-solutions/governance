@@ -1,0 +1,8 @@
+{
+  "changed_files": ["src/app/ranking.py"],
+  "high_risk_files": ["src/app/public_api.py"],
+  "gates": [
+    {"name": "pytest", "scope": ["tests/**"]},
+    {"name": "ruff", "scope": ["tests/**"]}
+  ]
+}

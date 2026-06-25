@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-WEAKENED-THRESHOLD-DEFECT",
+  "title": "Weakened validation threshold defective control",
+  "category": "synthetic_structural",
+  "label": "REPRODUCED_BAD",
+  "critical": false,
+  "expected_decision": "BLOCK_TECHNICAL",
+  "fixture_path": "fixtures/synthetic/thresholds/defective",
+  "detectors": ["thresholds"],
+  "required_evidence": ["thresholds"]
+}

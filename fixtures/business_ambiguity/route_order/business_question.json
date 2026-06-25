@@ -1,0 +1,5 @@
+{
+  "requires_owner_decision": true,
+  "question": "Should partially ranked routes preserve legacy interleaving or adopt a new grouped order when metadata is incomplete?",
+  "technical_reproducer_available": true
+}

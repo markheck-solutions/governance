@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-WEAKENED-THRESHOLD-CLEAN",
+  "title": "Preserved validation threshold clean control",
+  "category": "synthetic_structural",
+  "label": "VERIFIED_SAFE",
+  "critical": false,
+  "expected_decision": "MERGE",
+  "fixture_path": "fixtures/synthetic/thresholds/clean",
+  "detectors": ["thresholds"],
+  "required_evidence": ["thresholds"]
+}

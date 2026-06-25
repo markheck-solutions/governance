@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/governance/schemas/v1/benchmark_run_result.schema.json",
+  "title": "Benchmark run result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "generated_at",
+    "duration_seconds",
+    "repeat_count",
+    "phase1_decision",
+    "acceptance_errors",
+    "target_lock",
+    "metrics",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "run_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "minLength": 1},
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "repeat_count": {"type": "integer", "minimum": 1},
+    "phase1_decision": {"type": "string", "enum": ["MERGE", "BLOCK_TECHNICAL", "ASK_BUSINESS"]},
+    "acceptance_errors": {"type": "array", "items": {"type": "string"}},
+    "target_lock": {
+      "type": "object",
+      "required": [
+        "repository_url",
+        "pull_request",
+        "base_sha",
+        "head_sha",
+        "merge_commit_sha",
+        "approved_oracle_sha",
+        "observed_main_sha",
+        "generated_at",
+        "evidence_source"
+      ],
+      "properties": {
+        "repository_url": {"type": "string", "minLength": 1},
+        "pull_request": {"type": "integer"},
+        "base_sha": {"type": "string", "minLength": 40},
+        "head_sha": {"type": "string", "minLength": 40},
+        "merge_commit_sha": {"type": "string", "minLength": 40},
+        "approved_oracle_sha": {"type": "string", "minLength": 40},
+        "observed_main_sha": {"type": "string", "minLength": 40},
+        "generated_at": {"type": "string", "minLength": 1},
+        "evidence_source": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "metrics": {
+      "type": "object",
+      "required": [
+        "critical_defect_recall",
+        "negative_control_recall",
+        "false_block_rate",
+        "repeated_run_decision_stability",
+        "deterministic_flake_rate",
+        "execution_duration_seconds",
+        "case_count",
+        "critical_defect_count",
+        "negative_control_count",
+        "verified_safe_count"
+      ],
+      "properties": {
+        "critical_defect_recall": {"type": "number", "minimum": 0, "maximum": 1},
+        "negative_control_recall": {"type": "number", "minimum": 0, "maximum": 1},
+        "false_block_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "repeated_run_decision_stability": {"type": "number", "minimum": 0, "maximum": 1},
+        "deterministic_flake_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "execution_duration_seconds": {"type": "number", "minimum": 0},
+        "case_count": {"type": "integer", "minimum": 1},
+        "critical_defect_count": {"type": "integer", "minimum": 1},
+        "negative_control_count": {"type": "integer", "minimum": 1},
+        "verified_safe_count": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "category", "label", "critical", "expected_decision", "decision", "evidence"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "category": {"type": "string", "minLength": 1},
+          "label": {"type": "string", "enum": ["REPRODUCED_BAD", "VERIFIED_SAFE", "UNKNOWN"]},
+          "critical": {"type": "boolean"},
+          "expected_decision": {"type": "string", "enum": ["MERGE", "BLOCK_TECHNICAL", "ASK_BUSINESS"]},
+          "decision": {
+            "type": "object",
+            "required": ["case_id", "decision", "reasons", "evidence_refs", "fail_closed"],
+            "properties": {
+              "case_id": {"type": "string", "minLength": 1},
+              "decision": {"type": "string", "enum": ["MERGE", "BLOCK_TECHNICAL", "ASK_BUSINESS"]},
+              "reasons": {"type": "array", "items": {"type": "string"}},
+              "evidence_refs": {"type": "array", "items": {"type": "string"}},
+              "fail_closed": {"type": "boolean"}
+            },
+            "additionalProperties": false
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["evidence_id", "case_id", "detector_id", "status", "message", "observed", "findings"],
+              "properties": {
+                "evidence_id": {"type": "string", "minLength": 1},
+                "case_id": {"type": "string", "minLength": 1},
+                "detector_id": {"type": "string", "minLength": 1},
+                "status": {
+                  "type": "string",
+                  "enum": ["PASS", "FAIL", "UNKNOWN", "MALFORMED", "UNVERIFIABLE", "BUSINESS_AMBIGUITY"]
+                },
+                "message": {"type": "string"},
+                "observed": {"type": "object"},
+                "findings": {"type": "array", "items": {"type": "object"}}
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

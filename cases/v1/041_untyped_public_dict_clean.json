@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-UNTYPED-PUBLIC-DICT-CLEAN",
+  "title": "Typed public boundary clean control",
+  "category": "synthetic_structural",
+  "label": "VERIFIED_SAFE",
+  "critical": false,
+  "expected_decision": "MERGE",
+  "fixture_path": "fixtures/synthetic/untyped_public_dict/clean",
+  "detectors": ["untyped_public_dict"],
+  "required_evidence": ["untyped_public_dict"]
+}

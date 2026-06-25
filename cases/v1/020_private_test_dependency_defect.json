@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-PRIVATE-TEST-DEPENDENCY-DEFECT",
+  "title": "Test dependency on private production internals defective control",
+  "category": "synthetic_structural",
+  "label": "REPRODUCED_BAD",
+  "critical": false,
+  "expected_decision": "BLOCK_TECHNICAL",
+  "fixture_path": "fixtures/synthetic/private_test_dependency/defective",
+  "detectors": ["private_test_dependency"],
+  "required_evidence": ["private_test_dependency"]
+}

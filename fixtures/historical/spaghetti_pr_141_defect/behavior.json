@@ -1,0 +1,11 @@
+{
+  "case": "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING",
+  "expected_sequence": ["A1", "B1", "A3", "B3"],
+  "candidate_strategy": "ranked_first",
+  "rows": [
+    {"id": "A1", "endpoint": "A", "trunk": "OL01", "metadata_rank": 1, "original_position": 0},
+    {"id": "B1", "endpoint": "B", "trunk": "OL01", "metadata_rank": null, "original_position": 1},
+    {"id": "A3", "endpoint": "A", "trunk": "OL01", "metadata_rank": 2, "original_position": 2},
+    {"id": "B3", "endpoint": "B", "trunk": "OL01", "metadata_rank": null, "original_position": 3}
+  ]
+}

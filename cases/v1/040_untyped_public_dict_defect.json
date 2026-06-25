@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-UNTYPED-PUBLIC-DICT-DEFECT",
+  "title": "Untyped public dictionary boundary defective control",
+  "category": "synthetic_structural",
+  "label": "REPRODUCED_BAD",
+  "critical": false,
+  "expected_decision": "BLOCK_TECHNICAL",
+  "fixture_path": "fixtures/synthetic/untyped_public_dict/defective",
+  "detectors": ["untyped_public_dict"],
+  "required_evidence": ["untyped_public_dict"]
+}

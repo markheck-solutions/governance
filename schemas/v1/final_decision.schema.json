@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/governance/schemas/v1/final_decision.schema.json",
+  "title": "Final decision",
+  "type": "object",
+  "required": ["case_id", "decision", "reasons", "evidence_refs", "fail_closed"],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "decision": {"type": "string", "enum": ["MERGE", "BLOCK_TECHNICAL", "ASK_BUSINESS"]},
+    "reasons": {"type": "array", "items": {"type": "string"}},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "fail_closed": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "SYN-PRIVATE-REEXPORT-CLEAN",
+  "title": "Private helper re-export clean control",
+  "category": "synthetic_structural",
+  "label": "VERIFIED_SAFE",
+  "critical": false,
+  "expected_decision": "MERGE",
+  "fixture_path": "fixtures/synthetic/private_reexport/clean",
+  "detectors": ["private_reexport"],
+  "required_evidence": ["private_reexport"]
+}
