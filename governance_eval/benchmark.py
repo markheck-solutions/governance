@@ -9,6 +9,7 @@ from typing import Any
 from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
+from governance_eval.hashing import sha256_json
 from governance_eval.lock import read_spaghetti_lock, validate_spaghetti_lock
 from governance_eval.models import Decision, Label
 from governance_eval.paths import repo_root
@@ -62,7 +63,9 @@ def run_benchmark(root: Path | None = None, repeat: int = 3, artifacts_dir: Path
         "target_lock": lock.to_json() if lock else {"problems": lock_problems},
         "metrics": metrics,
         "cases": case_results,
+        "artifact_content_hash": "",
     }
+    output["artifact_content_hash"] = sha256_json({**output, "artifact_content_hash": ""})
     validate_benchmark_result(output, resolved_root)
     if artifacts_dir is not None:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +75,6 @@ def run_benchmark(root: Path | None = None, repeat: int = 3, artifacts_dir: Path
         latest.write_text(json.dumps(output, indent=2, sort_keys=True), encoding="utf-8")
         output["artifact_path"] = str(artifact_path)
     return output
-
 
 def validate_benchmark_result(result: dict[str, Any], root: Path | None = None) -> None:
     resolved_root = repo_root(root)

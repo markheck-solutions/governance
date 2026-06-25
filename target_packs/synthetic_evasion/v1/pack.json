@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "id": "synthetic-evasion-v1",
+  "repository_url": "https://example.invalid/synthetic-evasion.git",
+  "immutable_revisions": {
+    "base_sha": "0000000000000000000000000000000000000000",
+    "head_sha": "0000000000000000000000000000000000000000"
+  },
+  "checkout_commands": ["git clone --no-checkout <target>", "git checkout <full-sha>"],
+  "build_setup_commands": [],
+  "behavior_cases": [
+    {
+      "id": "SYNTHETIC-EVASION-BEHAVIOR",
+      "title": "Evasion target keeps behavior stable while structural risk changes",
+      "pull_request": null,
+      "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
+      "classification_reason": "The reproducer imports public target code from the exact checkout.",
+      "reproducer": "target_packs/synthetic_evasion/v1/reproducer.py",
+      "timeout_seconds": 30,
+      "source_files": ["src/demo/api.py"],
+      "source_symbols": [{"path": "src/demo/api.py", "symbol": "classify"}],
+      "expected_base_result": {"value": "ok"},
+      "expected_source_hashes": {}
+    }
+  ],
+  "structural_detectors": [
+    "cross_module_private_references",
+    "weak_public_contracts",
+    "module_dependency_fanout",
+    "large_typed_god_modules",
+    "publicized_private_helper_renames"
+  ],
+  "target_specific_exclusions": [
+    {
+      "path": "generated/",
+      "justification": "No generated files are in synthetic fixtures; entry proves exclusions require an explicit justification."
+    }
+  ],
+  "expected_artifact_fields": [
+    "governance_evaluator_git_sha",
+    "governance_target_pack_hash",
+    "schema_hashes",
+    "target_repository_url",
+    "target_base_sha",
+    "target_head_sha",
+    "behavior_results",
+    "structural_delta",
+    "deterministic_evidence_hash",
+    "artifact_content_hash",
+    "enforcement_mode"
+  ],
+  "supported_operating_systems": ["ubuntu-latest", "windows"],
+  "runtime_prerequisites": ["git", "python>=3.12"]
+}

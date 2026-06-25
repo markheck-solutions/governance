@@ -1,0 +1,158 @@
+name: Governance Target Evaluation
+
+on:
+  workflow_call:
+    inputs:
+      target-repository-url:
+        required: true
+        type: string
+      target-base-sha:
+        required: true
+        type: string
+      target-head-sha:
+        required: true
+        type: string
+      target-merge-sha:
+        required: false
+        type: string
+        default: ""
+      target-pack-path:
+        required: true
+        type: string
+      artifact-name:
+        required: false
+        type: string
+        default: governance-target-evaluation
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    name: Non-blocking target shadow evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_REPOSITORY_URL: ${{ inputs.target-repository-url }}
+      TARGET_BASE_SHA: ${{ inputs.target-base-sha }}
+      TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
+      TARGET_MERGE_SHA: ${{ inputs.target-merge-sha }}
+      TARGET_PACK_PATH: ${{ inputs.target-pack-path }}
+      ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      GOVERNANCE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - name: Checkout governance evaluator
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: markheck-solutions/governance
+          ref: ${{ github.workflow_sha }}
+          path: governance
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate governance-owned target pack
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+
+          allowed = {
+              "target_packs/spaghetti/v1/pack.json": "https://github.com/markheck-solutions/Spaghetti.git",
+              "target_packs/synthetic_clean/v1/pack.json": "https://example.invalid/synthetic-clean.git",
+              "target_packs/synthetic_evasion/v1/pack.json": "https://example.invalid/synthetic-evasion.git",
+          }
+          pack = os.environ["TARGET_PACK_PATH"]
+          repo = os.environ["TARGET_REPOSITORY_URL"]
+          sha_re = re.compile(r"^[0-9a-f]{40}$")
+          artifact_re = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+          if allowed.get(pack) != repo:
+              print(f"Unsupported target pack/repository pair: {pack} / {repo}", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["TARGET_BASE_SHA"]):
+              print("Invalid target base SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["TARGET_HEAD_SHA"]):
+              print("Invalid target head SHA", file=sys.stderr)
+              raise SystemExit(64)
+          merge_sha = os.environ.get("TARGET_MERGE_SHA", "")
+          if merge_sha and not sha_re.fullmatch(merge_sha):
+              print("Invalid target merge SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not artifact_re.fullmatch(os.environ["ARTIFACT_NAME"]):
+              print("Invalid artifact name", file=sys.stderr)
+              raise SystemExit(64)
+          PY
+      - name: Run target evaluation
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          cd governance
+          python -m governance_eval evaluate-target \
+            --pack "$TARGET_PACK_PATH" \
+            --base-sha "$TARGET_BASE_SHA" \
+            --head-sha "$TARGET_HEAD_SHA" \
+            --merge-sha "$TARGET_MERGE_SHA" \
+            --repository-url "$TARGET_REPOSITORY_URL" \
+            --artifacts-dir artifacts/target
+      - name: Read target summary
+        id: target
+        if: always()
+        shell: bash
+        run: |
+          cd governance
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          path = Path("artifacts/target/target-evaluation-latest.json")
+          if not path.exists():
+              print("decision=SHADOW_BLOCK_TECHNICAL")
+              print("case_count=0")
+              print("passed=0")
+              print("failed=0")
+              print("errors=missing artifact")
+              print("content_hash=MISSING")
+              raise SystemExit(0)
+
+          data = json.loads(path.read_text(encoding="utf-8"))
+          counts = data["case_counts"]
+          print(f"decision={data['real_target_shadow_decision']}")
+          print(f"case_count={counts['behavior_case_count']}")
+          print(f"passed={counts['behavior_cases_passed']}")
+          print(f"failed={counts['behavior_cases_failed']}")
+          print(f"errors={'; '.join(data['acceptance_errors'][:5])}")
+          print(f"content_hash={data['artifact_content_hash']}")
+          PY
+      - name: Upload target JSON
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: governance/artifacts/target/*.json
+          retention-days: 90
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Governance Target Evaluation"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Governance commit SHA | \`${GOVERNANCE_WORKFLOW_SHA}\` |"
+            echo "| Target repository | \`${TARGET_REPOSITORY_URL}\` |"
+            echo "| Target base SHA | \`${TARGET_BASE_SHA}\` |"
+            echo "| Target head SHA | \`${TARGET_HEAD_SHA}\` |"
+            echo "| Shadow decision | \`${{ steps.target.outputs.decision }}\` |"
+            echo "| Enforcement mode | \`NON_BLOCKING\` |"
+            echo "| Behavior cases | \`${{ steps.target.outputs.passed }}/${{ steps.target.outputs.case_count }} passed\` |"
+            echo "| Acceptance errors | \`${{ steps.target.outputs.errors }}\` |"
+            echo "| Artifact name | \`${ARTIFACT_NAME}\` |"
+            echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
+            echo "| Artifact content hash | \`${{ steps.target.outputs.content_hash }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

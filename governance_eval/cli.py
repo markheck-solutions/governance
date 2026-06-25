@@ -13,6 +13,7 @@ from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
 from governance_eval.lock import write_spaghetti_lock
 from governance_eval.paths import repo_root
+from governance_eval.target_eval import evaluate_target
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,8 +37,16 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument("--repeat", type=int, default=3)
     verify_parser.add_argument("--artifacts-dir", type=Path, default=Path("artifacts/phase1"))
 
+    target_parser = subparsers.add_parser("evaluate-target", help="run a non-blocking target shadow evaluation")
+    target_parser.add_argument("--pack", type=Path, required=True)
+    target_parser.add_argument("--base-sha", required=True)
+    target_parser.add_argument("--head-sha", required=True)
+    target_parser.add_argument("--merge-sha", default=None)
+    target_parser.add_argument("--repository-url", default=None)
+    target_parser.add_argument("--artifacts-dir", type=Path, default=Path("artifacts/target"))
+
     args = parser.parse_args(argv)
-    root = repo_root(args.root)
+    root = repo_root(getattr(args, "root", None))
 
     if args.command == "lock":
         lock = write_spaghetti_lock(root / "targets" / "spaghetti.lock.toml")
@@ -51,6 +60,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["phase1_decision"] == BENCHMARK_PASS else 1
     if args.command == "verify":
         return _verify(root, args.repeat, root / args.artifacts_dir)
+    if args.command == "evaluate-target":
+        result = evaluate_target(
+            root / args.pack if not args.pack.is_absolute() else args.pack,
+            args.base_sha,
+            args.head_sha,
+            root / args.artifacts_dir if not args.artifacts_dir.is_absolute() else args.artifacts_dir,
+            args.merge_sha or None,
+            args.repository_url,
+        )
+        print(json.dumps(_target_summary(result), indent=2, sort_keys=True))
+        return 0
     raise AssertionError(args.command)
 
 
@@ -81,5 +101,16 @@ def _summary(result: dict) -> dict:
         "phase1_decision": result["phase1_decision"],
         "acceptance_errors": result["acceptance_errors"],
         "metrics": result["metrics"],
+        "artifact_path": result.get("artifact_path"),
+    }
+
+
+def _target_summary(result: dict) -> dict:
+    return {
+        "real_target_shadow_decision": result["real_target_shadow_decision"],
+        "enforcement_mode": result["enforcement_mode"],
+        "acceptance_errors": result["acceptance_errors"],
+        "case_counts": result["case_counts"],
+        "artifact_content_hash": result["artifact_content_hash"],
         "artifact_path": result.get("artifact_path"),
     }
