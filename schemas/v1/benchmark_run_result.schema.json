@@ -21,7 +21,7 @@
     "generated_at": {"type": "string", "minLength": 1},
     "duration_seconds": {"type": "number", "minimum": 0},
     "repeat_count": {"type": "integer", "minimum": 1},
-    "phase1_decision": {"type": "string", "enum": ["MERGE", "BLOCK_TECHNICAL", "ASK_BUSINESS"]},
+    "phase1_decision": {"type": "string", "enum": ["BENCHMARK_PASS", "BENCHMARK_FAIL"]},
     "acceptance_errors": {"type": "array", "items": {"type": "string"}},
     "target_lock": {
       "type": "object",
@@ -53,8 +53,11 @@
       "type": "object",
       "required": [
         "critical_defect_recall",
+        "critical_defects_blocked",
         "negative_control_recall",
+        "negative_controls_blocked",
         "false_block_rate",
+        "false_blocks",
         "repeated_run_decision_stability",
         "deterministic_flake_rate",
         "execution_duration_seconds",
@@ -65,8 +68,11 @@
       ],
       "properties": {
         "critical_defect_recall": {"type": "number", "minimum": 0, "maximum": 1},
+        "critical_defects_blocked": {"type": "integer", "minimum": 0},
         "negative_control_recall": {"type": "number", "minimum": 0, "maximum": 1},
+        "negative_controls_blocked": {"type": "integer", "minimum": 0},
         "false_block_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "false_blocks": {"type": "integer", "minimum": 0},
         "repeated_run_decision_stability": {"type": "number", "minimum": 0, "maximum": 1},
         "deterministic_flake_rate": {"type": "number", "minimum": 0, "maximum": 1},
         "execution_duration_seconds": {"type": "number", "minimum": 0},

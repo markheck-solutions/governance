@@ -21,11 +21,14 @@ class BenchmarkCliTests(unittest.TestCase):
 
     def test_benchmark_meets_phase1_acceptance_metrics(self) -> None:
         result = run_benchmark(self.root, repeat=3)
-        self.assertEqual(result["phase1_decision"], "MERGE")
+        self.assertEqual(result["phase1_decision"], "BENCHMARK_PASS")
         self.assertEqual(result["acceptance_errors"], [])
         self.assertEqual(result["metrics"]["critical_defect_recall"], 1.0)
+        self.assertEqual(result["metrics"]["critical_defects_blocked"], result["metrics"]["critical_defect_count"])
         self.assertEqual(result["metrics"]["negative_control_recall"], 1.0)
+        self.assertEqual(result["metrics"]["negative_controls_blocked"], result["metrics"]["negative_control_count"])
         self.assertEqual(result["metrics"]["false_block_rate"], 0.0)
+        self.assertEqual(result["metrics"]["false_blocks"], 0)
         self.assertEqual(result["metrics"]["repeated_run_decision_stability"], 1.0)
         self.assertEqual(result["metrics"]["deterministic_flake_rate"], 0.0)
         validate_named("benchmark_run_result", result, self.root)
@@ -38,7 +41,7 @@ class BenchmarkCliTests(unittest.TestCase):
             self.assertTrue(latest.exists())
             data = json.loads(latest.read_text(encoding="utf-8"))
             validate_named("benchmark_run_result", data, self.root)
-            self.assertEqual(result["phase1_decision"], "MERGE")
+            self.assertEqual(result["phase1_decision"], "BENCHMARK_PASS")
 
     def test_nested_benchmark_result_validation_rejects_tampering(self) -> None:
         result = run_benchmark(self.root, repeat=1)

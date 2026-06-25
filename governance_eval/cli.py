@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from governance_eval.benchmark import BENCHMARK_PASS
 from governance_eval.benchmark import run_benchmark
 from governance_eval.cases import load_cases
 from governance_eval.decision import decide
@@ -47,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "benchmark":
         result = run_benchmark(root=root, repeat=args.repeat, artifacts_dir=root / args.artifacts_dir)
         print(json.dumps(_summary(result), indent=2, sort_keys=True))
-        return 0 if result["phase1_decision"] == "MERGE" else 1
+        return 0 if result["phase1_decision"] == BENCHMARK_PASS else 1
     if args.command == "verify":
         return _verify(root, args.repeat, root / args.artifacts_dir)
     raise AssertionError(args.command)
@@ -72,7 +73,7 @@ def _verify(root: Path, repeat: int, artifacts_dir: Path) -> int:
         return tests.returncode
     result = run_benchmark(root=root, repeat=repeat, artifacts_dir=artifacts_dir)
     print(json.dumps(_summary(result), indent=2, sort_keys=True))
-    return 0 if result["phase1_decision"] == "MERGE" else 1
+    return 0 if result["phase1_decision"] == BENCHMARK_PASS else 1
 
 
 def _summary(result: dict) -> dict:

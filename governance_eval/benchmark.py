@@ -16,6 +16,10 @@ from governance_eval.schemas import validate_named
 from governance_eval.schema_validator import SchemaValidationError
 
 
+BENCHMARK_PASS = "BENCHMARK_PASS"
+BENCHMARK_FAIL = "BENCHMARK_FAIL"
+
+
 def run_benchmark(root: Path | None = None, repeat: int = 3, artifacts_dir: Path | None = None) -> dict[str, Any]:
     resolved_root = repo_root(root)
     started = time.perf_counter()
@@ -46,14 +50,14 @@ def run_benchmark(root: Path | None = None, repeat: int = 3, artifacts_dir: Path
     metrics = _metrics(repetitions)
     metrics["execution_duration_seconds"] = round(duration, 6)
     acceptance_errors = _acceptance_errors(case_results, metrics, lock_problems)
-    phase1_decision = Decision.MERGE if not acceptance_errors else Decision.BLOCK_TECHNICAL
+    phase1_decision = BENCHMARK_PASS if not acceptance_errors else BENCHMARK_FAIL
     output = {
         "schema_version": "1.0",
         "run_id": run_id,
         "generated_at": run_id,
         "duration_seconds": round(duration, 6),
         "repeat_count": repeat,
-        "phase1_decision": phase1_decision.value,
+        "phase1_decision": phase1_decision,
         "acceptance_errors": acceptance_errors,
         "target_lock": lock.to_json() if lock else {"problems": lock_problems},
         "metrics": metrics,
@@ -129,8 +133,11 @@ def _metrics(repetitions: list[list[dict[str, Any]]]) -> dict[str, Any]:
             pass
 
     return {
+        "critical_defects_blocked": _blocked_count(historical_critical),
         "critical_defect_recall": _blocked_rate(historical_critical),
+        "negative_controls_blocked": _blocked_count(synthetic_defects),
         "negative_control_recall": _blocked_rate(synthetic_defects),
+        "false_blocks": _false_block_count(verified_safe),
         "false_block_rate": _false_block_rate(verified_safe),
         "repeated_run_decision_stability": stable_cases / len(first) if first else 0.0,
         "deterministic_flake_rate": flaking_cases / len(first) if first else 1.0,
@@ -149,15 +156,21 @@ def _evidence_signature(evidence: list[dict[str, Any]]) -> str:
 def _blocked_rate(items: list[dict[str, Any]]) -> float:
     if not items:
         return 0.0
-    blocked = sum(1 for item in items if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value)
-    return blocked / len(items)
+    return _blocked_count(items) / len(items)
+
+
+def _blocked_count(items: list[dict[str, Any]]) -> int:
+    return sum(1 for item in items if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value)
 
 
 def _false_block_rate(items: list[dict[str, Any]]) -> float:
     if not items:
         return 0.0
-    false_blocks = sum(1 for item in items if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value)
-    return false_blocks / len(items)
+    return _false_block_count(items) / len(items)
+
+
+def _false_block_count(items: list[dict[str, Any]]) -> int:
+    return sum(1 for item in items if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value)
 
 
 def _acceptance_errors(case_results: list[dict[str, Any]], metrics: dict[str, Any], lock_problems: list[str]) -> list[str]:
@@ -169,8 +182,11 @@ def _acceptance_errors(case_results: list[dict[str, Any]], metrics: dict[str, An
             errors.append(f"{result['id']}: expected {expected}, got {actual}")
     expected_metrics = {
         "critical_defect_recall": 1.0,
+        "critical_defects_blocked": metrics["critical_defect_count"],
         "negative_control_recall": 1.0,
+        "negative_controls_blocked": metrics["negative_control_count"],
         "false_block_rate": 0.0,
+        "false_blocks": 0,
         "repeated_run_decision_stability": 1.0,
         "deterministic_flake_rate": 0.0,
     }

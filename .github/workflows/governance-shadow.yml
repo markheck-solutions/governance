@@ -1,6 +1,9 @@
 name: Governance Shadow Benchmark
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -21,10 +24,55 @@ jobs:
           python-version: "3.12"
       - name: Run Phase 1 verification
         run: python -m governance_eval verify --artifacts-dir artifacts/phase1
+      - name: Read benchmark summary
+        id: benchmark
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          path = Path("artifacts/phase1/governance-benchmark-latest.json")
+          if not path.exists():
+              print("result=BENCHMARK_FAIL")
+              print("case_count=0")
+              print("critical=0/0")
+              print("negative=0/0")
+              print("false_blocks=0/0")
+              raise SystemExit(0)
+
+          data = json.loads(path.read_text(encoding="utf-8"))
+          metrics = data["metrics"]
+          print(f"result={data['phase1_decision']}")
+          print(f"case_count={metrics['case_count']}")
+          print(f"critical={metrics['critical_defects_blocked']}/{metrics['critical_defect_count']}")
+          print(f"negative={metrics['negative_controls_blocked']}/{metrics['negative_control_count']}")
+          print(f"false_blocks={metrics['false_blocks']}/{metrics['verified_safe_count']}")
+          PY
       - name: Upload benchmark JSON
+        id: upload
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: governance-benchmark-json
           path: artifacts/phase1/*.json
-          retention-days: 14
+          retention-days: 90
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Governance Shadow Benchmark"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Commit SHA | \`${GITHUB_SHA}\` |"
+            echo "| Benchmark result | \`${{ steps.benchmark.outputs.result }}\` |"
+            echo "| Case count | \`${{ steps.benchmark.outputs.case_count }}\` |"
+            echo "| Critical defects blocked | \`${{ steps.benchmark.outputs.critical }}\` |"
+            echo "| Negative controls blocked | \`${{ steps.benchmark.outputs.negative }}\` |"
+            echo "| False blocks | \`${{ steps.benchmark.outputs.false_blocks }}\` |"
+            echo "| Artifact name | \`governance-benchmark-json\` |"
+            echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
