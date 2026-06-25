@@ -1,0 +1,92 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "repository_url",
+    "immutable_revisions",
+    "checkout_commands",
+    "build_setup_commands",
+    "behavior_cases",
+    "structural_detectors",
+    "target_specific_exclusions",
+    "expected_artifact_fields",
+    "supported_operating_systems",
+    "runtime_prerequisites"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "id": { "type": "string", "minLength": 1 },
+    "repository_url": { "type": "string", "minLength": 1 },
+    "immutable_revisions": {
+      "type": "object",
+      "required": ["base_sha", "head_sha"],
+      "properties": {
+        "base_sha": { "type": "string", "minLength": 40 },
+        "head_sha": { "type": "string", "minLength": 40 },
+        "merge_sha": { "type": ["string", "null"] },
+        "safe_base_sha": { "type": ["string", "null"] },
+        "safe_head_sha": { "type": ["string", "null"] }
+      }
+    },
+    "checkout_commands": { "type": "array", "items": { "type": "string" } },
+    "build_setup_commands": { "type": "array", "items": { "type": "string" } },
+    "behavior_cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "provenance_classification",
+          "reproducer",
+          "source_files",
+          "source_symbols",
+          "expected_source_hashes",
+          "expected_base_result"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "pull_request": { "type": ["integer", "null"] },
+          "provenance_classification": {
+            "type": "string",
+            "enum": ["EXECUTES_PINNED_TARGET_CODE", "EXECUTES_EXTRACTED_REPRODUCER", "FIXTURE_ONLY"]
+          },
+          "classification_reason": { "type": "string" },
+          "reproducer": { "type": "string", "minLength": 1 },
+          "timeout_seconds": { "type": "integer", "minimum": 1 },
+          "source_files": { "type": "array", "items": { "type": "string" } },
+          "source_symbols": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "symbol"],
+              "properties": {
+                "path": { "type": "string" },
+                "symbol": { "type": "string" }
+              }
+            }
+          },
+          "expected_base_result": { "type": "object" },
+          "expected_source_hashes": { "type": "object" }
+        }
+      }
+    },
+    "structural_detectors": { "type": "array", "items": { "type": "string" } },
+    "target_specific_exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "justification"],
+        "properties": {
+          "path": { "type": "string" },
+          "justification": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "expected_artifact_fields": { "type": "array", "items": { "type": "string" } },
+    "supported_operating_systems": { "type": "array", "items": { "type": "string" } },
+    "runtime_prerequisites": { "type": "array", "items": { "type": "string" } }
+  }
+}

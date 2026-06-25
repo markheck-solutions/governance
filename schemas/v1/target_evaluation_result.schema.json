@@ -1,0 +1,304 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "governance_evaluator_git_sha",
+    "governance_target_pack_hash",
+    "schema_hashes",
+    "dependency_lock_hash",
+    "target_repository_url",
+    "target_pack_id",
+    "target_base_sha",
+    "target_head_sha",
+    "target_merge_sha",
+    "operating_system",
+    "python_version",
+    "enforcement_mode",
+    "real_target_shadow_decision",
+    "acceptance_errors",
+    "case_counts",
+    "setup_results",
+    "behavior_results",
+    "structural_metrics_before",
+    "structural_metrics_after",
+    "structural_delta",
+    "commands",
+    "deterministic_evidence_hash",
+    "artifact_content_hash"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "governance_evaluator_git_sha": { "type": "string" },
+    "governance_target_pack_hash": { "type": "string" },
+    "schema_hashes": { "type": "object" },
+    "dependency_lock_hash": { "type": "string" },
+    "target_repository_url": { "type": "string" },
+    "target_pack_id": { "type": "string" },
+    "target_base_sha": { "type": "string" },
+    "target_head_sha": { "type": "string" },
+    "target_merge_sha": { "type": ["string", "null"] },
+    "operating_system": { "type": "string" },
+    "python_version": { "type": "string" },
+    "enforcement_mode": { "type": "string", "enum": ["NON_BLOCKING"] },
+    "real_target_shadow_decision": {
+      "type": "string",
+      "enum": ["SHADOW_MERGE", "SHADOW_BLOCK_TECHNICAL", "SHADOW_ASK_BUSINESS"]
+    },
+    "acceptance_errors": { "type": "array", "items": { "type": "string" } },
+    "case_counts": {
+      "type": "object",
+      "required": ["behavior_case_count", "behavior_cases_passed", "behavior_cases_failed"],
+      "properties": {
+        "behavior_case_count": { "type": "integer", "minimum": 0 },
+        "behavior_cases_passed": { "type": "integer", "minimum": 0 },
+        "behavior_cases_failed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "setup_results": { "type": "object" },
+    "behavior_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "case_id",
+          "status",
+          "provenance_classification",
+          "target_repository_url",
+          "base_sha",
+          "head_sha",
+          "base_execution",
+          "head_execution",
+          "expected_result",
+          "observed_result",
+          "source_files",
+          "source_symbols",
+          "source_hash_validation",
+          "reproducer_files",
+          "commands"
+        ],
+        "properties": {
+          "case_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+          "provenance_classification": {
+            "type": "string",
+            "enum": ["EXECUTES_PINNED_TARGET_CODE", "EXECUTES_EXTRACTED_REPRODUCER", "FIXTURE_ONLY"]
+          },
+          "target_repository_url": { "type": "string" },
+          "base_sha": { "type": "string" },
+          "head_sha": { "type": "string" },
+          "merge_sha": { "type": ["string", "null"] },
+          "base_execution": {
+            "type": "object",
+            "required": [
+              "exact_revision_executed",
+              "command",
+              "exit_code",
+              "timed_out",
+              "stdout_hash",
+              "stderr_hash",
+              "observed_result",
+              "source_files",
+              "source_symbols",
+              "source_hash_validation"
+            ],
+            "properties": {
+              "exact_revision_executed": { "type": "string" },
+              "command": { "type": "string" },
+              "exit_code": { "type": "integer" },
+              "timed_out": { "type": "boolean" },
+              "stdout_hash": { "type": "string" },
+              "stderr_hash": { "type": "string" },
+              "observed_result": { "type": "object" },
+              "source_files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["commit", "path", "git_blob_sha", "file_sha256"],
+                  "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "git_blob_sha": { "type": "string" },
+                    "file_sha256": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "source_symbols": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["commit", "path", "symbol", "line_start", "line_end", "symbol_sha256", "status"],
+                  "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "symbol": { "type": "string" },
+                    "line_start": { "type": ["integer", "null"] },
+                    "line_end": { "type": ["integer", "null"] },
+                    "symbol_sha256": { "type": "string" },
+                    "status": { "type": "string", "enum": ["PASS", "FAIL"] }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "source_hash_validation": { "type": "string", "enum": ["PASS", "FAIL"] }
+            }
+          },
+          "head_execution": {
+            "type": "object",
+            "required": [
+              "exact_revision_executed",
+              "command",
+              "exit_code",
+              "timed_out",
+              "stdout_hash",
+              "stderr_hash",
+              "observed_result",
+              "source_files",
+              "source_symbols",
+              "source_hash_validation"
+            ],
+            "properties": {
+              "exact_revision_executed": { "type": "string" },
+              "command": { "type": "string" },
+              "exit_code": { "type": "integer" },
+              "timed_out": { "type": "boolean" },
+              "stdout_hash": { "type": "string" },
+              "stderr_hash": { "type": "string" },
+              "observed_result": { "type": "object" },
+              "source_files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["commit", "path", "git_blob_sha", "file_sha256"],
+                  "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "git_blob_sha": { "type": "string" },
+                    "file_sha256": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "source_symbols": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["commit", "path", "symbol", "line_start", "line_end", "symbol_sha256", "status"],
+                  "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "symbol": { "type": "string" },
+                    "line_start": { "type": ["integer", "null"] },
+                    "line_end": { "type": ["integer", "null"] },
+                    "symbol_sha256": { "type": "string" },
+                    "status": { "type": "string", "enum": ["PASS", "FAIL"] }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "source_hash_validation": { "type": "string", "enum": ["PASS", "FAIL"] }
+            }
+          },
+          "expected_result": { "type": "object" },
+          "observed_result": { "type": "object" },
+          "source_files": {
+            "type": "object",
+            "required": ["base", "head"],
+            "properties": {
+              "base": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["commit", "path", "git_blob_sha", "file_sha256"],
+                  "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "git_blob_sha": { "type": "string" },
+                    "file_sha256": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "head": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["commit", "path", "git_blob_sha", "file_sha256"],
+                  "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "git_blob_sha": { "type": "string" },
+                    "file_sha256": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "source_symbols": {
+            "type": "object",
+            "required": ["base", "head"],
+            "properties": {
+              "base": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["commit", "path", "symbol", "line_start", "line_end", "symbol_sha256", "status"],
+                  "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "symbol": { "type": "string" },
+                    "line_start": { "type": ["integer", "null"] },
+                    "line_end": { "type": ["integer", "null"] },
+                    "symbol_sha256": { "type": "string" },
+                    "status": { "type": "string", "enum": ["PASS", "FAIL"] }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "head": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["commit", "path", "symbol", "line_start", "line_end", "symbol_sha256", "status"],
+                  "properties": {
+                    "commit": { "type": "string" },
+                    "path": { "type": "string" },
+                    "symbol": { "type": "string" },
+                    "line_start": { "type": ["integer", "null"] },
+                    "line_end": { "type": ["integer", "null"] },
+                    "symbol_sha256": { "type": "string" },
+                    "status": { "type": "string", "enum": ["PASS", "FAIL"] }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "source_hash_validation": { "type": "string", "enum": ["PASS", "FAIL"] },
+          "reproducer_files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "sha256"],
+              "properties": {
+                "path": { "type": "string" },
+                "sha256": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "commands": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "structural_metrics_before": { "type": "object" },
+    "structural_metrics_after": { "type": "object" },
+    "structural_delta": { "type": "object" },
+    "commands": { "type": "array", "items": { "type": "string" } },
+    "deterministic_evidence_hash": { "type": "string", "minLength": 64 },
+    "artifact_content_hash": { "type": "string", "minLength": 64 }
+  }
+}

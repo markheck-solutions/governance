@@ -14,6 +14,8 @@ SCHEMA_FILES = {
     "review_finding": "review_finding.schema.json",
     "benchmark_run_result": "benchmark_run_result.schema.json",
     "final_decision": "final_decision.schema.json",
+    "target_pack": "target_pack.schema.json",
+    "target_evaluation_result": "target_evaluation_result.schema.json",
 }
 
 

@@ -40,6 +40,7 @@ jobs:
               print("critical=0/0")
               print("negative=0/0")
               print("false_blocks=0/0")
+              print("content_hash=MISSING")
               raise SystemExit(0)
 
           data = json.loads(path.read_text(encoding="utf-8"))
@@ -49,6 +50,7 @@ jobs:
           print(f"critical={metrics['critical_defects_blocked']}/{metrics['critical_defect_count']}")
           print(f"negative={metrics['negative_controls_blocked']}/{metrics['negative_control_count']}")
           print(f"false_blocks={metrics['false_blocks']}/{metrics['verified_safe_count']}")
+          print(f"content_hash={data.get('artifact_content_hash', 'MISSING')}")
           PY
       - name: Upload benchmark JSON
         id: upload
@@ -75,4 +77,5 @@ jobs:
             echo "| False blocks | \`${{ steps.benchmark.outputs.false_blocks }}\` |"
             echo "| Artifact name | \`governance-benchmark-json\` |"
             echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
+            echo "| Artifact content hash | \`${{ steps.benchmark.outputs.content_hash }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

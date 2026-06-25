@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0",
+  "id": "spaghetti-v1",
+  "repository_url": "https://github.com/markheck-solutions/Spaghetti.git",
+  "immutable_revisions": {
+    "base_sha": "60da7dbe2fad70836f15ed7ec4d7969c6ad436f1",
+    "head_sha": "43f96f395b8a0acb4d323943b6fc68727bf21121",
+    "merge_sha": "dce7cd0397341c87a2c16d5681db586da1c85c75",
+    "safe_base_sha": "60da7dbe2fad70836f15ed7ec4d7969c6ad436f1",
+    "safe_head_sha": "60da7dbe2fad70836f15ed7ec4d7969c6ad436f1"
+  },
+  "checkout_commands": [
+    "git clone --no-checkout https://github.com/markheck-solutions/Spaghetti.git",
+    "git checkout <full-sha>"
+  ],
+  "build_setup_commands": [
+    "python -m pip install openpyxl==3.1.5"
+  ],
+  "behavior_cases": [
+    {
+      "id": "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING",
+      "title": "Partial metadata must preserve approved interleaving order",
+      "pull_request": 141,
+      "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
+      "classification_reason": "The reproducer imports and executes inca_sorter.sorting.sort_inca_route_path from each exact target checkout.",
+      "reproducer": "target_packs/spaghetti/v1/reproducer_pr141.py",
+      "timeout_seconds": 60,
+      "source_files": [
+        "src/inca_sorter/sorting.py",
+        "src/inca_sorter/models.py"
+      ],
+      "source_symbols": [
+        {
+          "path": "src/inca_sorter/sorting.py",
+          "symbol": "_sort_standard_route"
+        }
+      ],
+      "expected_base_result": {
+        "row_indexes": [107, 132, 80, 76, 7, 2, 5, 23, 24, 50, 145, 128, 163, 148]
+      },
+      "expected_source_hashes": {
+        "60da7dbe2fad70836f15ed7ec4d7969c6ad436f1": {
+          "files": {
+            "src/inca_sorter/sorting.py": {
+              "git_blob_sha": "58e23f85c7f99593b3e2703a602a37cf3fcdf21d",
+              "file_sha256": "5d30c419d6c049a33a0f50f844217a4e7762ffd499ec59f55f40ddb3653bbfb3"
+            },
+            "src/inca_sorter/models.py": {
+              "git_blob_sha": "f22053c2ad178ceb66327ed381ec2072062e6c25",
+              "file_sha256": "ff347a69c58a79a700beee7e6aa3a2f68281344dcb2085ae8ac9f8caa3467d2e"
+            }
+          },
+          "symbols": {
+            "src/inca_sorter/sorting.py::_sort_standard_route": {
+              "line_start": 840,
+              "line_end": 876,
+              "symbol_sha256": "421269b26aadf10b737e606ad3e018a45e39462d8963a976a6638d0f15eefd31"
+            }
+          }
+        },
+        "43f96f395b8a0acb4d323943b6fc68727bf21121": {
+          "files": {
+            "src/inca_sorter/sorting.py": {
+              "git_blob_sha": "f8730c4b5ee9d52f4321af25d3d7c55712d3a049",
+              "file_sha256": "b17cc102e5cb36a5ca600ddec1921ab01a9578f969ac7050132ef45ae62347a9"
+            },
+            "src/inca_sorter/models.py": {
+              "git_blob_sha": "f22053c2ad178ceb66327ed381ec2072062e6c25",
+              "file_sha256": "ff347a69c58a79a700beee7e6aa3a2f68281344dcb2085ae8ac9f8caa3467d2e"
+            }
+          },
+          "symbols": {
+            "src/inca_sorter/sorting.py::_sort_standard_route": {
+              "line_start": 937,
+              "line_end": 974,
+              "symbol_sha256": "152dd2785090b06436a2226b9b1aec9f3991b1a5c461c3e9bc65100b2c5fb142"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "structural_detectors": [
+    "cross_module_private_references",
+    "private_helper_reexports",
+    "tests_private_production_internals",
+    "import_cycles",
+    "weak_public_contracts",
+    "module_dependency_fanout",
+    "production_module_size_function_count",
+    "touched_function_complexity",
+    "gate_scope_or_threshold_weakening",
+    "duplicate_compatibility_surfaces",
+    "publicized_private_helper_renames"
+  ],
+  "target_specific_exclusions": [
+    {
+      "path": "src/inca_sorter/models.py",
+      "justification": "Existing domain row model is measured as baseline debt; the target pack does not suppress new violations."
+    }
+  ],
+  "expected_artifact_fields": [
+    "governance_evaluator_git_sha",
+    "governance_target_pack_hash",
+    "schema_hashes",
+    "dependency_lock_hash",
+    "target_repository_url",
+    "target_base_sha",
+    "target_head_sha",
+    "commands",
+    "operating_system",
+    "python_version",
+    "case_counts",
+    "setup_results",
+    "behavior_results",
+    "structural_metrics_before",
+    "structural_metrics_after",
+    "structural_delta",
+    "acceptance_errors",
+    "deterministic_evidence_hash",
+    "artifact_content_hash",
+    "enforcement_mode"
+  ],
+  "supported_operating_systems": ["ubuntu-latest", "windows"],
+  "runtime_prerequisites": ["git", "python>=3.12"]
+}

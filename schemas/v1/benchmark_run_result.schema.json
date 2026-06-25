@@ -13,7 +13,8 @@
     "acceptance_errors",
     "target_lock",
     "metrics",
-    "cases"
+    "cases",
+    "artifact_content_hash"
   ],
   "properties": {
     "schema_version": {"type": "string", "enum": ["1.0"]},
@@ -23,6 +24,7 @@
     "repeat_count": {"type": "integer", "minimum": 1},
     "phase1_decision": {"type": "string", "enum": ["BENCHMARK_PASS", "BENCHMARK_FAIL"]},
     "acceptance_errors": {"type": "array", "items": {"type": "string"}},
+    "artifact_content_hash": {"type": "string", "minLength": 64},
     "target_lock": {
       "type": "object",
       "required": [
