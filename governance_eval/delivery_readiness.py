@@ -11,6 +11,7 @@ from typing import Any
 BLOCKING_RE = re.compile(r"\bP[0-2]\b|\[P[0-2]\]|severity:\s*P[0-2]", re.IGNORECASE)
 SUCCESS_CONCLUSIONS = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 SUCCESS_STATES = {"SUCCESS", "SKIPPED", "NEUTRAL"}
+FINAL_REVIEW_AUTHORS = {"chatgpt-codex-connector"}
 
 
 def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
@@ -25,6 +26,7 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         and _dt(review["submittedAt"]) >= _dt(latest_head_committed_at)
         and review.get("state") not in {"CHANGES_REQUESTED", "DISMISSED"}
         and not BLOCKING_RE.search(review.get("body") or "")
+        and review.get("author") in FINAL_REVIEW_AUTHORS
     ]
     unresolved = payload.get("unresolvedThreads") or []
     unresolved_blocking = [thread for thread in unresolved if _thread_is_p0_p2(thread)]
@@ -77,19 +79,7 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
     )
     pr = json.loads(completed.stdout)
     latest_commit = (pr.get("commits") or [{}])[-1]
-    comments_completed = subprocess.run(
-        ["gh", "api", f"repos/{owner}/{name}/pulls/{pr_number}/comments"],
-        check=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-    )
-    comments = json.loads(comments_completed.stdout)
-    threads = [
-        {"path": comment.get("path"), "line": comment.get("line"), "body": comment.get("body", "")}
-        for comment in comments
-    ]
+    threads = _load_review_threads(owner, name, pr_number)
     contexts = []
     for node in pr.get("statusCheckRollup") or []:
         contexts.append(
@@ -126,6 +116,73 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
         "unresolvedThreads": threads,
         "workflowContexts": contexts,
     }
+
+
+def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str, Any]]:
+    query = """
+    query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              isResolved
+              path
+              line
+              comments(first: 20) {
+                nodes {
+                  body
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    completed = subprocess.run(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={pr_number}",
+            "-f",
+            f"query={query}",
+        ],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+    )
+    payload = json.loads(completed.stdout)
+    nodes = (
+        payload.get("data", {})
+        .get("repository", {})
+        .get("pullRequest", {})
+        .get("reviewThreads", {})
+        .get("nodes", [])
+    )
+    threads: list[dict[str, Any]] = []
+    for thread in nodes:
+        if thread.get("isResolved"):
+            continue
+        bodies = [
+            comment.get("body", "")
+            for comment in (thread.get("comments", {}) or {}).get("nodes", [])
+        ]
+        threads.append(
+            {
+                "path": thread.get("path"),
+                "line": thread.get("line"),
+                "body": "\n".join(bodies),
+            }
+        )
+    return threads
 
 
 def main(argv: list[str] | None = None) -> int:

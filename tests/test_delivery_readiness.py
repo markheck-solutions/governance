@@ -13,7 +13,13 @@ class DeliveryReadinessTests(unittest.TestCase):
             "mergeStateStatus": "CLEAN",
             "headRefOid": "a" * 40,
             "latestHeadCommittedAt": "2026-06-25T10:00:00Z",
-            "reviews": [{"submittedAt": "2026-06-25T10:05:00Z", "commitOid": "a" * 40}],
+            "reviews": [
+                {
+                    "submittedAt": "2026-06-25T10:05:00Z",
+                    "commitOid": "a" * 40,
+                    "author": "chatgpt-codex-connector",
+                }
+            ],
             "unresolvedThreads": [{"body": "nit: wording"}],
             "workflowContexts": [{"name": "tests", "conclusion": "SUCCESS"}],
         }
@@ -31,7 +37,13 @@ class DeliveryReadinessTests(unittest.TestCase):
             "mergeStateStatus": "CLEAN",
             "headRefOid": "b" * 40,
             "latestHeadCommittedAt": "2026-06-25T10:00:00Z",
-            "reviews": [{"submittedAt": "2026-06-25T09:59:00Z", "commitOid": "b" * 40}],
+            "reviews": [
+                {
+                    "submittedAt": "2026-06-25T09:59:00Z",
+                    "commitOid": "b" * 40,
+                    "author": "chatgpt-codex-connector",
+                }
+            ],
             "unresolvedThreads": [{"body": "severity: P1 candidate workflow can be bypassed"}],
             "workflowContexts": [{"name": "tests", "conclusion": "FAILURE"}],
         }
@@ -55,7 +67,33 @@ class DeliveryReadinessTests(unittest.TestCase):
                     "state": "CHANGES_REQUESTED",
                     "submittedAt": "2026-06-25T10:05:00Z",
                     "commitOid": "c" * 40,
+                    "author": "chatgpt-codex-connector",
                     "body": "Please fix this.",
+                }
+            ],
+            "unresolvedThreads": [],
+            "workflowContexts": [{"name": "tests", "conclusion": "SUCCESS"}],
+        }
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertIsNone(result["final_review_timestamp"])
+
+    def test_owner_review_comment_is_not_final_independent_review(self) -> None:
+        payload = {
+            "state": "OPEN",
+            "isDraft": False,
+            "mergeStateStatus": "CLEAN",
+            "headRefOid": "d" * 40,
+            "latestHeadCommittedAt": "2026-06-25T10:00:00Z",
+            "reviews": [
+                {
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-06-25T10:05:00Z",
+                    "commitOid": "d" * 40,
+                    "author": "markheck-solutions",
+                    "body": "",
                 }
             ],
             "unresolvedThreads": [],
