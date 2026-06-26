@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -280,7 +281,12 @@ def main(argv: list[str] | None = None) -> int:
         payload["benchmarkArtifactName"] = args.benchmark_artifact_name
     if args.benchmark_run_id or args.benchmark_artifact_id:
         if args.benchmark_run_id and args.benchmark_artifact_id:
-            binding = _load_github_artifact_binding(args.repo, args.benchmark_run_id, args.benchmark_artifact_id)
+            binding = _load_github_artifact_binding(
+                args.repo,
+                args.benchmark_run_id,
+                args.benchmark_artifact_id,
+                args.benchmark_artifact_name,
+            )
             payload["benchmarkArtifactBinding"] = binding
             if not args.benchmark_artifact_digest and isinstance(binding, dict):
                 digest = binding.get("artifact_digest")
@@ -301,14 +307,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if result["ready"] else 1
 
 
-def _load_github_artifact_binding(repo: str, run_id: str, artifact_id: str) -> dict[str, Any]:
+def _load_github_artifact_binding(repo: str, run_id: str, artifact_id: str, artifact_name: str) -> dict[str, Any]:
     try:
         run = _gh_api_json(f"repos/{repo}/actions/runs/{run_id}")
         artifact = _gh_api_json(f"repos/{repo}/actions/artifacts/{artifact_id}")
     except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         return {"__load_error": f"{type(exc).__name__}: {exc}"}
     artifact_run = artifact.get("workflow_run") if isinstance(artifact.get("workflow_run"), dict) else {}
-    return {
+    binding = {
         "workflow_run_id": str(run.get("id") or ""),
         "workflow_head_sha": run.get("head_sha"),
         "workflow_status": run.get("status"),
@@ -322,6 +328,35 @@ def _load_github_artifact_binding(repo: str, run_id: str, artifact_id: str) -> d
         "artifact_workflow_run_id": str(artifact_run.get("id") or ""),
         "artifact_workflow_head_sha": artifact_run.get("head_sha"),
     }
+    binding.update(_download_artifact_evidence(repo, run_id, artifact_name))
+    return binding
+
+
+def _download_artifact_evidence(repo: str, run_id: str, artifact_name: str) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="governance-artifact-") as tmp:
+        temp_dir = Path(tmp)
+        try:
+            subprocess.run(
+                ["gh", "run", "download", run_id, "--repo", repo, "--name", artifact_name, "--dir", str(temp_dir)],
+                check=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            return {"artifact_evidence_error": f"{type(exc).__name__}: {exc.stderr or exc.stdout}"}
+        candidates = sorted(temp_dir.glob("governance-benchmark-latest.json"))
+        if not candidates:
+            return {"artifact_evidence_error": "governance-benchmark-latest.json missing from artifact"}
+        try:
+            data = json.loads(candidates[0].read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return {"artifact_evidence_error": f"artifact benchmark JSON malformed: {exc}"}
+        return {
+            "artifact_evidence_content_hash": data.get("artifact_content_hash"),
+            "artifact_evidence_phase1_decision": data.get("phase1_decision"),
+        }
 
 
 def _gh_api_json(path: str) -> dict[str, Any]:
@@ -358,7 +393,7 @@ def _review_gate_result(
     same_head_reviews = [
         review
         for review in reviews
-        if _review_is_on_latest_after_commit(review, latest_head_sha, latest_head_committed_at)
+        if _review_applies_to_latest(review, latest_head_sha, latest_head_committed_at)
     ]
     clean_github_reviews = [
         review
@@ -446,7 +481,7 @@ def _benchmark_result(payload: dict[str, Any]) -> dict[str, Any]:
         isinstance(artifact_digest, str) and DIGEST_RE.match(artifact_digest)
     ):
         errors.append("github artifact digest required in sha256:<hex> format")
-    errors.extend(_artifact_binding_errors(payload, artifact_digest))
+    errors.extend(_artifact_binding_errors(payload, artifact_digest, artifact_hash))
     return _benchmark_result_payload(not errors, errors, phase1_decision, artifact_hash, artifact_digest)
 
 
@@ -571,7 +606,7 @@ def _case_evidence_errors(evidence: dict[str, Any], metrics: dict[str, Any]) -> 
     return errors
 
 
-def _artifact_binding_errors(payload: dict[str, Any], artifact_digest: str | None) -> list[str]:
+def _artifact_binding_errors(payload: dict[str, Any], artifact_digest: str | None, artifact_hash: str | None) -> list[str]:
     binding = payload.get("benchmarkArtifactBinding")
     if not payload.get("requireGithubArtifactDigest") and not isinstance(binding, dict):
         return []
@@ -609,6 +644,12 @@ def _artifact_binding_errors(payload: dict[str, Any], artifact_digest: str | Non
         errors.append("github artifact binding artifact_digest does not match supplied digest")
     if not (isinstance(binding.get("artifact_digest"), str) and DIGEST_RE.match(binding["artifact_digest"])):
         errors.append("github artifact binding artifact_digest must be sha256:<hex>")
+    if binding.get("artifact_evidence_error"):
+        errors.append(f"github artifact evidence could not be loaded: {binding['artifact_evidence_error']}")
+    if binding.get("artifact_evidence_content_hash") != artifact_hash:
+        errors.append("github artifact evidence content hash does not match supplied benchmark JSON")
+    if binding.get("artifact_evidence_phase1_decision") != "BENCHMARK_PASS":
+        errors.append("github artifact evidence phase1_decision must be BENCHMARK_PASS")
     return errors
 
 
@@ -670,6 +711,7 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
         errors.append("fallback quorum requires at least two reviewers")
         reviewers = []
     reviewer_ids: set[str] = set()
+    reviewer_agent_ids: set[str] = set()
     for index, reviewer in enumerate(reviewers):
         if not isinstance(reviewer, dict):
             errors.append(f"reviewers[{index}] malformed")
@@ -690,6 +732,10 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
                     errors.append(f"reviewers[{index}] provenance agent_id missing")
                 elif isinstance(trusted_agents, set) and output["agent_id"] not in trusted_agents:
                     errors.append(f"reviewers[{index}] provenance agent_id is not trusted")
+                elif output["agent_id"] in reviewer_agent_ids:
+                    errors.append(f"reviewers[{index}] provenance agent_id duplicated")
+                else:
+                    reviewer_agent_ids.add(output["agent_id"])
                 response_hash = output.get("response_sha256")
                 if not (isinstance(response_hash, str) and SHA256_RE.match(response_hash)):
                     errors.append(f"reviewers[{index}] provenance response_sha256 invalid")
@@ -804,6 +850,18 @@ def _review_is_on_latest_after_commit(review: dict[str, Any], latest_head_sha: s
     return bool(
         review.get("submittedAt")
         and review.get("commitOid") == latest_head_sha
+        and _dt(review["submittedAt"]) >= _dt(latest_head_committed_at)
+    )
+
+
+def _review_applies_to_latest(review: dict[str, Any], latest_head_sha: str, latest_head_committed_at: str) -> bool:
+    if _review_is_on_latest_after_commit(review, latest_head_sha, latest_head_committed_at):
+        return True
+    if not _review_is_blocking(review):
+        return False
+    return bool(
+        review.get("submittedAt")
+        and not review.get("commitOid")
         and _dt(review["submittedAt"]) >= _dt(latest_head_committed_at)
     )
 

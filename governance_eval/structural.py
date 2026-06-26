@@ -744,8 +744,22 @@ def _workflow_command_text(workflows: dict[str, Any]) -> str:
     commands: list[str] = []
     for item in sorted(workflows.get("run_commands") or []):
         parts = str(item).split(":", 2)
-        commands.append(parts[2] if len(parts) == 3 else str(item))
+        text = parts[2] if len(parts) == 3 else str(item)
+        commands.extend(_workflow_executable_lines(text))
     return "\n".join(commands)
+
+
+def _workflow_executable_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for line in text.splitlines() or [text]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        first = stripped.split(maxsplit=1)[0].lower()
+        if first in {"echo", "printf"}:
+            continue
+        lines.append(stripped)
+    return lines
 
 
 def _pyproject_gate_target_text(pyproject: dict[str, Any]) -> str:

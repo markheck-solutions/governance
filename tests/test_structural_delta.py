@@ -304,6 +304,25 @@ files = ["src", "tests"]
         self.assertTrue(any("workflow.paths_removed:validation.yml:src/**" in item for item in introduced))
         self.assertTrue(any("workflow.paths_removed:validation.yml:tests/**" in item for item in introduced))
 
+    def test_echoed_required_workflow_command_is_not_executable_gate(self) -> None:
+        pack = _pack()
+        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            head = root / "head"
+            workflow = "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n"
+            _write(base / ".github/workflows/validation.yml", workflow)
+            _write(
+                head / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: echo python -m mypy src scripts tests\n",
+            )
+
+            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+
     def test_publicized_private_helper_rename_is_measured(self) -> None:
         pack = _pack()
         with tempfile.TemporaryDirectory() as tmp:

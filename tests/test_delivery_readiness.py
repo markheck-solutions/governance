@@ -63,6 +63,28 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertEqual(result["github_review_state"], "BLOCKING_FINDINGS_PRESENT")
         self.assertIsNone(result["final_review_timestamp"])
 
+    def test_missing_review_commit_oid_blocks_if_review_is_blocking_after_head(self) -> None:
+        sha = "c1" * 20
+        payload = _payload(
+            sha,
+            reviews=[
+                {
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-06-25T10:05:00Z",
+                    "commitOid": None,
+                    "author": "chatgpt-codex-connector",
+                    "body": "severity: P1 missing revision evidence",
+                }
+            ],
+            fallback_quorum=_quorum("0" * 40, sha),
+        )
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["github_review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertEqual(result["later_blocking_review_count"], 1)
+
     def test_owner_review_comment_is_not_final_independent_review(self) -> None:
         sha = "d" * 40
         payload = _payload(
@@ -390,7 +412,11 @@ class DeliveryReadinessTests(unittest.TestCase):
         payload = _payload(sha, reviews=[_clean_review(sha)])
         payload["requireGithubArtifactDigest"] = True
         payload["benchmarkArtifactDigest"] = f"sha256:{'a' * 64}"
-        payload["benchmarkArtifactBinding"] = _artifact_binding(sha, f"sha256:{'a' * 64}")
+        payload["benchmarkArtifactBinding"] = _artifact_binding(
+            sha,
+            f"sha256:{'a' * 64}",
+            payload["benchmarkEvidence"]["artifact_content_hash"],
+        )
 
         result = evaluate_readiness(payload)
 
@@ -413,13 +439,29 @@ class DeliveryReadinessTests(unittest.TestCase):
         payload = _payload(sha, reviews=[_clean_review(sha)])
         payload["requireGithubArtifactDigest"] = True
         payload["benchmarkArtifactDigest"] = f"sha256:{'a' * 64}"
-        payload["benchmarkArtifactBinding"] = _artifact_binding("0" * 40, f"sha256:{'b' * 64}")
+        payload["benchmarkArtifactBinding"] = _artifact_binding(
+            "0" * 40,
+            f"sha256:{'b' * 64}",
+            payload["benchmarkEvidence"]["artifact_content_hash"],
+        )
 
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("workflow_head_sha does not match" in error for error in result["benchmark_evidence_errors"]))
         self.assertTrue(any("artifact_digest does not match" in error for error in result["benchmark_evidence_errors"]))
+
+    def test_github_artifact_binding_must_match_benchmark_json_content_hash(self) -> None:
+        sha = "af" * 20
+        payload = _payload(sha, reviews=[_clean_review(sha)])
+        payload["requireGithubArtifactDigest"] = True
+        payload["benchmarkArtifactDigest"] = f"sha256:{'a' * 64}"
+        payload["benchmarkArtifactBinding"] = _artifact_binding(sha, f"sha256:{'a' * 64}", "0" * 64)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("evidence content hash does not match" in error for error in result["benchmark_evidence_errors"]))
 
     def test_skipped_governance_context_is_missing_workflow_evidence(self) -> None:
         sha = "a4" * 20
@@ -459,6 +501,19 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertFalse(result["fallback_quorum_valid"])
         self.assertTrue(any("trusted reviewer agent IDs" in error for error in result["fallback_quorum_errors"]))
+
+    def test_fallback_quorum_rejects_duplicate_agent_ids(self) -> None:
+        sha = "be" * 20
+        base = "ce" * 20
+        quorum = _quorum(base, sha)
+        quorum["provenance"]["reviewer_outputs"][1]["agent_id"] = "agent-a"
+        payload = _payload(sha, base_sha=base, reviews=[], fallback_quorum=quorum)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["fallback_quorum_valid"])
+        self.assertTrue(any("agent_id duplicated" in error for error in result["fallback_quorum_errors"]))
 
     def test_fallback_quorum_is_rejected_when_reviewer_reports_p1(self) -> None:
         sha = "b2" * 20
@@ -839,7 +894,7 @@ def _quorum(base_sha: str, head_sha: str) -> dict:
     }
 
 
-def _artifact_binding(head_sha: str, digest: str) -> dict:
+def _artifact_binding(head_sha: str, digest: str, artifact_content_hash: str) -> dict:
     return {
         "workflow_run_id": "123",
         "workflow_head_sha": head_sha,
@@ -853,6 +908,8 @@ def _artifact_binding(head_sha: str, digest: str) -> dict:
         "artifact_expired": False,
         "artifact_workflow_run_id": "123",
         "artifact_workflow_head_sha": head_sha,
+        "artifact_evidence_content_hash": artifact_content_hash,
+        "artifact_evidence_phase1_decision": "BENCHMARK_PASS",
     }
 
 
