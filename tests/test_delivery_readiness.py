@@ -214,6 +214,17 @@ class DeliveryReadinessTests(unittest.TestCase):
             any("critical_defects_blocked must equal" in error for error in result["benchmark_evidence_errors"])
         )
 
+    def test_green_workflow_but_tampered_case_decision_blocks(self) -> None:
+        sha = "7b" * 20
+        benchmark = _benchmark()
+        benchmark["cases"][0]["decision"]["decision"] = "MERGE"
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("cases[0].decision expected" in error for error in result["benchmark_evidence_errors"]))
+
     def test_green_workflow_but_missing_phase1_decision_blocks(self) -> None:
         sha = "8" * 40
         benchmark = _benchmark()
@@ -295,6 +306,19 @@ class DeliveryReadinessTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertFalse(result["fallback_quorum_valid"])
+
+    def test_fallback_quorum_is_rejected_when_top_level_sha_is_stale(self) -> None:
+        sha = "b4" * 20
+        base = "c4" * 20
+        quorum = _quorum(base, sha)
+        quorum["reviewed_head_sha"] = "0" * 40
+        payload = _payload(sha, base_sha=base, reviews=[], fallback_quorum=quorum)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["fallback_quorum_valid"])
+        self.assertTrue(any("reviewed_head_sha does not match" in error for error in result["fallback_quorum_errors"]))
 
     def test_unresolved_github_finding_overrides_clean_fallback_quorum(self) -> None:
         sha = "b3" * 20
@@ -432,6 +456,32 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
             "false_blocks": 0,
             "verified_safe_count": 1,
         },
+        "cases": [
+            {
+                "id": "critical",
+                "category": "historical_spaghetti",
+                "label": "REPRODUCED_BAD",
+                "critical": True,
+                "expected_decision": "BLOCK_TECHNICAL",
+                "decision": {"decision": "BLOCK_TECHNICAL"},
+            },
+            {
+                "id": "negative",
+                "category": "synthetic_structural",
+                "label": "REPRODUCED_BAD",
+                "critical": False,
+                "expected_decision": "BLOCK_TECHNICAL",
+                "decision": {"decision": "BLOCK_TECHNICAL"},
+            },
+            {
+                "id": "safe",
+                "category": "verified_safe",
+                "label": "VERIFIED_SAFE",
+                "critical": False,
+                "expected_decision": "MERGE",
+                "decision": {"decision": "MERGE"},
+            },
+        ],
     }
 
 

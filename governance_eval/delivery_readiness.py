@@ -340,6 +340,7 @@ def _benchmark_result(payload: dict[str, Any]) -> dict[str, Any]:
         errors.append("metrics missing or malformed")
     else:
         errors.extend(_metric_errors(metrics))
+        errors.extend(_case_evidence_errors(evidence, metrics))
     artifact_digest = digest or evidence.get("github_artifact_digest")
     if payload.get("requireGithubArtifactDigest") and not (
         isinstance(artifact_digest, str) and DIGEST_RE.match(artifact_digest)
@@ -411,6 +412,50 @@ def _metric_errors(metrics: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _case_evidence_errors(evidence: dict[str, Any], metrics: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    cases = evidence.get("cases")
+    if not isinstance(cases, list):
+        return ["cases missing or malformed"]
+    if metrics.get("case_count") != len(cases):
+        errors.append("metrics.case_count must equal len(cases)")
+    recomputed = {
+        "critical_defects_blocked": 0,
+        "critical_defect_count": 0,
+        "negative_controls_blocked": 0,
+        "negative_control_count": 0,
+        "false_blocks": 0,
+        "verified_safe_count": 0,
+    }
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict):
+            errors.append(f"cases[{index}] malformed")
+            continue
+        expected = case.get("expected_decision")
+        decision = case.get("decision")
+        actual = decision.get("decision") if isinstance(decision, dict) else None
+        if actual != expected:
+            errors.append(f"cases[{index}].decision expected {expected!r}, got {actual!r}")
+        label = case.get("label")
+        category = case.get("category")
+        if case.get("critical") is True and label == "REPRODUCED_BAD":
+            recomputed["critical_defect_count"] += 1
+            if actual == "BLOCK_TECHNICAL":
+                recomputed["critical_defects_blocked"] += 1
+        if category == "synthetic_structural" and label == "REPRODUCED_BAD":
+            recomputed["negative_control_count"] += 1
+            if actual == "BLOCK_TECHNICAL":
+                recomputed["negative_controls_blocked"] += 1
+        if label == "VERIFIED_SAFE":
+            recomputed["verified_safe_count"] += 1
+            if actual == "BLOCK_TECHNICAL":
+                recomputed["false_blocks"] += 1
+    for name, value in recomputed.items():
+        if metrics.get(name) != value:
+            errors.append(f"metrics.{name} expected recomputed value {value}, got {metrics.get(name)!r}")
+    return errors
+
+
 def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_sha: str) -> dict[str, Any]:
     errors: list[str] = []
     if not isinstance(quorum, dict):
@@ -423,6 +468,10 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
         errors.append(f"fallback quorum schema invalid: {exc}")
     if quorum.get("review_gate") != REVIEW_GATE_FALLBACK:
         errors.append("fallback quorum review_gate must be FALLBACK_CLEAN_ROOM_QUORUM")
+    if quorum.get("reviewed_head_sha") != expected_head_sha:
+        errors.append("fallback quorum reviewed_head_sha does not match latest head")
+    if expected_base_sha and quorum.get("reviewed_base_sha") != expected_base_sha:
+        errors.append("fallback quorum reviewed_base_sha does not match base")
     reviewers = quorum.get("reviewers")
     if not isinstance(reviewers, list) or len(reviewers) < 2:
         errors.append("fallback quorum requires at least two reviewers")
