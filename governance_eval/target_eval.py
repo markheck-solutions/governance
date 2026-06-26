@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import platform
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,12 +14,20 @@ from governance_eval.hashing import sha256_file, sha256_json, sha256_text
 from governance_eval.paths import repo_root
 from governance_eval.schemas import validate_named
 from governance_eval.structural import scan_structural_metrics, structural_delta
-from governance_eval.target_pack import dependency_lock_hash, load_target_pack, schema_hashes, target_pack_hash
+from governance_eval.target_pack import (
+    dependency_lock_hash,
+    infer_revision_mode,
+    load_target_pack,
+    schema_hashes,
+    target_pack_hash,
+    validate_target_request,
+)
 
 SHADOW_MERGE = "SHADOW_MERGE"
 SHADOW_BLOCK_TECHNICAL = "SHADOW_BLOCK_TECHNICAL"
 SHADOW_ASK_BUSINESS = "SHADOW_ASK_BUSINESS"
 NON_BLOCKING = "NON_BLOCKING"
+GOVERNANCE_REPOSITORY_URL = "https://github.com/markheck-solutions/governance.git"
 
 
 def evaluate_target(
@@ -30,62 +37,96 @@ def evaluate_target(
     artifacts_dir: Path | None = None,
     merge_sha: str | None = None,
     repository_url: str | None = None,
+    revision_mode: str | None = None,
+    target_pr_number: int | None = None,
+    require_governance_owned_pack: bool = False,
 ) -> dict[str, Any]:
     root = repo_root(Path(__file__).resolve())
-    pack = load_target_pack(pack_path, root=root)
+    pack = load_target_pack(pack_path, root=root, require_governance_owned=require_governance_owned_pack)
+    mode = revision_mode or infer_revision_mode(pack, base_sha, head_sha, merge_sha)
     target_repository_url = repository_url or pack["repository_url"]
-    _validate_requested_target(pack, target_repository_url, base_sha, head_sha, merge_sha)
+    if require_governance_owned_pack:
+        pack = validate_target_request(pack_path, target_repository_url, base_sha, head_sha, merge_sha, mode, root=root)
+    else:
+        _validate_requested_target(pack, target_repository_url, base_sha, head_sha, merge_sha, mode)
     started = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    validation: dict[str, Any] = {"status": "PASS", "mode": mode}
     with tempfile.TemporaryDirectory(prefix="governance-target-") as tmp:
         temp_root = Path(tmp)
         base_dir = _checkout(target_repository_url, base_sha, temp_root / "base")
         head_dir = _checkout(target_repository_url, head_sha, temp_root / "head")
+        validation["base_commit_exists"] = _commit_exists(base_dir, base_sha)
+        validation["head_commit_exists"] = _commit_exists(head_dir, head_sha)
         setup_results = {"base": _run_setup_commands(pack, base_dir), "head": _run_setup_commands(pack, head_dir)}
-        changed = _changed_files(base_dir, base_sha, head_sha)
+        changed = _changed_files(base_dir, head_dir, base_sha, head_sha)
         behavior = [
-            _run_behavior_case(root, target_repository_url, case, base_dir, head_dir, base_sha, head_sha, merge_sha)
+            _run_behavior_case(
+                root,
+                pack,
+                target_repository_url,
+                case,
+                base_dir,
+                head_dir,
+                base_sha,
+                head_sha,
+                merge_sha,
+                mode,
+            )
             for case in pack["behavior_cases"]
+            if _case_applies(case, mode)
         ]
-        base_struct = scan_structural_metrics(base_dir, changed)
-        head_struct = scan_structural_metrics(head_dir, changed)
-        delta = structural_delta(base_struct, head_struct)
+        base_struct = scan_structural_metrics(base_dir, changed, pack)
+        head_struct = scan_structural_metrics(head_dir, changed, pack)
+        delta = structural_delta(base_struct, head_struct, pack)
 
-    acceptance_errors = _target_acceptance_errors(behavior, delta, set(pack["structural_detectors"]), setup_results)
-    decision = SHADOW_BLOCK_TECHNICAL if acceptance_errors else SHADOW_MERGE
+    structural_measurements = _structural_measurement_summary(delta)
+    acceptance_errors, business_ambiguities = _target_acceptance_errors(behavior, delta, pack, setup_results, validation)
+    decision = SHADOW_BLOCK_TECHNICAL if acceptance_errors else SHADOW_ASK_BUSINESS if business_ambiguities else SHADOW_MERGE
     result: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_at": started,
+        "governance_repository_url": GOVERNANCE_REPOSITORY_URL,
         "governance_evaluator_git_sha": _git_sha(root),
         "governance_target_pack_hash": target_pack_hash(pack_path),
         "schema_hashes": schema_hashes(root),
         "dependency_lock_hash": dependency_lock_hash(root),
         "target_repository_url": target_repository_url,
         "target_pack_id": pack["id"],
+        "target_pr_number": target_pr_number,
         "target_base_sha": base_sha,
         "target_head_sha": head_sha,
         "target_merge_sha": merge_sha,
+        "revision_mode": mode,
+        "revision_validation": validation,
         "operating_system": platform.platform(),
+        "runner_os": os.environ.get("RUNNER_OS", platform.system()),
         "python_version": platform.python_version(),
         "enforcement_mode": NON_BLOCKING,
         "real_target_shadow_decision": decision,
         "acceptance_errors": acceptance_errors,
+        "business_ambiguities": business_ambiguities,
         "case_counts": {
             "behavior_case_count": len(behavior),
             "behavior_cases_passed": sum(1 for item in behavior if item["status"] == "PASS"),
             "behavior_cases_failed": sum(1 for item in behavior if item["status"] == "FAIL"),
+            "behavior_cases_business_ambiguous": sum(1 for item in behavior if item["status"] == "BUSINESS_AMBIGUITY"),
         },
         "setup_results": setup_results,
         "behavior_results": behavior,
         "structural_metrics_before": base_struct,
         "structural_metrics_after": head_struct,
         "structural_delta": delta,
+        "structural_measurements": structural_measurements,
         "commands": [
             *(item["command"] for side in setup_results.values() for item in side),
             *(cmd for item in behavior for cmd in item["commands"]),
         ],
+        "github_artifact_id": None,
+        "github_artifact_digest": None,
         "deterministic_evidence_hash": "",
         "artifact_content_hash": "",
     }
+    _validate_expected_artifact_fields(pack, result)
     result["deterministic_evidence_hash"] = sha256_json(_stable_target_payload(result))
     result["artifact_content_hash"] = sha256_json({**result, "artifact_content_hash": ""})
     validate_named("target_evaluation_result", result, root)
@@ -99,24 +140,22 @@ def evaluate_target(
 
 
 def _validate_requested_target(
-    pack: dict[str, Any], repository_url: str, base_sha: str, head_sha: str, merge_sha: str | None
+    pack: dict[str, Any],
+    repository_url: str,
+    base_sha: str,
+    head_sha: str,
+    merge_sha: str | None,
+    revision_mode: str,
 ) -> None:
-    if repository_url != pack["repository_url"]:
-        raise ValueError(f"target repository mismatch for pack {pack['id']}: {repository_url}")
-    revisions = pack["immutable_revisions"]
-    historical_pair = base_sha == revisions["base_sha"] and head_sha == revisions["head_sha"]
-    safe_pair = base_sha == revisions.get("safe_base_sha") and head_sha == revisions.get("safe_head_sha") and not merge_sha
-    if not (historical_pair or safe_pair):
-        raise ValueError(f"base/head pair is not allowed by target pack {pack['id']}: {base_sha}..{head_sha}")
-    if historical_pair and revisions.get("merge_sha") and merge_sha != revisions["merge_sha"]:
-        raise ValueError(f"merge_sha is required for historical pair in target pack {pack['id']}: {revisions['merge_sha']}")
-    if merge_sha and merge_sha != revisions.get("merge_sha"):
-        raise ValueError(f"merge_sha is not allowed by target pack {pack['id']}: {merge_sha}")
+    from governance_eval.target_pack import _validate_requested_repository, _validate_requested_revisions
+
+    _validate_requested_repository(pack, repository_url, revision_mode)
+    _validate_requested_revisions(pack, base_sha, head_sha, merge_sha, revision_mode)
 
 
 def _run_setup_commands(pack: dict[str, Any], target_dir: Path) -> list[dict[str, Any]]:
     results = []
-    for command in pack.get("build_setup_commands", []):
+    for command in pack.get("setup_commands") or pack.get("build_setup_commands", []):
         if "<checkout>" in command:
             command = command.replace("<checkout>", str(target_dir))
         try:
@@ -152,7 +191,14 @@ def _run_setup_commands(pack: dict[str, Any], target_dir: Path) -> list[dict[str
 
 def _stable_target_payload(result: dict[str, Any]) -> dict[str, Any]:
     return _normalize_transient_paths(
-        {**result, "generated_at": "", "deterministic_evidence_hash": "", "artifact_content_hash": ""}
+        {
+            **result,
+            "generated_at": "",
+            "deterministic_evidence_hash": "",
+            "artifact_content_hash": "",
+            "github_artifact_id": None,
+            "github_artifact_digest": None,
+        }
     )
 
 
@@ -175,23 +221,62 @@ def _checkout(repo_url: str, sha: str, path: Path) -> Path:
     return path
 
 
-def _changed_files(base_dir: Path, base_sha: str, head_sha: str) -> set[str]:
+def _commit_exists(repo_dir: Path, sha: str) -> bool:
+    return subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo_dir).returncode == 0
+
+
+def _changed_files(base_dir: Path, head_dir: Path, base_sha: str, head_sha: str) -> set[str]:
     try:
+        subprocess.run(["git", "fetch", "--quiet", "origin", head_sha], cwd=base_dir, check=False)
         output = subprocess.check_output(["git", "diff", "--name-only", base_sha, head_sha], cwd=base_dir, text=True)
+        return {line.strip() for line in output.splitlines() if line.strip()}
     except subprocess.CalledProcessError:
-        return set()
-    return {line.strip() for line in output.splitlines() if line.strip()}
+        return _changed_files_by_content(base_dir, head_dir)
 
 
-def _run_behavior_case(root: Path, target_repository_url: str, case: dict[str, Any], base_dir: Path, head_dir: Path, base_sha: str, head_sha: str, merge_sha: str | None) -> dict[str, Any]:
-    base = _execute_case(root, case, base_dir, base_sha)
-    head = _execute_case(root, case, head_dir, head_sha)
+def _changed_files_by_content(base_dir: Path, head_dir: Path) -> set[str]:
+    base_files = _file_hashes(base_dir)
+    head_files = _file_hashes(head_dir)
+    return {path for path in set(base_files) | set(head_files) if base_files.get(path) != head_files.get(path)}
+
+
+def _file_hashes(root: Path) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for path in root.rglob("*"):
+        if ".git" in path.parts or not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        hashes[relative] = sha256_file(path)
+    return hashes
+
+
+def _case_applies(case: dict[str, Any], revision_mode: str) -> bool:
+    modes = case.get("revision_modes")
+    return not modes or revision_mode in set(modes)
+
+
+def _run_behavior_case(
+    root: Path,
+    pack: dict[str, Any],
+    target_repository_url: str,
+    case: dict[str, Any],
+    base_dir: Path,
+    head_dir: Path,
+    base_sha: str,
+    head_sha: str,
+    merge_sha: str | None,
+    revision_mode: str,
+) -> dict[str, Any]:
+    policy = _behavior_policy(case, revision_mode)
+    base = _execute_case(root, pack, case, base_dir, base_sha, policy)
+    head = _execute_case(root, pack, case, head_dir, head_sha, policy)
     expected = case.get("expected_base_result") or base["observed_result"]
-    status = "PASS" if base["observed_result"] == expected and head["observed_result"] == expected else "FAIL"
+    status = _behavior_status(policy, base, head, expected)
     source_validation = "PASS" if base["source_hash_validation"] == "PASS" and head["source_hash_validation"] == "PASS" else "FAIL"
     return {
         "case_id": case["id"],
         "status": status,
+        "behavior_comparison_policy": policy,
         "provenance_classification": case["provenance_classification"],
         "classification_reason": case.get("classification_reason", ""),
         "target_repository_url": target_repository_url,
@@ -211,11 +296,38 @@ def _run_behavior_case(root: Path, target_repository_url: str, case: dict[str, A
     }
 
 
-def _execute_case(root: Path, case: dict[str, Any], target_dir: Path, sha: str) -> dict[str, Any]:
+def _behavior_policy(case: dict[str, Any], revision_mode: str) -> str:
+    policies = case.get("comparison_policies") or {}
+    return policies.get(revision_mode) or case.get("behavior_comparison_policy") or "PINNED_EXPECTED"
+
+
+def _behavior_status(policy: str, base: dict[str, Any], head: dict[str, Any], expected: dict[str, Any]) -> str:
+    if base["exit_code"] != 0 or head["exit_code"] != 0:
+        return "FAIL"
+    if base["source_hash_validation"] != "PASS" or head["source_hash_validation"] != "PASS":
+        return "FAIL"
+    if policy == "PINNED_EXPECTED":
+        return "PASS" if base["observed_result"] == expected and head["observed_result"] == expected else "FAIL"
+    if policy == "PRESERVE_BASE_BEHAVIOR":
+        return "PASS" if head["observed_result"] == base["observed_result"] else "FAIL"
+    if policy == "BUSINESS_REVIEW_ON_CHANGE":
+        return "PASS" if head["observed_result"] == base["observed_result"] else "BUSINESS_AMBIGUITY"
+    return "FAIL"
+
+
+def _execute_case(
+    root: Path,
+    pack: dict[str, Any],
+    case: dict[str, Any],
+    target_dir: Path,
+    sha: str,
+    behavior_policy: str,
+) -> dict[str, Any]:
     script = root / case["reproducer"]
     command = [sys.executable, str(script), "--target", str(target_dir)]
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(target_dir / "src")
+    roots = [str(target_dir / item) for item in (pack.get("production_roots") or ["src"])]
+    env["PYTHONPATH"] = os.pathsep.join(roots + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     timed_out = False
     try:
         completed = subprocess.run(
@@ -240,7 +352,7 @@ def _execute_case(root: Path, case: dict[str, Any], target_dir: Path, sha: str) 
         observed = {"invalid_json_stdout": stdout}
     source_files = _source_file_evidence(target_dir, case.get("source_files", []), sha)
     source_symbols = _source_symbol_evidence(target_dir, case.get("source_symbols", []), sha)
-    validation = _source_hash_validation(case, sha, source_files, source_symbols)
+    validation = _source_hash_validation(case, sha, source_files, source_symbols, behavior_policy)
     if exit_code != 0:
         validation = "FAIL"
     return {
@@ -258,7 +370,11 @@ def _execute_case(root: Path, case: dict[str, Any], target_dir: Path, sha: str) 
 
 
 def _source_hash_validation(
-    case: dict[str, Any], sha: str, source_files: list[dict[str, str]], source_symbols: list[dict[str, Any]]
+    case: dict[str, Any],
+    sha: str,
+    source_files: list[dict[str, str]],
+    source_symbols: list[dict[str, Any]],
+    behavior_policy: str,
 ) -> str:
     if any(item["file_sha256"] == "MISSING" for item in source_files):
         return "FAIL"
@@ -266,9 +382,7 @@ def _source_hash_validation(
         return "FAIL"
     expected = case.get("expected_source_hashes", {}).get(sha)
     if not expected:
-        if case.get("pull_request") is not None:
-            return "FAIL"
-        return "PASS"
+        return "FAIL" if behavior_policy == "PINNED_EXPECTED" and case.get("pull_request") is not None else "PASS"
     for item in source_files:
         expected_file = expected.get("files", {}).get(item["path"])
         if not expected_file:
@@ -277,10 +391,6 @@ def _source_hash_validation(
             return "FAIL"
         if item["git_blob_sha"] != expected_file.get("git_blob_sha"):
             return "FAIL"
-    symbol_lookup = {
-        f"{item['path']}::{item['symbol']}": item
-        for item in source_symbols
-    }
     expected_symbols = expected.get("symbols", {})
     for actual in source_symbols:
         key = f"{actual['path']}::{actual['symbol']}"
@@ -334,14 +444,12 @@ def _source_symbol_evidence(target_dir: Path, symbols: list[dict[str, Any]], sha
         if path.exists():
             source = path.read_text(encoding="utf-8", errors="ignore").splitlines()
             try:
-                import ast
-
-                tree = ast.parse("\n".join(source), filename=str(path))
+                tree = ast_parse("\n".join(source), path)
                 node = next(
                     (
                         candidate
-                        for candidate in ast.walk(tree)
-                        if isinstance(candidate, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                        for candidate in walk_ast(tree)
+                        if candidate.__class__.__name__ in {"FunctionDef", "AsyncFunctionDef", "ClassDef"}
                         and candidate.name == symbol["symbol"]
                     ),
                     None,
@@ -364,13 +472,31 @@ def _source_symbol_evidence(target_dir: Path, symbols: list[dict[str, Any]], sha
     return evidence
 
 
+def ast_parse(source: str, path: Path) -> Any:
+    import ast
+
+    return ast.parse(source, filename=str(path))
+
+
+def walk_ast(tree: Any) -> Any:
+    import ast
+
+    return ast.walk(tree)
+
+
 def _target_acceptance_errors(
     behavior: list[dict[str, Any]],
     delta: dict[str, Any],
-    configured_detectors: set[str],
+    pack: dict[str, Any],
     setup_results: dict[str, list[dict[str, Any]]],
-) -> list[str]:
-    errors = []
+    revision_validation: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    business: list[str] = []
+    if revision_validation.get("status") != "PASS":
+        errors.append("revision validation failed")
+    if not revision_validation.get("base_commit_exists") or not revision_validation.get("head_commit_exists"):
+        errors.append("target commit validation failed")
     for side, results in setup_results.items():
         for result in results:
             if result["exit_code"] != 0:
@@ -380,21 +506,80 @@ def _target_acceptance_errors(
             errors.append(f"{item['case_id']}: FIXTURE_ONLY provenance not accepted for required behavior")
         if item["source_hash_validation"] != "PASS":
             errors.append(f"{item['case_id']}: source hash validation failed")
-        if item["status"] != "PASS":
-            errors.append(f"{item['case_id']}: behavior evidence failed")
-    blocking_structural_detectors = configured_detectors & {
-            "cross_module_private_references",
-            "private_helper_reexports",
-            "tests_private_production_internals",
-            "import_cycles",
-            "weak_public_contracts",
-            "large_typed_god_modules",
-            "gate_scope_or_threshold_weakening",
+        if item["status"] == "BUSINESS_AMBIGUITY":
+            business.append(f"{item['case_id']}: deterministic behavior difference requires business review")
+        elif item["status"] != "PASS":
+            errors.append(f"{item['case_id']}: behavior evidence failed under {item['behavior_comparison_policy']}")
+    policies = _detector_policies(pack)
+    for name, policy in policies.items():
+        metric = delta.get(name)
+        if not isinstance(metric, dict):
+            if policy["required"] and policy["fail_on_unknown"]:
+                errors.append(f"{name}: required detector evidence missing")
+            continue
+        status = metric.get("status")
+        if status in {"UNKNOWN", "UNSUPPORTED"} and policy["required"] and policy["fail_on_unknown"]:
+            errors.append(f"{name}: required detector evidence {status}: {metric.get('reason', '')}")
+            continue
+        if status not in {"MEASURED", "UNKNOWN", "UNSUPPORTED"}:
+            if policy["required"] and policy["fail_on_unknown"]:
+                errors.append(f"{name}: malformed detector status {status!r}")
+            continue
+        introduced = metric.get("introduced") or []
+        if policy["blocking"] and introduced:
+            errors.append(f"{name}: new structural violation(s): {len(introduced)}")
+    return errors, business
+
+
+def _detector_policies(pack: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    policies: dict[str, dict[str, Any]] = {}
+    for name in pack.get("structural_detectors", []):
+        policy = (pack.get("detector_policies") or {}).get(name, {})
+        policies[name] = {
+            "required": bool(policy.get("required", False)),
+            "blocking": bool(policy.get("blocking", False)),
+            "fail_on_unknown": bool(policy.get("fail_on_unknown", False)),
+            "thresholds": dict(policy.get("thresholds") or {}),
         }
-    for name, metric in delta.items():
-        if metric["introduced"] and name in blocking_structural_detectors:
-            errors.append(f"{name}: new structural violation(s): {len(metric['introduced'])}")
-    return errors
+    return policies
+
+
+def _structural_measurement_summary(delta: dict[str, Any]) -> dict[str, Any]:
+    unknown_required = []
+    unknown_advisory = []
+    unsupported_required = []
+    unsupported_advisory = []
+    for name, metric in sorted(delta.items()):
+        if not isinstance(metric, dict):
+            continue
+        status = metric.get("status")
+        policy = metric.get("policy") or {}
+        item = {
+            "detector": name,
+            "status": status,
+            "blocking": bool(policy.get("required") and policy.get("fail_on_unknown")),
+            "reason": metric.get("reason", ""),
+        }
+        if status == "UNKNOWN":
+            (unknown_required if item["blocking"] else unknown_advisory).append(item)
+        elif status == "UNSUPPORTED":
+            (unsupported_required if item["blocking"] else unsupported_advisory).append(item)
+    return {
+        "unknown_required": unknown_required,
+        "unknown_required_count": len(unknown_required),
+        "unknown_advisory": unknown_advisory,
+        "unknown_advisory_count": len(unknown_advisory),
+        "unsupported_required": unsupported_required,
+        "unsupported_required_count": len(unsupported_required),
+        "unsupported_advisory": unsupported_advisory,
+        "unsupported_advisory_count": len(unsupported_advisory),
+    }
+
+
+def _validate_expected_artifact_fields(pack: dict[str, Any], result: dict[str, Any]) -> None:
+    missing = [field for field in pack.get("expected_artifact_fields", []) if field not in result]
+    if missing:
+        raise ValueError(f"{pack['id']}: expected artifact fields missing: {missing}")
 
 
 def _git_sha(root: Path) -> str:

@@ -76,6 +76,7 @@ jobs:
             echo "| Negative controls blocked | \`${{ steps.benchmark.outputs.negative }}\` |"
             echo "| False blocks | \`${{ steps.benchmark.outputs.false_blocks }}\` |"
             echo "| Artifact name | \`governance-benchmark-json\` |"
+            echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
             echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
             echo "| Artifact content hash | \`${{ steps.benchmark.outputs.content_hash }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

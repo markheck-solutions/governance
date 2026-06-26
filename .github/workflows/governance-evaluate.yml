@@ -22,6 +22,13 @@ on:
       governance-ref:
         required: true
         type: string
+      revision-mode:
+        required: true
+        type: string
+      target-pr-number:
+        required: false
+        type: string
+        default: ""
       artifact-name:
         required: false
         type: string
@@ -42,6 +49,8 @@ jobs:
       TARGET_MERGE_SHA: ${{ inputs.target-merge-sha }}
       TARGET_PACK_PATH: ${{ inputs.target-pack-path }}
       GOVERNANCE_CHECKOUT_REF: ${{ inputs.governance-ref }}
+      REVISION_MODE: ${{ inputs.revision-mode }}
+      TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
       ARTIFACT_NAME: ${{ inputs.artifact-name }}
     steps:
       - name: Checkout governance evaluator
@@ -55,7 +64,7 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Validate governance-owned target pack
+      - name: Validate workflow inputs
         shell: bash
         run: |
           python - <<'PY'
@@ -63,17 +72,16 @@ jobs:
           import re
           import sys
 
-          allowed = {
-              "target_packs/spaghetti/v1/pack.json": "https://github.com/markheck-solutions/Spaghetti.git",
-              "target_packs/synthetic_clean/v1/pack.json": "https://example.invalid/synthetic-clean.git",
-              "target_packs/synthetic_evasion/v1/pack.json": "https://example.invalid/synthetic-evasion.git",
-          }
           pack = os.environ["TARGET_PACK_PATH"]
-          repo = os.environ["TARGET_REPOSITORY_URL"]
           sha_re = re.compile(r"^[0-9a-f]{40}$")
+          pack_re = re.compile(r"^[A-Za-z0-9_./-]+\.json$")
           artifact_re = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
-          if allowed.get(pack) != repo:
-              print(f"Unsupported target pack/repository pair: {pack} / {repo}", file=sys.stderr)
+          mode = os.environ["REVISION_MODE"]
+          if mode not in {"HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"}:
+              print("Invalid revision mode", file=sys.stderr)
+              raise SystemExit(64)
+          if not pack_re.fullmatch(pack) or ".." in pack.split("/"):
+              print("Invalid target pack path", file=sys.stderr)
               raise SystemExit(64)
           if not sha_re.fullmatch(os.environ["TARGET_BASE_SHA"]):
               print("Invalid target base SHA", file=sys.stderr)
@@ -91,19 +99,42 @@ jobs:
           if not artifact_re.fullmatch(os.environ["ARTIFACT_NAME"]):
               print("Invalid artifact name", file=sys.stderr)
               raise SystemExit(64)
+          pr_number = os.environ.get("TARGET_PR_NUMBER", "")
+          if pr_number and not re.fullmatch(r"[1-9][0-9]{0,9}", pr_number):
+              print("Invalid target PR number", file=sys.stderr)
+              raise SystemExit(64)
           PY
+      - name: Validate governance-owned target pack
+        shell: bash
+        run: |
+          cd governance
+          python -m governance_eval validate-target-request \
+            --pack "$TARGET_PACK_PATH" \
+            --repository-url "$TARGET_REPOSITORY_URL" \
+            --base-sha "$TARGET_BASE_SHA" \
+            --head-sha "$TARGET_HEAD_SHA" \
+            --merge-sha "$TARGET_MERGE_SHA" \
+            --revision-mode "$REVISION_MODE"
       - name: Run target evaluation
         timeout-minutes: 15
         shell: bash
         run: |
           cd governance
-          python -m governance_eval evaluate-target \
-            --pack "$TARGET_PACK_PATH" \
-            --base-sha "$TARGET_BASE_SHA" \
-            --head-sha "$TARGET_HEAD_SHA" \
-            --merge-sha "$TARGET_MERGE_SHA" \
-            --repository-url "$TARGET_REPOSITORY_URL" \
+          args=(
+            python -m governance_eval evaluate-target
+            --pack "$TARGET_PACK_PATH"
+            --base-sha "$TARGET_BASE_SHA"
+            --head-sha "$TARGET_HEAD_SHA"
+            --merge-sha "$TARGET_MERGE_SHA"
+            --repository-url "$TARGET_REPOSITORY_URL"
+            --revision-mode "$REVISION_MODE"
+            --governance-owned-pack
             --artifacts-dir artifacts/target
+          )
+          if [[ -n "$TARGET_PR_NUMBER" ]]; then
+            args+=(--target-pr-number "$TARGET_PR_NUMBER")
+          fi
+          "${args[@]}"
       - name: Read target summary
         id: target
         if: always()
@@ -120,6 +151,11 @@ jobs:
               print("case_count=0")
               print("passed=0")
               print("failed=0")
+              print("business=0")
+              print("unknown_required=0")
+              print("unknown_advisory=0")
+              print("revision_mode=UNKNOWN")
+              print("target_pr_number=")
               print("errors=missing artifact")
               print("content_hash=MISSING")
               raise SystemExit(0)
@@ -130,6 +166,12 @@ jobs:
           print(f"case_count={counts['behavior_case_count']}")
           print(f"passed={counts['behavior_cases_passed']}")
           print(f"failed={counts['behavior_cases_failed']}")
+          print(f"business={counts.get('behavior_cases_business_ambiguous', 0)}")
+          measurements = data.get("structural_measurements", {})
+          print(f"unknown_required={measurements.get('unknown_required_count', 0)}")
+          print(f"unknown_advisory={measurements.get('unknown_advisory_count', 0)}")
+          print(f"revision_mode={data.get('revision_mode', 'UNKNOWN')}")
+          print(f"target_pr_number={data.get('target_pr_number') or ''}")
           print(f"errors={'; '.join(data['acceptance_errors'][:5])}")
           print(f"content_hash={data['artifact_content_hash']}")
           PY
@@ -154,11 +196,16 @@ jobs:
             echo "| Target repository | \`${TARGET_REPOSITORY_URL}\` |"
             echo "| Target base SHA | \`${TARGET_BASE_SHA}\` |"
             echo "| Target head SHA | \`${TARGET_HEAD_SHA}\` |"
+            echo "| Target PR number | \`${{ steps.target.outputs.target_pr_number }}\` |"
+            echo "| Revision mode | \`${{ steps.target.outputs.revision_mode }}\` |"
             echo "| Shadow decision | \`${{ steps.target.outputs.decision }}\` |"
             echo "| Enforcement mode | \`NON_BLOCKING\` |"
-            echo "| Behavior cases | \`${{ steps.target.outputs.passed }}/${{ steps.target.outputs.case_count }} passed\` |"
+            echo "| Behavior cases | \`${{ steps.target.outputs.passed }}/${{ steps.target.outputs.case_count }} passed; ${{ steps.target.outputs.failed }} failed; ${{ steps.target.outputs.business }} business ambiguous\` |"
+            echo "| Unknown required measurements | \`${{ steps.target.outputs.unknown_required }}\` |"
+            echo "| Unknown advisory measurements | \`${{ steps.target.outputs.unknown_advisory }}\` |"
             echo "| Acceptance errors | \`${{ steps.target.outputs.errors }}\` |"
             echo "| Artifact name | \`${ARTIFACT_NAME}\` |"
+            echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
             echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
             echo "| Artifact content hash | \`${{ steps.target.outputs.content_hash }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

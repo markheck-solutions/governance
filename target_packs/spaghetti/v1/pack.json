@@ -1,7 +1,17 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "id": "spaghetti-v1",
   "repository_url": "https://github.com/markheck-solutions/Spaghetti.git",
+  "repository_identity": {
+    "canonical_url": "https://github.com/markheck-solutions/Spaghetti.git",
+    "owner": "markheck-solutions",
+    "name": "Spaghetti"
+  },
+  "language_runtime": "python>=3.12",
+  "production_roots": ["src", "scripts"],
+  "test_roots": ["tests"],
+  "source_globs": ["**/*.py"],
+  "ignore_globs": ["build/**", "dist/**", ".venv/**", "venv/**"],
   "immutable_revisions": {
     "base_sha": "60da7dbe2fad70836f15ed7ec4d7969c6ad436f1",
     "head_sha": "43f96f395b8a0acb4d323943b6fc68727bf21121",
@@ -9,9 +19,13 @@
     "safe_base_sha": "60da7dbe2fad70836f15ed7ec4d7969c6ad436f1",
     "safe_head_sha": "60da7dbe2fad70836f15ed7ec4d7969c6ad436f1"
   },
+  "revision_modes": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
   "checkout_commands": [
     "git clone --no-checkout https://github.com/markheck-solutions/Spaghetti.git",
     "git checkout <full-sha>"
+  ],
+  "setup_commands": [
+    "python -m pip install openpyxl==3.1.5"
   ],
   "build_setup_commands": [
     "python -m pip install openpyxl==3.1.5"
@@ -21,6 +35,13 @@
       "id": "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING",
       "title": "Partial metadata must preserve approved interleaving order",
       "pull_request": 141,
+      "revision_modes": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
+      "behavior_comparison_policy": "PINNED_EXPECTED",
+      "comparison_policies": {
+        "HISTORICAL_FIXED": "PINNED_EXPECTED",
+        "SAFE_FIXED": "PINNED_EXPECTED",
+        "CANDIDATE_DYNAMIC": "PRESERVE_BASE_BEHAVIOR"
+      },
       "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
       "classification_reason": "The reproducer imports and executes inca_sorter.sorting.sort_inca_route_path from each exact target checkout.",
       "reproducer": "target_packs/spaghetti/v1/reproducer_pr141.py",
@@ -88,11 +109,38 @@
     "weak_public_contracts",
     "module_dependency_fanout",
     "production_module_size_function_count",
+    "large_typed_god_modules",
     "touched_function_complexity",
     "gate_scope_or_threshold_weakening",
     "duplicate_compatibility_surfaces",
     "publicized_private_helper_renames"
   ],
+  "detector_policies": {
+    "cross_module_private_references": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {}},
+    "private_helper_reexports": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {}},
+    "tests_private_production_internals": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {}},
+    "import_cycles": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {}},
+    "weak_public_contracts": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {}},
+    "module_dependency_fanout": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {"max_imports": 30}},
+    "production_module_size_function_count": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {"max_lines": 1200, "max_functions": 60}},
+    "large_typed_god_modules": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {"max_lines": 1200, "max_functions": 60}},
+    "touched_function_complexity": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {"max_complexity": 10}},
+    "gate_scope_or_threshold_weakening": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {}},
+    "duplicate_compatibility_surfaces": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {}},
+    "publicized_private_helper_renames": {"required": true, "blocking": true, "fail_on_unknown": true, "thresholds": {}}
+  },
+  "gate_contract": {
+    "required_files": ["pyproject.toml", ".github/workflows"],
+    "required_commands": [
+      "python -m ruff check src scripts tests",
+      "python -m ruff format --check src scripts tests",
+      "python -m mypy src scripts tests",
+      "python -m pytest tests -q",
+      "python -m ruff check --select C901 src/inca_sorter tests scripts"
+    ],
+    "governed_roots": ["src", "scripts", "tests"],
+    "allowed_exceptions": ["existing validation workflow path filters outside candidate governance scope"]
+  },
   "target_specific_exclusions": [
     {
       "path": "src/inca_sorter/models.py",
@@ -100,15 +148,19 @@
     }
   ],
   "expected_artifact_fields": [
+    "governance_repository_url",
     "governance_evaluator_git_sha",
     "governance_target_pack_hash",
     "schema_hashes",
     "dependency_lock_hash",
     "target_repository_url",
+    "target_pr_number",
     "target_base_sha",
     "target_head_sha",
+    "revision_mode",
     "commands",
     "operating_system",
+    "runner_os",
     "python_version",
     "case_counts",
     "setup_results",
@@ -116,6 +168,7 @@
     "structural_metrics_before",
     "structural_metrics_after",
     "structural_delta",
+    "structural_measurements",
     "acceptance_errors",
     "deterministic_evidence_hash",
     "artifact_content_hash",

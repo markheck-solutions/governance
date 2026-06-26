@@ -11,9 +11,11 @@ from governance_eval.benchmark import run_benchmark
 from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
+from governance_eval.delivery_readiness import main as delivery_readiness_main
 from governance_eval.lock import write_spaghetti_lock
 from governance_eval.paths import repo_root
 from governance_eval.target_eval import evaluate_target
+from governance_eval.target_pack import validate_target_request
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,7 +45,31 @@ def main(argv: list[str] | None = None) -> int:
     target_parser.add_argument("--head-sha", required=True)
     target_parser.add_argument("--merge-sha", default=None)
     target_parser.add_argument("--repository-url", default=None)
+    target_parser.add_argument(
+        "--revision-mode",
+        choices=["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
+        default=None,
+    )
+    target_parser.add_argument("--target-pr-number", type=int, default=None)
+    target_parser.add_argument("--governance-owned-pack", action="store_true")
     target_parser.add_argument("--artifacts-dir", type=Path, default=Path("artifacts/target"))
+
+    validate_target_parser = subparsers.add_parser("validate-target-request", help="validate target pack and revision inputs")
+    validate_target_parser.add_argument("--pack", type=Path, required=True)
+    validate_target_parser.add_argument("--repository-url", required=True)
+    validate_target_parser.add_argument("--base-sha", required=True)
+    validate_target_parser.add_argument("--head-sha", required=True)
+    validate_target_parser.add_argument("--merge-sha", default=None)
+    validate_target_parser.add_argument(
+        "--revision-mode",
+        choices=["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
+        required=True,
+    )
+
+    delivery_parser = subparsers.add_parser("delivery-readiness", help="verify PR review/workflow readiness before merge")
+    delivery_parser.add_argument("--repo", required=True)
+    delivery_parser.add_argument("--pr", required=True, type=int)
+    delivery_parser.add_argument("--payload", default=None)
 
     args = parser.parse_args(argv)
     root = repo_root(getattr(args, "root", None))
@@ -68,9 +94,29 @@ def main(argv: list[str] | None = None) -> int:
             root / args.artifacts_dir if not args.artifacts_dir.is_absolute() else args.artifacts_dir,
             args.merge_sha or None,
             args.repository_url,
+            args.revision_mode,
+            args.target_pr_number,
+            args.governance_owned_pack,
         )
         print(json.dumps(_target_summary(result), indent=2, sort_keys=True))
         return 0
+    if args.command == "validate-target-request":
+        pack = validate_target_request(
+            root / args.pack if not args.pack.is_absolute() else args.pack,
+            args.repository_url,
+            args.base_sha,
+            args.head_sha,
+            args.merge_sha or None,
+            args.revision_mode,
+            root,
+        )
+        print(json.dumps({"status": "PASS", "target_pack_id": pack["id"]}, indent=2, sort_keys=True))
+        return 0
+    if args.command == "delivery-readiness":
+        delivery_args = ["--repo", args.repo, "--pr", str(args.pr)]
+        if args.payload:
+            delivery_args.extend(["--payload", args.payload])
+        return delivery_readiness_main(delivery_args)
     raise AssertionError(args.command)
 
 
@@ -111,6 +157,10 @@ def _target_summary(result: dict) -> dict:
         "enforcement_mode": result["enforcement_mode"],
         "acceptance_errors": result["acceptance_errors"],
         "case_counts": result["case_counts"],
+        "revision_mode": result["revision_mode"],
+        "target_pr_number": result["target_pr_number"],
+        "unknown_required_measurements": result["structural_measurements"]["unknown_required_count"],
+        "unknown_advisory_measurements": result["structural_measurements"]["unknown_advisory_count"],
         "artifact_content_hash": result["artifact_content_hash"],
         "artifact_path": result.get("artifact_path"),
     }

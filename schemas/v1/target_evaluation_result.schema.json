@@ -3,43 +3,60 @@
   "required": [
     "schema_version",
     "generated_at",
+    "governance_repository_url",
     "governance_evaluator_git_sha",
     "governance_target_pack_hash",
     "schema_hashes",
     "dependency_lock_hash",
     "target_repository_url",
     "target_pack_id",
+    "target_pr_number",
     "target_base_sha",
     "target_head_sha",
     "target_merge_sha",
+    "revision_mode",
+    "revision_validation",
     "operating_system",
+    "runner_os",
     "python_version",
     "enforcement_mode",
     "real_target_shadow_decision",
     "acceptance_errors",
+    "business_ambiguities",
     "case_counts",
     "setup_results",
     "behavior_results",
     "structural_metrics_before",
     "structural_metrics_after",
     "structural_delta",
+    "structural_measurements",
     "commands",
+    "github_artifact_id",
+    "github_artifact_digest",
     "deterministic_evidence_hash",
     "artifact_content_hash"
   ],
   "properties": {
     "schema_version": { "type": "string" },
     "generated_at": { "type": "string" },
+    "governance_repository_url": { "type": "string" },
     "governance_evaluator_git_sha": { "type": "string" },
     "governance_target_pack_hash": { "type": "string" },
     "schema_hashes": { "type": "object" },
     "dependency_lock_hash": { "type": "string" },
     "target_repository_url": { "type": "string" },
     "target_pack_id": { "type": "string" },
+    "target_pr_number": { "type": ["integer", "null"] },
     "target_base_sha": { "type": "string" },
     "target_head_sha": { "type": "string" },
     "target_merge_sha": { "type": ["string", "null"] },
+    "revision_mode": {
+      "type": "string",
+      "enum": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"]
+    },
+    "revision_validation": { "type": "object" },
     "operating_system": { "type": "string" },
+    "runner_os": { "type": "string" },
     "python_version": { "type": "string" },
     "enforcement_mode": { "type": "string", "enum": ["NON_BLOCKING"] },
     "real_target_shadow_decision": {
@@ -47,13 +64,20 @@
       "enum": ["SHADOW_MERGE", "SHADOW_BLOCK_TECHNICAL", "SHADOW_ASK_BUSINESS"]
     },
     "acceptance_errors": { "type": "array", "items": { "type": "string" } },
+    "business_ambiguities": { "type": "array", "items": { "type": "string" } },
     "case_counts": {
       "type": "object",
-      "required": ["behavior_case_count", "behavior_cases_passed", "behavior_cases_failed"],
+      "required": [
+        "behavior_case_count",
+        "behavior_cases_passed",
+        "behavior_cases_failed",
+        "behavior_cases_business_ambiguous"
+      ],
       "properties": {
         "behavior_case_count": { "type": "integer", "minimum": 0 },
         "behavior_cases_passed": { "type": "integer", "minimum": 0 },
-        "behavior_cases_failed": { "type": "integer", "minimum": 0 }
+        "behavior_cases_failed": { "type": "integer", "minimum": 0 },
+        "behavior_cases_business_ambiguous": { "type": "integer", "minimum": 0 }
       }
     },
     "setup_results": { "type": "object" },
@@ -64,6 +88,7 @@
         "required": [
           "case_id",
           "status",
+          "behavior_comparison_policy",
           "provenance_classification",
           "target_repository_url",
           "base_sha",
@@ -80,7 +105,11 @@
         ],
         "properties": {
           "case_id": { "type": "string" },
-          "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+          "status": { "type": "string", "enum": ["PASS", "FAIL", "BUSINESS_AMBIGUITY"] },
+          "behavior_comparison_policy": {
+            "type": "string",
+            "enum": ["PINNED_EXPECTED", "PRESERVE_BASE_BEHAVIOR", "BUSINESS_REVIEW_ON_CHANGE"]
+          },
           "provenance_classification": {
             "type": "string",
             "enum": ["EXECUTES_PINNED_TARGET_CODE", "EXECUTES_EXTRACTED_REPRODUCER", "FIXTURE_ONLY"]
@@ -297,7 +326,10 @@
     "structural_metrics_before": { "type": "object" },
     "structural_metrics_after": { "type": "object" },
     "structural_delta": { "type": "object" },
+    "structural_measurements": { "type": "object" },
     "commands": { "type": "array", "items": { "type": "string" } },
+    "github_artifact_id": { "type": ["string", "null"] },
+    "github_artifact_digest": { "type": ["string", "null"] },
     "deterministic_evidence_hash": { "type": "string", "minLength": 64 },
     "artifact_content_hash": { "type": "string", "minLength": 64 }
   }

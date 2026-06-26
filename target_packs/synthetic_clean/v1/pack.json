@@ -1,18 +1,39 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "id": "synthetic-clean-v1",
   "repository_url": "https://example.invalid/synthetic-clean.git",
+  "repository_identity": {
+    "canonical_url": "https://example.invalid/synthetic-clean.git",
+    "owner": "example",
+    "name": "synthetic-clean"
+  },
+  "language_runtime": "python>=3.12",
+  "production_roots": ["src"],
+  "test_roots": ["tests"],
+  "source_globs": ["**/*.py"],
+  "ignore_globs": [],
   "immutable_revisions": {
     "base_sha": "0000000000000000000000000000000000000000",
-    "head_sha": "0000000000000000000000000000000000000000"
+    "head_sha": "0000000000000000000000000000000000000000",
+    "safe_base_sha": "0000000000000000000000000000000000000000",
+    "safe_head_sha": "0000000000000000000000000000000000000000"
   },
+  "revision_modes": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
   "checkout_commands": ["git clone --no-checkout <target>", "git checkout <full-sha>"],
+  "setup_commands": [],
   "build_setup_commands": [],
   "behavior_cases": [
     {
       "id": "SYNTHETIC-CLEAN-NOOP",
       "title": "Clean target keeps public behavior stable",
       "pull_request": null,
+      "revision_modes": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
+      "behavior_comparison_policy": "PINNED_EXPECTED",
+      "comparison_policies": {
+        "HISTORICAL_FIXED": "PINNED_EXPECTED",
+        "SAFE_FIXED": "PINNED_EXPECTED",
+        "CANDIDATE_DYNAMIC": "PRESERVE_BASE_BEHAVIOR"
+      },
       "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
       "classification_reason": "The reproducer imports public target code from the exact checkout.",
       "reproducer": "target_packs/synthetic_clean/v1/reproducer.py",
@@ -28,6 +49,32 @@
     "weak_public_contracts",
     "module_dependency_fanout"
   ],
+  "detector_policies": {
+    "cross_module_private_references": {
+      "required": true,
+      "blocking": true,
+      "fail_on_unknown": true,
+      "thresholds": {}
+    },
+    "weak_public_contracts": {
+      "required": true,
+      "blocking": true,
+      "fail_on_unknown": true,
+      "thresholds": {}
+    },
+    "module_dependency_fanout": {
+      "required": true,
+      "blocking": true,
+      "fail_on_unknown": true,
+      "thresholds": {"max_imports": 12}
+    }
+  },
+  "gate_contract": {
+    "required_files": [],
+    "required_commands": [],
+    "governed_roots": ["src"],
+    "allowed_exceptions": []
+  },
   "target_specific_exclusions": [
     {
       "path": "tests/",
@@ -35,14 +82,18 @@
     }
   ],
   "expected_artifact_fields": [
+    "governance_repository_url",
     "governance_evaluator_git_sha",
     "governance_target_pack_hash",
     "schema_hashes",
     "target_repository_url",
+    "target_pr_number",
     "target_base_sha",
     "target_head_sha",
+    "revision_mode",
     "behavior_results",
     "structural_delta",
+    "structural_measurements",
     "deterministic_evidence_hash",
     "artifact_content_hash",
     "enforcement_mode"

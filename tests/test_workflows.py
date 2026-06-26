@@ -24,8 +24,14 @@ class WorkflowTests(unittest.TestCase):
             self.assertNotIn("secrets: inherit", text)
         self.assertIn("workflow_call:", workflows["governance-evaluate.yml"])
         self.assertIn("governance-ref:", workflows["governance-evaluate.yml"])
+        self.assertIn("revision-mode:", workflows["governance-evaluate.yml"])
+        self.assertIn("target-pr-number:", workflows["governance-evaluate.yml"])
         self.assertIn("GOVERNANCE_CHECKOUT_REF", workflows["governance-evaluate.yml"])
+        self.assertIn("validate-target-request", workflows["governance-evaluate.yml"])
+        self.assertNotIn("allowed = {", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-digest", workflows["governance-evaluate.yml"])
+        self.assertIn("artifact-id", workflows["governance-evaluate.yml"])
+        self.assertIn("artifact-id", workflows["governance-shadow.yml"])
 
 
 if __name__ == "__main__":
