@@ -525,13 +525,13 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
             step = re.search(r"name:\s*['\"]?([^'\"]+?)['\"]?\s*$", line)
             if step:
                 steps.add(f"{file.name}:{current_job}:{step.group(1).strip()}")
+            semantic_line = _workflow_semantic_line(line)
             run_command = _workflow_run_command(lines, index)
             job_disabled = f"{file.name}:{current_job}" in disabled_jobs
             if run_command and not job_disabled and not _workflow_step_disabled(lines, index):
                 run_commands.add(f"{file.name}:{current_job}:{run_command}")
-            if "continue-on-error:" in line and "true" in line.lower():
+            if "continue-on-error:" in semantic_line and "true" in semantic_line.lower():
                 continue_on_error.add(f"{file.name}:{current_job}")
-            semantic_line = _workflow_semantic_line(line)
             match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", semantic_line)
             if match:
                 key = match.group(1)
@@ -576,7 +576,7 @@ def _workflow_run_command(lines: list[str], index: int) -> str | None:
     line = lines[index]
     if line.lstrip().startswith("#"):
         return None
-    match = re.match(r"^\s*run:\s*(.*)$", line)
+    match = re.match(r"^\s*(?:-\s*)?run:\s*(.*)$", line)
     if not match:
         return None
     inline = match.group(1).strip()

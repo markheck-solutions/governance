@@ -259,6 +259,43 @@ files = ["src", "tests"]
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
 
+    def test_required_command_shorthand_run_step_satisfies_gate_contract(self) -> None:
+        pack = _pack()
+        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["governed_roots"] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            head = root / "head"
+            workflow = "jobs:\n  test:\n    steps:\n      - run: python -m mypy src scripts tests\n"
+            _write(base / ".github/workflows/validation.yml", workflow)
+            _write(head / ".github/workflows/validation.yml", workflow)
+
+            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
+
+    def test_commented_continue_on_error_does_not_weaken_workflow(self) -> None:
+        pack = _pack()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            head = root / "head"
+            _write(
+                base / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      - name: Tests\n        run: python -m pytest\n",
+            )
+            _write(
+                head / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      # continue-on-error: true\n      - name: Tests\n        run: python -m pytest\n",
+            )
+
+            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertNotIn("workflow.continue-on-error_added:validation.yml:test", introduced)
+
     def test_ruff_include_and_workflow_path_narrowing_are_detected(self) -> None:
         pack = _pack()
         with tempfile.TemporaryDirectory() as tmp:
