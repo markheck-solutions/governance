@@ -12,6 +12,7 @@ BLOCKING_RE = re.compile(r"\bP[0-2]\b|\[P[0-2]\]|severity:\s*P[0-2]", re.IGNOREC
 SUCCESS_CONCLUSIONS = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 SUCCESS_STATES = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 FINAL_REVIEW_AUTHORS = {"chatgpt-codex-connector"}
+GOVERNANCE_CONTEXT_RE = re.compile(r"governance|phase 1 shadow", re.IGNORECASE)
 
 
 def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
@@ -31,11 +32,13 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
     unresolved = payload.get("unresolvedThreads") or []
     unresolved_blocking = [thread for thread in unresolved if _thread_is_p0_p2(thread)]
     workflow_contexts = payload.get("workflowContexts") or []
-    has_workflow_evidence = bool(workflow_contexts)
+    governance_contexts = [item for item in workflow_contexts if _is_governance_context(item)]
+    successful_governance_contexts = [item for item in governance_contexts if _is_success_context(item)]
+    has_workflow_evidence = bool(successful_governance_contexts)
     failed_contexts = [
         item
         for item in workflow_contexts
-        if item.get("conclusion") not in SUCCESS_CONCLUSIONS and item.get("state") not in SUCCESS_STATES
+        if not _is_success_context(item)
     ]
     merge_state = payload.get("mergeStateStatus") or ""
     merge_eligible = (
@@ -62,6 +65,7 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         "unresolved_p2_count": _count_severity(unresolved_blocking, "P2"),
         "failed_workflow_contexts": failed_contexts,
         "missing_workflow_evidence": not has_workflow_evidence,
+        "governance_workflow_contexts": successful_governance_contexts,
         "merge_eligible": merge_eligible,
         "merge_state_status": merge_state,
     }
@@ -231,6 +235,18 @@ def main(argv: list[str] | None = None) -> int:
 
 def _thread_is_p0_p2(thread: dict[str, Any]) -> bool:
     return bool(BLOCKING_RE.search(thread.get("body") or ""))
+
+
+def _is_success_context(item: dict[str, Any]) -> bool:
+    return item.get("conclusion") in SUCCESS_CONCLUSIONS or item.get("state") in SUCCESS_STATES
+
+
+def _is_governance_context(item: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(item.get(field) or "")
+        for field in ("name", "workflowName", "context")
+    )
+    return bool(GOVERNANCE_CONTEXT_RE.search(text))
 
 
 def _count_severity(threads: list[dict[str, Any]], severity: str) -> int:

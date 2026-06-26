@@ -222,6 +222,46 @@ files = ["src", "scripts", "tests"]
 
         self.assertEqual(delta["gate_scope_or_threshold_weakening"]["introduced"], [])
 
+    def test_growth_in_existing_over_threshold_modules_is_introduced_debt(self) -> None:
+        pack = _pack()
+        pack["structural_detectors"].extend(["module_dependency_fanout", "production_module_size_function_count"])
+        pack["detector_policies"]["module_dependency_fanout"] = {
+            "required": True,
+            "blocking": True,
+            "fail_on_unknown": True,
+            "thresholds": {"max_imports": 1},
+        }
+        pack["detector_policies"]["production_module_size_function_count"] = {
+            "required": True,
+            "blocking": True,
+            "fail_on_unknown": True,
+            "thresholds": {"max_lines": 5, "max_functions": 1},
+        }
+        base = {
+            "module_dependency_fanout": {
+                "threshold": 1,
+                "over_threshold": ["demo.api"],
+                "by_module": {"demo.api": 2},
+            },
+            "production_module_size_function_count": {
+                "threshold": {"max_lines": 5, "max_functions": 1},
+                "over_threshold": ["src/demo/api.py"],
+                "by_module": {"src/demo/api.py": {"lines": 8, "function_count": 2, "has_typing": False}},
+            },
+        }
+        head = copy.deepcopy(base)
+        head["module_dependency_fanout"]["by_module"]["demo.api"] = 3
+        head["production_module_size_function_count"]["by_module"]["src/demo/api.py"]["lines"] = 12
+        head["production_module_size_function_count"]["by_module"]["src/demo/api.py"]["function_count"] = 3
+
+        delta = structural_delta(base, head, pack)
+
+        self.assertIn("demo.api:3", delta["module_dependency_fanout"]["introduced"])
+        self.assertIn(
+            "src/demo/api.py:function_count=3,lines=12",
+            delta["production_module_size_function_count"]["introduced"],
+        )
+
 
 def _pack() -> dict:
     return {

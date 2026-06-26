@@ -25,7 +25,9 @@ class DeliveryReadinessTests(unittest.TestCase):
                 }
             ],
             "unresolvedThreads": [{"body": "nit: wording"}],
-            "workflowContexts": [{"name": "tests", "conclusion": "SUCCESS"}],
+            "workflowContexts": [
+                {"name": "Phase 1 shadow run", "workflowName": "Governance Shadow Benchmark", "conclusion": "SUCCESS"}
+            ],
         }
 
         result = evaluate_readiness(payload)
@@ -76,7 +78,9 @@ class DeliveryReadinessTests(unittest.TestCase):
                 }
             ],
             "unresolvedThreads": [],
-            "workflowContexts": [{"name": "tests", "conclusion": "SUCCESS"}],
+            "workflowContexts": [
+                {"name": "Phase 1 shadow run", "workflowName": "Governance Shadow Benchmark", "conclusion": "SUCCESS"}
+            ],
         }
 
         result = evaluate_readiness(payload)
@@ -101,13 +105,40 @@ class DeliveryReadinessTests(unittest.TestCase):
                 }
             ],
             "unresolvedThreads": [],
-            "workflowContexts": [{"name": "tests", "conclusion": "SUCCESS"}],
+            "workflowContexts": [
+                {"name": "Phase 1 shadow run", "workflowName": "Governance Shadow Benchmark", "conclusion": "SUCCESS"}
+            ],
         }
 
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
         self.assertIsNone(result["final_review_timestamp"])
+
+    def test_unrelated_green_status_is_not_workflow_evidence(self) -> None:
+        payload = {
+            "state": "OPEN",
+            "isDraft": False,
+            "mergeStateStatus": "CLEAN",
+            "headRefOid": "f" * 40,
+            "latestHeadCommittedAt": "2026-06-25T10:00:00Z",
+            "reviews": [
+                {
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-06-25T10:05:00Z",
+                    "commitOid": "f" * 40,
+                    "author": "chatgpt-codex-connector",
+                    "body": "",
+                }
+            ],
+            "unresolvedThreads": [],
+            "workflowContexts": [{"name": "lint", "workflowName": "Validation", "conclusion": "SUCCESS"}],
+        }
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["missing_workflow_evidence"])
 
     def test_missing_workflow_evidence_blocks_readiness(self) -> None:
         payload = {

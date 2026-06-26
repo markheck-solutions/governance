@@ -723,13 +723,31 @@ def _identity_set(value: Any) -> set[str]:
         return {str(item) for item in value}
     if isinstance(value, dict):
         if "over_threshold" in value:
-            return {str(item) for item in value["over_threshold"]}
+            return _over_threshold_identities(value)
         if "weakened" in value:
             return {str(item) for item in value["weakened"]}
         if value.get("status") == "MEASURED" and "function_bodies" in value:
             return set()
         return {f"{key}:{val}" for key, val in _sets_to_lists(value).items() if key not in {"by_module", "threshold"}}
     return {str(value)}
+
+
+def _over_threshold_identities(value: dict[str, Any]) -> set[str]:
+    over = {str(item) for item in value.get("over_threshold", [])}
+    by_module = value.get("by_module")
+    if not isinstance(by_module, dict):
+        return over
+    identities: set[str] = set()
+    for item in sorted(over):
+        identities.add(item)
+        detail = by_module.get(item)
+        if isinstance(detail, dict):
+            size = ",".join(f"{key}={detail[key]}" for key in sorted(detail) if key != "has_typing")
+            if size:
+                identities.add(f"{item}:{size}")
+        elif detail is not None:
+            identities.add(f"{item}:{detail}")
+    return identities
 
 
 def _unknown(value: Any) -> bool:
