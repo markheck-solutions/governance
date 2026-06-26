@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
 
@@ -335,6 +336,10 @@ def _benchmark_result(payload: dict[str, Any]) -> dict[str, Any]:
     artifact_hash = evidence.get("artifact_content_hash")
     if not (isinstance(artifact_hash, str) and SHA256_RE.match(artifact_hash)):
         errors.append("artifact_content_hash must be a 64-character lowercase hex SHA-256")
+    else:
+        expected_hash = sha256_json({**evidence, "artifact_content_hash": ""})
+        if artifact_hash != expected_hash:
+            errors.append("artifact_content_hash does not match benchmark evidence content")
     metrics = evidence.get("metrics")
     if not isinstance(metrics, dict):
         errors.append("metrics missing or malformed")
@@ -367,7 +372,7 @@ def _benchmark_result_payload(
 
 def _metric_errors(metrics: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    required = {
+    count_required = {
         "case_count",
         "critical_defects_blocked",
         "critical_defect_count",
@@ -376,11 +381,24 @@ def _metric_errors(metrics: dict[str, Any]) -> list[str]:
         "false_blocks",
         "verified_safe_count",
     }
-    for name in sorted(required):
+    scalar_required = {
+        "critical_defect_recall",
+        "negative_control_recall",
+        "false_block_rate",
+        "repeated_run_decision_stability",
+        "deterministic_flake_rate",
+        "execution_duration_seconds",
+    }
+    for name in sorted(count_required):
         if not isinstance(metrics.get(name), int):
             errors.append(f"metrics.{name} missing or not an integer")
+    for name in sorted(scalar_required):
+        if not isinstance(metrics.get(name), (int, float)) or isinstance(metrics.get(name), bool):
+            errors.append(f"metrics.{name} missing or not a number")
     if errors:
         return errors
+    if metrics["execution_duration_seconds"] < 0:
+        errors.append("metrics.execution_duration_seconds must be nonnegative")
     positive_denominators = ("case_count", "critical_defect_count", "negative_control_count", "verified_safe_count")
     for name in positive_denominators:
         if metrics[name] <= 0:

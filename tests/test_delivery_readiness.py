@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from governance_eval import delivery_readiness
 from governance_eval.delivery_readiness import evaluate_readiness
+from governance_eval.hashing import sha256_json
 
 
 class DeliveryReadinessTests(unittest.TestCase):
@@ -218,12 +219,36 @@ class DeliveryReadinessTests(unittest.TestCase):
         sha = "7b" * 20
         benchmark = _benchmark()
         benchmark["cases"][0]["decision"]["decision"] = "MERGE"
+        benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
         payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
 
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("cases[0].decision expected" in error for error in result["benchmark_evidence_errors"]))
+
+    def test_green_workflow_but_missing_stability_metrics_blocks(self) -> None:
+        sha = "7c" * 20
+        benchmark = _benchmark()
+        benchmark["metrics"].pop("deterministic_flake_rate")
+        benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("deterministic_flake_rate missing" in error for error in result["benchmark_evidence_errors"]))
+
+    def test_green_workflow_but_artifact_content_hash_mismatch_blocks(self) -> None:
+        sha = "7d" * 20
+        benchmark = _benchmark()
+        benchmark["artifact_content_hash"] = "1" * 64
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("artifact_content_hash does not match" in error for error in result["benchmark_evidence_errors"]))
 
     def test_green_workflow_but_missing_phase1_decision_blocks(self) -> None:
         sha = "8" * 40
@@ -443,17 +468,23 @@ def _blocking_review(head_sha: str, submitted_at: str, body: str) -> dict:
 
 
 def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
-    return {
+    benchmark = {
         "phase1_decision": phase1_decision,
         "acceptance_errors": [],
-        "artifact_content_hash": "1" * 64,
+        "artifact_content_hash": "",
         "metrics": {
             "case_count": 3,
+            "critical_defect_recall": 1.0,
             "critical_defects_blocked": 1,
             "critical_defect_count": 1,
+            "negative_control_recall": 1.0,
             "negative_controls_blocked": 1,
             "negative_control_count": 1,
+            "false_block_rate": 0.0,
             "false_blocks": 0,
+            "repeated_run_decision_stability": 1.0,
+            "deterministic_flake_rate": 0.0,
+            "execution_duration_seconds": 0.1,
             "verified_safe_count": 1,
         },
         "cases": [
@@ -483,6 +514,8 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
             },
         ],
     }
+    benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
+    return benchmark
 
 
 def _quorum(base_sha: str, head_sha: str) -> dict:
