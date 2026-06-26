@@ -31,6 +31,7 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
     unresolved = payload.get("unresolvedThreads") or []
     unresolved_blocking = [thread for thread in unresolved if _thread_is_p0_p2(thread)]
     workflow_contexts = payload.get("workflowContexts") or []
+    has_workflow_evidence = bool(workflow_contexts)
     failed_contexts = [
         item
         for item in workflow_contexts
@@ -42,7 +43,14 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         and not payload.get("isDraft", False)
         and merge_state not in {"BLOCKED", "DIRTY", "DRAFT", "UNKNOWN"}
     )
-    ready = bool(latest_head_sha and final_reviews and not unresolved_blocking and not failed_contexts and merge_eligible)
+    ready = bool(
+        latest_head_sha
+        and final_reviews
+        and not unresolved_blocking
+        and has_workflow_evidence
+        and not failed_contexts
+        and merge_eligible
+    )
     return {
         "ready": ready,
         "latest_head_sha": latest_head_sha,
@@ -53,6 +61,7 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         "unresolved_p1_count": _count_severity(unresolved_blocking, "P1"),
         "unresolved_p2_count": _count_severity(unresolved_blocking, "P2"),
         "failed_workflow_contexts": failed_contexts,
+        "missing_workflow_evidence": not has_workflow_evidence,
         "merge_eligible": merge_eligible,
         "merge_state_status": merge_state,
     }

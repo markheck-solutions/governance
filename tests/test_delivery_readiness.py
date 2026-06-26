@@ -109,6 +109,31 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertIsNone(result["final_review_timestamp"])
 
+    def test_missing_workflow_evidence_blocks_readiness(self) -> None:
+        payload = {
+            "state": "OPEN",
+            "isDraft": False,
+            "mergeStateStatus": "CLEAN",
+            "headRefOid": "e" * 40,
+            "latestHeadCommittedAt": "2026-06-25T10:00:00Z",
+            "reviews": [
+                {
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-06-25T10:05:00Z",
+                    "commitOid": "e" * 40,
+                    "author": "chatgpt-codex-connector",
+                    "body": "",
+                }
+            ],
+            "unresolvedThreads": [],
+            "workflowContexts": [],
+        }
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["missing_workflow_evidence"])
+
     def test_live_thread_loader_paginates_review_threads(self) -> None:
         pages = [
             {
