@@ -6,6 +6,15 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      review-quorum-json:
+        description: Optional fallback review quorum JSON to upload with this run.
+        required: false
+        type: string
+      trusted-reviewer-agents:
+        description: Comma-separated trusted fallback reviewer agent IDs.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -18,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -60,6 +71,49 @@ jobs:
           name: governance-benchmark-json
           path: artifacts/phase1/*.json
           retention-days: 90
+      - name: Write fallback review quorum input
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.review-quorum-json != ''
+        shell: bash
+        env:
+          REVIEW_QUORUM_JSON: ${{ inputs.review-quorum-json }}
+        run: |
+          mkdir -p artifacts/review-quorum
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          Path("artifacts/review-quorum/review-quorum.json").write_text(
+              os.environ["REVIEW_QUORUM_JSON"],
+              encoding="utf-8",
+          )
+          PY
+      - name: Validate fallback review quorum input
+        id: validate_quorum
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.review-quorum-json != ''
+        shell: bash
+        env:
+          TRUSTED_REVIEWER_AGENTS: ${{ inputs.trusted-reviewer-agents }}
+        run: |
+          args=()
+          IFS=',' read -ra agents <<< "$TRUSTED_REVIEWER_AGENTS"
+          for agent in "${agents[@]}"; do
+            agent="$(echo "$agent" | xargs)"
+            if [ -n "$agent" ]; then
+              args+=(--trusted-reviewer-agent "$agent")
+            fi
+          done
+          python -m governance_eval validate-review-quorum \
+            --path artifacts/review-quorum/review-quorum.json \
+            --head-sha "$GITHUB_SHA" \
+            "${args[@]}"
+      - name: Upload fallback review quorum JSON
+        id: upload_quorum
+        if: success() && steps.validate_quorum.conclusion == 'success' && hashFiles('artifacts/review-quorum/*.json') != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: governance-review-quorum-json
+          path: artifacts/review-quorum/*.json
+          retention-days: 90
       - name: Write job summary
         if: always()
         shell: bash
@@ -76,6 +130,9 @@ jobs:
             echo "| Negative controls blocked | \`${{ steps.benchmark.outputs.negative }}\` |"
             echo "| False blocks | \`${{ steps.benchmark.outputs.false_blocks }}\` |"
             echo "| Artifact name | \`governance-benchmark-json\` |"
+            echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
             echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
             echo "| Artifact content hash | \`${{ steps.benchmark.outputs.content_hash }}\` |"
+            echo "| Review quorum artifact | \`${{ steps.upload_quorum.outputs.artifact-id || 'not uploaded' }}\` |"
+            echo "| Review quorum digest | \`${{ steps.upload_quorum.outputs.artifact-digest || 'not uploaded' }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

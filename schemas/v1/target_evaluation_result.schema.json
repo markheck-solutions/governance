@@ -3,57 +3,107 @@
   "required": [
     "schema_version",
     "generated_at",
+    "governance_repository_url",
     "governance_evaluator_git_sha",
     "governance_target_pack_hash",
     "schema_hashes",
     "dependency_lock_hash",
     "target_repository_url",
     "target_pack_id",
+    "target_pr_number",
     "target_base_sha",
     "target_head_sha",
     "target_merge_sha",
+    "revision_mode",
+    "revision_validation",
     "operating_system",
+    "runner_os",
     "python_version",
+    "review_gate",
+    "github_review_state",
     "enforcement_mode",
     "real_target_shadow_decision",
     "acceptance_errors",
+    "business_ambiguities",
+    "applicable_behavior_case_count",
     "case_counts",
     "setup_results",
     "behavior_results",
     "structural_metrics_before",
     "structural_metrics_after",
     "structural_delta",
+    "structural_measurements",
     "commands",
+    "github_artifact_id",
+    "github_artifact_digest",
     "deterministic_evidence_hash",
     "artifact_content_hash"
   ],
   "properties": {
     "schema_version": { "type": "string" },
     "generated_at": { "type": "string" },
+    "governance_repository_url": { "type": "string" },
     "governance_evaluator_git_sha": { "type": "string" },
     "governance_target_pack_hash": { "type": "string" },
     "schema_hashes": { "type": "object" },
     "dependency_lock_hash": { "type": "string" },
     "target_repository_url": { "type": "string" },
     "target_pack_id": { "type": "string" },
+    "target_pr_number": { "type": ["integer", "null"] },
     "target_base_sha": { "type": "string" },
     "target_head_sha": { "type": "string" },
     "target_merge_sha": { "type": ["string", "null"] },
+    "revision_mode": {
+      "type": "string",
+      "enum": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"]
+    },
+    "revision_validation": {
+      "type": "object",
+      "required": ["status", "mode", "base_commit_exists", "head_commit_exists", "candidate_pull_request_validation"],
+      "properties": {
+        "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+        "mode": { "type": "string" },
+        "base_commit_exists": { "type": "boolean" },
+        "head_commit_exists": { "type": "boolean" },
+        "candidate_pull_request_validation": { "type": "object", "required": ["status"] }
+      }
+    },
     "operating_system": { "type": "string" },
+    "runner_os": { "type": "string" },
     "python_version": { "type": "string" },
+    "review_gate": {
+      "type": "string",
+      "enum": ["GITHUB_CODEX_FINAL_REVIEW", "FALLBACK_CLEAN_ROOM_QUORUM", "NOT_APPLICABLE"]
+    },
+    "github_review_state": {
+      "type": "string",
+      "enum": ["CLEAN", "STALE", "UNAVAILABLE", "BLOCKING_FINDINGS_PRESENT", "NOT_APPLICABLE"]
+    },
     "enforcement_mode": { "type": "string", "enum": ["NON_BLOCKING"] },
     "real_target_shadow_decision": {
       "type": "string",
       "enum": ["SHADOW_MERGE", "SHADOW_BLOCK_TECHNICAL", "SHADOW_ASK_BUSINESS"]
     },
     "acceptance_errors": { "type": "array", "items": { "type": "string" } },
+    "business_ambiguities": { "type": "array", "items": { "type": "string" } },
+    "applicable_behavior_case_count": { "type": "integer", "minimum": 0 },
     "case_counts": {
       "type": "object",
-      "required": ["behavior_case_count", "behavior_cases_passed", "behavior_cases_failed"],
+      "required": [
+        "behavior_case_count",
+        "required_behavior_case_count",
+        "advisory_behavior_case_count",
+        "behavior_cases_passed",
+        "behavior_cases_failed",
+        "behavior_cases_business_ambiguous"
+      ],
       "properties": {
         "behavior_case_count": { "type": "integer", "minimum": 0 },
+        "required_behavior_case_count": { "type": "integer", "minimum": 0 },
+        "advisory_behavior_case_count": { "type": "integer", "minimum": 0 },
         "behavior_cases_passed": { "type": "integer", "minimum": 0 },
-        "behavior_cases_failed": { "type": "integer", "minimum": 0 }
+        "behavior_cases_failed": { "type": "integer", "minimum": 0 },
+        "behavior_cases_business_ambiguous": { "type": "integer", "minimum": 0 }
       }
     },
     "setup_results": { "type": "object" },
@@ -64,6 +114,8 @@
         "required": [
           "case_id",
           "status",
+          "required_behavior_evidence",
+          "behavior_comparison_policy",
           "provenance_classification",
           "target_repository_url",
           "base_sha",
@@ -80,7 +132,12 @@
         ],
         "properties": {
           "case_id": { "type": "string" },
-          "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+          "status": { "type": "string", "enum": ["PASS", "FAIL", "BUSINESS_AMBIGUITY"] },
+          "required_behavior_evidence": { "type": "boolean" },
+          "behavior_comparison_policy": {
+            "type": "string",
+            "enum": ["PINNED_EXPECTED", "PRESERVE_BASE_BEHAVIOR", "BUSINESS_REVIEW_ON_CHANGE"]
+          },
           "provenance_classification": {
             "type": "string",
             "enum": ["EXECUTES_PINNED_TARGET_CODE", "EXECUTES_EXTRACTED_REPRODUCER", "FIXTURE_ONLY"]
@@ -296,8 +353,33 @@
     },
     "structural_metrics_before": { "type": "object" },
     "structural_metrics_after": { "type": "object" },
-    "structural_delta": { "type": "object" },
+    "structural_delta": { "type": "object", "minProperties": 1 },
+    "structural_measurements": {
+      "type": "object",
+      "required": [
+        "unknown_required",
+        "unknown_required_count",
+        "unknown_advisory",
+        "unknown_advisory_count",
+        "unsupported_required",
+        "unsupported_required_count",
+        "unsupported_advisory",
+        "unsupported_advisory_count"
+      ],
+      "properties": {
+        "unknown_required": { "type": "array" },
+        "unknown_required_count": { "type": "integer", "minimum": 0 },
+        "unknown_advisory": { "type": "array" },
+        "unknown_advisory_count": { "type": "integer", "minimum": 0 },
+        "unsupported_required": { "type": "array" },
+        "unsupported_required_count": { "type": "integer", "minimum": 0 },
+        "unsupported_advisory": { "type": "array" },
+        "unsupported_advisory_count": { "type": "integer", "minimum": 0 }
+      }
+    },
     "commands": { "type": "array", "items": { "type": "string" } },
+    "github_artifact_id": { "type": ["string", "null"] },
+    "github_artifact_digest": { "type": ["string", "null"] },
     "deterministic_evidence_hash": { "type": "string", "minLength": 64 },
     "artifact_content_hash": { "type": "string", "minLength": 64 }
   }

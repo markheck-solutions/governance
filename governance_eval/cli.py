@@ -11,9 +11,12 @@ from governance_eval.benchmark import run_benchmark
 from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
+from governance_eval.delivery_readiness import main as delivery_readiness_main
+from governance_eval.delivery_readiness import validate_review_quorum_document
 from governance_eval.lock import write_spaghetti_lock
 from governance_eval.paths import repo_root
 from governance_eval.target_eval import evaluate_target
+from governance_eval.target_pack import validate_target_request
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,7 +46,55 @@ def main(argv: list[str] | None = None) -> int:
     target_parser.add_argument("--head-sha", required=True)
     target_parser.add_argument("--merge-sha", default=None)
     target_parser.add_argument("--repository-url", default=None)
+    target_parser.add_argument(
+        "--revision-mode",
+        choices=["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
+        default=None,
+    )
+    target_parser.add_argument("--target-pr-number", type=int, default=None)
+    target_parser.add_argument("--governance-owned-pack", action="store_true")
+    target_parser.add_argument(
+        "--review-gate",
+        choices=["GITHUB_CODEX_FINAL_REVIEW", "FALLBACK_CLEAN_ROOM_QUORUM", "NOT_APPLICABLE"],
+        default=None,
+    )
+    target_parser.add_argument(
+        "--github-review-state",
+        choices=["CLEAN", "STALE", "UNAVAILABLE", "BLOCKING_FINDINGS_PRESENT", "NOT_APPLICABLE"],
+        default=None,
+    )
     target_parser.add_argument("--artifacts-dir", type=Path, default=Path("artifacts/target"))
+
+    validate_target_parser = subparsers.add_parser("validate-target-request", help="validate target pack and revision inputs")
+    validate_target_parser.add_argument("--pack", type=Path, required=True)
+    validate_target_parser.add_argument("--repository-url", required=True)
+    validate_target_parser.add_argument("--base-sha", required=True)
+    validate_target_parser.add_argument("--head-sha", required=True)
+    validate_target_parser.add_argument("--merge-sha", default=None)
+    validate_target_parser.add_argument(
+        "--revision-mode",
+        choices=["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
+        required=True,
+    )
+
+    delivery_parser = subparsers.add_parser("delivery-readiness", help="verify PR review/workflow readiness before merge")
+    delivery_parser.add_argument("--repo", required=True)
+    delivery_parser.add_argument("--pr", required=True, type=int)
+    delivery_parser.add_argument("--payload", default=None)
+    delivery_parser.add_argument("--benchmark-artifact", default=None)
+    delivery_parser.add_argument("--benchmark-artifact-digest", default=None)
+    delivery_parser.add_argument("--benchmark-run-id", default=None)
+    delivery_parser.add_argument("--benchmark-artifact-id", default=None)
+    delivery_parser.add_argument("--benchmark-artifact-name", default="governance-benchmark-json")
+    delivery_parser.add_argument("--require-github-artifact-digest", action="store_true")
+    delivery_parser.add_argument("--fallback-quorum", default=None)
+    delivery_parser.add_argument("--trusted-reviewer-agent", action="append", default=[])
+
+    quorum_parser = subparsers.add_parser("validate-review-quorum", help="validate fallback review quorum JSON")
+    quorum_parser.add_argument("--path", type=Path, required=True)
+    quorum_parser.add_argument("--head-sha", required=True)
+    quorum_parser.add_argument("--base-sha", default="")
+    quorum_parser.add_argument("--trusted-reviewer-agent", action="append", default=[])
 
     args = parser.parse_args(argv)
     root = repo_root(getattr(args, "root", None))
@@ -55,11 +106,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run-case":
         return _run_case(args.case_id, root)
     if args.command == "benchmark":
-        result = run_benchmark(root=root, repeat=args.repeat, artifacts_dir=root / args.artifacts_dir)
+        artifacts_dir = root / args.artifacts_dir
+        result = run_benchmark(
+            root=root,
+            repeat=args.repeat,
+            artifacts_dir=artifacts_dir,
+            exact_commands=[_artifact_command("benchmark", args.repeat, args.artifacts_dir)],
+        )
         print(json.dumps(_summary(result), indent=2, sort_keys=True))
         return 0 if result["phase1_decision"] == BENCHMARK_PASS else 1
     if args.command == "verify":
-        return _verify(root, args.repeat, root / args.artifacts_dir)
+        return _verify(root, args.repeat, root / args.artifacts_dir, args.artifacts_dir)
     if args.command == "evaluate-target":
         result = evaluate_target(
             root / args.pack if not args.pack.is_absolute() else args.pack,
@@ -68,9 +125,53 @@ def main(argv: list[str] | None = None) -> int:
             root / args.artifacts_dir if not args.artifacts_dir.is_absolute() else args.artifacts_dir,
             args.merge_sha or None,
             args.repository_url,
+            args.revision_mode,
+            args.target_pr_number,
+            args.governance_owned_pack,
+            args.review_gate,
+            args.github_review_state,
         )
         print(json.dumps(_target_summary(result), indent=2, sort_keys=True))
         return 0
+    if args.command == "validate-target-request":
+        pack = validate_target_request(
+            root / args.pack if not args.pack.is_absolute() else args.pack,
+            args.repository_url,
+            args.base_sha,
+            args.head_sha,
+            args.merge_sha or None,
+            args.revision_mode,
+            root,
+        )
+        print(json.dumps({"status": "PASS", "target_pack_id": pack["id"]}, indent=2, sort_keys=True))
+        return 0
+    if args.command == "delivery-readiness":
+        delivery_args = ["--repo", args.repo, "--pr", str(args.pr)]
+        if args.payload:
+            delivery_args.extend(["--payload", args.payload])
+        if args.benchmark_artifact:
+            delivery_args.extend(["--benchmark-artifact", args.benchmark_artifact])
+        if args.benchmark_artifact_digest:
+            delivery_args.extend(["--benchmark-artifact-digest", args.benchmark_artifact_digest])
+        if args.benchmark_run_id:
+            delivery_args.extend(["--benchmark-run-id", args.benchmark_run_id])
+        if args.benchmark_artifact_id:
+            delivery_args.extend(["--benchmark-artifact-id", args.benchmark_artifact_id])
+        if args.benchmark_artifact_name:
+            delivery_args.extend(["--benchmark-artifact-name", args.benchmark_artifact_name])
+        if args.require_github_artifact_digest:
+            delivery_args.append("--require-github-artifact-digest")
+        if args.fallback_quorum:
+            delivery_args.extend(["--fallback-quorum", args.fallback_quorum])
+        for agent_id in args.trusted_reviewer_agent:
+            delivery_args.extend(["--trusted-reviewer-agent", agent_id])
+        return delivery_readiness_main(delivery_args)
+    if args.command == "validate-review-quorum":
+        path = root / args.path if not args.path.is_absolute() else args.path
+        quorum = json.loads(path.read_text(encoding="utf-8"))
+        errors = validate_review_quorum_document(quorum, args.head_sha, args.base_sha, args.trusted_reviewer_agent)
+        print(json.dumps({"valid": not errors, "errors": errors}, indent=2, sort_keys=True))
+        return 0 if not errors else 1
     raise AssertionError(args.command)
 
 
@@ -86,14 +187,27 @@ def _run_case(case_id: str, root: Path) -> int:
     return 0 if decision.decision.value == case["expected_decision"] else 1
 
 
-def _verify(root: Path, repeat: int, artifacts_dir: Path) -> int:
+def _verify(root: Path, repeat: int, artifacts_dir: Path, command_artifacts_dir: Path) -> int:
     test_command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
     tests = subprocess.run(test_command, cwd=root)
     if tests.returncode != 0:
         return tests.returncode
-    result = run_benchmark(root=root, repeat=repeat, artifacts_dir=artifacts_dir)
+    result = run_benchmark(
+        root=root,
+        repeat=repeat,
+        artifacts_dir=artifacts_dir,
+        exact_commands=[_artifact_command("verify", repeat, command_artifacts_dir)],
+    )
     print(json.dumps(_summary(result), indent=2, sort_keys=True))
     return 0 if result["phase1_decision"] == BENCHMARK_PASS else 1
+
+
+def _artifact_command(command: str, repeat: int, artifacts_dir: Path) -> str:
+    parts = ["python -m governance_eval", command]
+    if repeat != 3:
+        parts.extend(["--repeat", str(repeat)])
+    parts.extend(["--artifacts-dir", artifacts_dir.as_posix()])
+    return " ".join(parts)
 
 
 def _summary(result: dict) -> dict:
@@ -111,6 +225,12 @@ def _target_summary(result: dict) -> dict:
         "enforcement_mode": result["enforcement_mode"],
         "acceptance_errors": result["acceptance_errors"],
         "case_counts": result["case_counts"],
+        "revision_mode": result["revision_mode"],
+        "review_gate": result["review_gate"],
+        "github_review_state": result["github_review_state"],
+        "target_pr_number": result["target_pr_number"],
+        "unknown_required_measurements": result["structural_measurements"]["unknown_required_count"],
+        "unknown_advisory_measurements": result["structural_measurements"]["unknown_advisory_count"],
         "artifact_content_hash": result["artifact_content_hash"],
         "artifact_path": result.get("artifact_path"),
     }

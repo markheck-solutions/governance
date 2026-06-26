@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
+import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,13 +18,21 @@ from governance_eval.models import Decision, Label
 from governance_eval.paths import repo_root
 from governance_eval.schemas import validate_named
 from governance_eval.schema_validator import SchemaValidationError
+from governance_eval.target_pack import dependency_lock_hash, schema_hashes, target_pack_hash
 
 
 BENCHMARK_PASS = "BENCHMARK_PASS"
 BENCHMARK_FAIL = "BENCHMARK_FAIL"
+GOVERNANCE_REPOSITORY_URL = "https://github.com/markheck-solutions/governance.git"
+DEFAULT_TARGET_PACK = Path("target_packs/spaghetti/v1/pack.json")
 
 
-def run_benchmark(root: Path | None = None, repeat: int = 3, artifacts_dir: Path | None = None) -> dict[str, Any]:
+def run_benchmark(
+    root: Path | None = None,
+    repeat: int = 3,
+    artifacts_dir: Path | None = None,
+    exact_commands: list[str] | None = None,
+) -> dict[str, Any]:
     resolved_root = repo_root(root)
     started = time.perf_counter()
     run_id = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -52,19 +63,41 @@ def run_benchmark(root: Path | None = None, repeat: int = 3, artifacts_dir: Path
     metrics["execution_duration_seconds"] = round(duration, 6)
     acceptance_errors = _acceptance_errors(case_results, metrics, lock_problems)
     phase1_decision = BENCHMARK_PASS if not acceptance_errors else BENCHMARK_FAIL
+    target_lock = lock.to_json() if lock else {"problems": lock_problems}
     output = {
         "schema_version": "1.0",
         "run_id": run_id,
         "generated_at": run_id,
+        "governance_repository_url": GOVERNANCE_REPOSITORY_URL,
+        "governance_evaluator_git_sha": _git_sha(resolved_root),
+        "governance_target_pack_hash": target_pack_hash(resolved_root / DEFAULT_TARGET_PACK),
+        "schema_hashes": schema_hashes(resolved_root),
+        "dependency_lock_hash": dependency_lock_hash(resolved_root),
+        "target_repository_url": target_lock.get("repository_url"),
+        "target_pr_number": target_lock.get("pull_request"),
+        "target_base_sha": target_lock.get("base_sha"),
+        "target_head_sha": target_lock.get("head_sha"),
+        "target_merge_sha": target_lock.get("merge_commit_sha"),
+        "revision_mode": "HISTORICAL_FIXED",
+        "exact_commands": exact_commands or _exact_commands("benchmark", repeat, artifacts_dir),
+        "operating_system": platform.platform(),
+        "runner_os": os.environ.get("RUNNER_OS", platform.system()),
+        "python_version": platform.python_version(),
+        "review_gate": "NOT_APPLICABLE",
+        "github_review_state": "NOT_APPLICABLE",
+        "github_artifact_id": None,
+        "github_artifact_digest": None,
+        "deterministic_evidence_hash": "",
         "duration_seconds": round(duration, 6),
         "repeat_count": repeat,
         "phase1_decision": phase1_decision,
         "acceptance_errors": acceptance_errors,
-        "target_lock": lock.to_json() if lock else {"problems": lock_problems},
+        "target_lock": target_lock,
         "metrics": metrics,
         "cases": case_results,
         "artifact_content_hash": "",
     }
+    output["deterministic_evidence_hash"] = sha256_json(_stable_benchmark_payload(output))
     output["artifact_content_hash"] = sha256_json({**output, "artifact_content_hash": ""})
     validate_benchmark_result(output, resolved_root)
     if artifacts_dir is not None:
@@ -88,6 +121,25 @@ def validate_benchmark_result(result: dict[str, Any], root: Path | None = None) 
         value = target_lock[key]
         if not (isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)):
             raise SchemaValidationError(f"target_lock.{key}: expected full SHA")
+    top_level_shas = {
+        "governance_evaluator_git_sha": result["governance_evaluator_git_sha"],
+        "target_base_sha": result["target_base_sha"],
+        "target_head_sha": result["target_head_sha"],
+        "target_merge_sha": result["target_merge_sha"],
+    }
+    for key, value in top_level_shas.items():
+        if not (isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)):
+            raise SchemaValidationError(f"{key}: expected full SHA")
+    if result["target_repository_url"] != target_lock["repository_url"]:
+        raise SchemaValidationError("target_repository_url must match target_lock.repository_url")
+    if result["target_pr_number"] != target_lock["pull_request"]:
+        raise SchemaValidationError("target_pr_number must match target_lock.pull_request")
+    if result["target_base_sha"] != target_lock["base_sha"]:
+        raise SchemaValidationError("target_base_sha must match target_lock.base_sha")
+    if result["target_head_sha"] != target_lock["head_sha"]:
+        raise SchemaValidationError("target_head_sha must match target_lock.head_sha")
+    if result["target_merge_sha"] != target_lock["merge_commit_sha"]:
+        raise SchemaValidationError("target_merge_sha must match target_lock.merge_commit_sha")
     for item in result["cases"]:
         validate_named("final_decision", item["decision"], resolved_root)
         for evidence in item["evidence"]:
@@ -196,3 +248,32 @@ def _acceptance_errors(case_results: list[dict[str, Any]], metrics: dict[str, An
         if metrics[name] != expected:
             errors.append(f"{name}: expected {expected}, got {metrics[name]}")
     return errors
+
+
+def _exact_commands(command: str, repeat: int, artifacts_dir: Path | None) -> list[str]:
+    if artifacts_dir is None:
+        return [f"python -m governance_eval {command} --repeat {repeat}"]
+    return [f"python -m governance_eval {command} --repeat {repeat} --artifacts-dir {artifacts_dir.as_posix()}"]
+
+
+def _stable_benchmark_payload(result: dict[str, Any]) -> dict[str, Any]:
+    metrics = dict(result.get("metrics", {}))
+    metrics["execution_duration_seconds"] = 0
+    return {
+        **result,
+        "generated_at": "",
+        "run_id": "",
+        "duration_seconds": 0,
+        "metrics": metrics,
+        "github_artifact_id": None,
+        "github_artifact_digest": None,
+        "deterministic_evidence_hash": "",
+        "artifact_content_hash": "",
+    }
+
+
+def _git_sha(root: Path) -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    except Exception:
+        return "UNKNOWN"
