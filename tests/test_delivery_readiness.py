@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from governance_eval.cases import load_cases
 from governance_eval import delivery_readiness
+from governance_eval import cli as governance_cli
 from governance_eval.delivery_readiness import evaluate_readiness
 from governance_eval.hashing import sha256_json
 
@@ -570,6 +571,36 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertEqual(threads, [{"path": "b.py", "line": 2, "body": "severity: P2 still open"}])
         self.assertEqual(len(calls), 2)
         self.assertTrue(any("cursor=cursor-1" in arg for arg in calls[1]))
+
+    def test_cli_forwards_benchmark_artifact_binding_args(self) -> None:
+        captured: list[str] = []
+
+        def fake_delivery_main(args: list[str]) -> int:
+            captured.extend(args)
+            return 0
+
+        with patch.object(governance_cli, "delivery_readiness_main", side_effect=fake_delivery_main):
+            code = governance_cli.main(
+                [
+                    "delivery-readiness",
+                    "--repo",
+                    "owner/repo",
+                    "--pr",
+                    "1",
+                    "--benchmark-run-id",
+                    "123",
+                    "--benchmark-artifact-id",
+                    "456",
+                    "--benchmark-artifact-name",
+                    "governance-benchmark-json",
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("--benchmark-run-id", captured)
+        self.assertIn("123", captured)
+        self.assertIn("--benchmark-artifact-id", captured)
+        self.assertIn("456", captured)
 
 
 def _payload(

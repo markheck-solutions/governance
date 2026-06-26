@@ -83,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
     delivery_parser.add_argument("--payload", default=None)
     delivery_parser.add_argument("--benchmark-artifact", default=None)
     delivery_parser.add_argument("--benchmark-artifact-digest", default=None)
+    delivery_parser.add_argument("--benchmark-run-id", default=None)
+    delivery_parser.add_argument("--benchmark-artifact-id", default=None)
+    delivery_parser.add_argument("--benchmark-artifact-name", default="governance-benchmark-json")
     delivery_parser.add_argument("--require-github-artifact-digest", action="store_true")
     delivery_parser.add_argument("--fallback-quorum", default=None)
 
@@ -142,6 +145,12 @@ def main(argv: list[str] | None = None) -> int:
             delivery_args.extend(["--benchmark-artifact", args.benchmark_artifact])
         if args.benchmark_artifact_digest:
             delivery_args.extend(["--benchmark-artifact-digest", args.benchmark_artifact_digest])
+        if args.benchmark_run_id:
+            delivery_args.extend(["--benchmark-run-id", args.benchmark_run_id])
+        if args.benchmark_artifact_id:
+            delivery_args.extend(["--benchmark-artifact-id", args.benchmark_artifact_id])
+        if args.benchmark_artifact_name:
+            delivery_args.extend(["--benchmark-artifact-name", args.benchmark_artifact_name])
         if args.require_github_artifact_digest:
             delivery_args.append("--require-github-artifact-digest")
         if args.fallback_quorum:
