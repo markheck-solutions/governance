@@ -255,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _workflow_result(workflow_contexts: list[dict[str, Any]]) -> dict[str, Any]:
     governance_contexts = [item for item in workflow_contexts if _is_governance_context(item)]
-    successful_governance_contexts = [item for item in governance_contexts if _is_success_context(item)]
+    successful_governance_contexts = [item for item in governance_contexts if _is_executed_success_context(item)]
     failed_contexts = [item for item in workflow_contexts if not _is_success_context(item)]
     return {
         "successful_governance_contexts": successful_governance_contexts,
@@ -392,6 +392,22 @@ def _metric_errors(metrics: dict[str, Any]) -> list[str]:
     for numerator, denominator in bounded_pairs:
         if metrics[numerator] < 0 or metrics[numerator] > metrics[denominator]:
             errors.append(f"metrics.{numerator} must be between 0 and metrics.{denominator}")
+    if metrics["critical_defects_blocked"] != metrics["critical_defect_count"]:
+        errors.append("metrics.critical_defects_blocked must equal metrics.critical_defect_count")
+    if metrics["negative_controls_blocked"] != metrics["negative_control_count"]:
+        errors.append("metrics.negative_controls_blocked must equal metrics.negative_control_count")
+    if metrics["false_blocks"] != 0:
+        errors.append("metrics.false_blocks must be zero")
+    scalar_expectations = {
+        "critical_defect_recall": 1.0,
+        "negative_control_recall": 1.0,
+        "false_block_rate": 0.0,
+        "repeated_run_decision_stability": 1.0,
+        "deterministic_flake_rate": 0.0,
+    }
+    for name, expected in scalar_expectations.items():
+        if name in metrics and metrics[name] != expected:
+            errors.append(f"metrics.{name} expected {expected}, got {metrics[name]!r}")
     return errors
 
 
@@ -495,6 +511,10 @@ def _thread_is_p0_p2(thread: dict[str, Any]) -> bool:
 
 def _is_success_context(item: dict[str, Any]) -> bool:
     return item.get("conclusion") in SUCCESS_CONCLUSIONS or item.get("state") in SUCCESS_STATES
+
+
+def _is_executed_success_context(item: dict[str, Any]) -> bool:
+    return item.get("conclusion") == "SUCCESS" or item.get("state") == "SUCCESS"
 
 
 def _is_governance_context(item: dict[str, Any]) -> bool:

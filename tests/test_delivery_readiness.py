@@ -201,6 +201,19 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertEqual(result["benchmark_phase1_decision"], "BENCHMARK_FAIL")
 
+    def test_green_workflow_but_inconsistent_benchmark_metrics_blocks(self) -> None:
+        sha = "7a" * 20
+        benchmark = _benchmark()
+        benchmark["metrics"]["critical_defects_blocked"] = 0
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(
+            any("critical_defects_blocked must equal" in error for error in result["benchmark_evidence_errors"])
+        )
+
     def test_green_workflow_but_missing_phase1_decision_blocks(self) -> None:
         sha = "8" * 40
         benchmark = _benchmark()
@@ -241,6 +254,21 @@ class DeliveryReadinessTests(unittest.TestCase):
 
         self.assertTrue(result["ready"])
         self.assertEqual(result["benchmark_artifact_digest"], f"sha256:{'a' * 64}")
+
+    def test_skipped_governance_context_is_missing_workflow_evidence(self) -> None:
+        sha = "a4" * 20
+        payload = _payload(
+            sha,
+            reviews=[_clean_review(sha)],
+            workflow_contexts=[
+                {"name": "Phase 1 shadow run", "workflowName": "Governance Shadow Benchmark", "conclusion": "SKIPPED"}
+            ],
+        )
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["missing_workflow_evidence"])
 
     def test_fallback_quorum_is_accepted_when_github_review_is_stale_and_clean(self) -> None:
         sha = "b1" * 20
