@@ -511,6 +511,7 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
         in_jobs = False
         current_job = ""
         lines = text.splitlines()
+        disabled_jobs |= _workflow_disabled_jobs(file.name, lines)
         for index, line in enumerate(lines):
             if re.match(r"^jobs:\s*$", line):
                 in_jobs = True
@@ -521,8 +522,6 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
                     current_job = job.group(1)
                     jobs.add(f"{file.name}:{current_job}")
                     continue
-                if current_job and _workflow_job_disabled_line(line):
-                    disabled_jobs.add(f"{file.name}:{current_job}")
             step = re.search(r"name:\s*['\"]?([^'\"]+?)['\"]?\s*$", line)
             if step:
                 steps.add(f"{file.name}:{current_job}:{step.group(1).strip()}")
@@ -551,12 +550,25 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
     }
 
 
-def _workflow_job_disabled_line(line: str) -> bool:
-    if line.lstrip().startswith("#"):
-        return False
-    if not re.match(r"^ {4}if:\s*", line):
-        return False
-    return _workflow_if_false_expression(line.split(":", 1)[1])
+def _workflow_disabled_jobs(file_name: str, lines: list[str]) -> set[str]:
+    disabled: set[str] = set()
+    current_job = ""
+    current_job_indent = 0
+    for line in lines:
+        job = re.match(r"^(  )([A-Za-z0-9_-]+):\s*$", line)
+        if job:
+            current_job = job.group(2)
+            current_job_indent = len(job.group(1))
+            continue
+        if not current_job:
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if line.strip() and indent <= current_job_indent:
+            current_job = ""
+            continue
+        if re.match(r"^ {4}if:\s*", line) and _workflow_if_false_expression(line.split(":", 1)[1]):
+            disabled.add(f"{file_name}:{current_job}")
+    return disabled
 
 
 def _workflow_run_command(lines: list[str], index: int) -> str | None:
@@ -585,12 +597,14 @@ def _workflow_block_scalar(lines: list[str], index: int) -> str:
         indent = len(line) - len(line.lstrip(" "))
         if indent <= base_indent:
             break
-        block.append(line.strip())
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        block.append(stripped)
     return "\n".join(block).strip()
 
 
 def _workflow_step_disabled(lines: list[str], run_index: int) -> bool:
-    run_indent = len(lines[run_index]) - len(lines[run_index].lstrip(" "))
     step_start = run_index
     for index in range(run_index - 1, -1, -1):
         line = lines[index]
@@ -598,12 +612,24 @@ def _workflow_step_disabled(lines: list[str], run_index: int) -> bool:
             continue
         indent = len(line) - len(line.lstrip(" "))
         stripped = line.strip()
-        if indent < run_indent and stripped.startswith("- "):
+        if stripped.startswith("- "):
             step_start = index
             break
-        if indent < run_indent - 2:
+    step_indent = len(lines[step_start]) - len(lines[step_start].lstrip(" "))
+    step_end = len(lines)
+    for index in range(step_start + 1, len(lines)):
+        line = lines[index]
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        stripped = line.strip()
+        if indent <= step_indent and stripped.startswith("- "):
+            step_end = index
             break
-    for line in lines[step_start:run_index]:
+        if indent < step_indent:
+            step_end = index
+            break
+    for line in lines[step_start:step_end]:
         if _workflow_if_false_line(line):
             return True
     return False

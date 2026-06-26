@@ -222,6 +222,26 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         self.assertEqual(result["blocking_pr_comment_count"], 0)
 
+    def test_unresolved_status_comment_containing_blocking_severity_blocks(self) -> None:
+        sha = "5d" * 20
+        payload = _payload(
+            sha,
+            reviews=[_clean_review(sha)],
+            comments=[
+                {
+                    "body": "Unresolved P0-P2 review findings remain",
+                    "createdAt": "2026-06-25T10:06:00Z",
+                    "author": "chatgpt-codex-connector",
+                }
+            ],
+        )
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["github_review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertEqual(result["blocking_pr_comment_count"], 1)
+
     def test_stale_pr_comment_before_latest_head_does_not_block(self) -> None:
         sha = "5c" * 20
         payload = _payload(
@@ -369,11 +389,36 @@ class DeliveryReadinessTests(unittest.TestCase):
         payload = _payload(sha, reviews=[_clean_review(sha)])
         payload["requireGithubArtifactDigest"] = True
         payload["benchmarkArtifactDigest"] = f"sha256:{'a' * 64}"
+        payload["benchmarkArtifactBinding"] = _artifact_binding(sha, f"sha256:{'a' * 64}")
 
         result = evaluate_readiness(payload)
 
         self.assertTrue(result["ready"])
         self.assertEqual(result["benchmark_artifact_digest"], f"sha256:{'a' * 64}")
+
+    def test_github_context_requires_artifact_binding_when_digest_required(self) -> None:
+        sha = "a5" * 20
+        payload = _payload(sha, reviews=[_clean_review(sha)])
+        payload["requireGithubArtifactDigest"] = True
+        payload["benchmarkArtifactDigest"] = f"sha256:{'a' * 64}"
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("artifact binding required" in error for error in result["benchmark_evidence_errors"]))
+
+    def test_github_artifact_binding_must_match_latest_head_and_digest(self) -> None:
+        sha = "a6" * 20
+        payload = _payload(sha, reviews=[_clean_review(sha)])
+        payload["requireGithubArtifactDigest"] = True
+        payload["benchmarkArtifactDigest"] = f"sha256:{'a' * 64}"
+        payload["benchmarkArtifactBinding"] = _artifact_binding("0" * 40, f"sha256:{'b' * 64}")
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("workflow_head_sha does not match" in error for error in result["benchmark_evidence_errors"]))
+        self.assertTrue(any("artifact_digest does not match" in error for error in result["benchmark_evidence_errors"]))
 
     def test_skipped_governance_context_is_missing_workflow_evidence(self) -> None:
         sha = "a4" * 20
@@ -710,6 +755,23 @@ def _quorum(base_sha: str, head_sha: str) -> dict:
                 "final_verdict": "CLEAN",
             },
         ],
+    }
+
+
+def _artifact_binding(head_sha: str, digest: str) -> dict:
+    return {
+        "workflow_run_id": "123",
+        "workflow_head_sha": head_sha,
+        "workflow_status": "completed",
+        "workflow_conclusion": "success",
+        "workflow_event": "pull_request",
+        "workflow_url": "https://github.com/example/repo/actions/runs/123",
+        "artifact_id": "456",
+        "artifact_name": "governance-benchmark-json",
+        "artifact_digest": digest,
+        "artifact_expired": False,
+        "artifact_workflow_run_id": "123",
+        "artifact_workflow_head_sha": head_sha,
     }
 
 

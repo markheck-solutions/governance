@@ -264,6 +264,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--payload", help="read a fixture payload instead of querying GitHub")
     parser.add_argument("--benchmark-artifact", help="benchmark JSON evidence path")
     parser.add_argument("--benchmark-artifact-digest", help="GitHub artifact digest, sha256:<hex>")
+    parser.add_argument("--benchmark-run-id", help="GitHub Actions run ID that produced the benchmark artifact")
+    parser.add_argument("--benchmark-artifact-id", help="GitHub artifact ID for the benchmark artifact")
+    parser.add_argument("--benchmark-artifact-name", default="governance-benchmark-json")
     parser.add_argument("--require-github-artifact-digest", action="store_true")
     parser.add_argument("--fallback-quorum", help="fallback clean-room review quorum JSON path")
     args = parser.parse_args(argv)
@@ -272,6 +275,20 @@ def main(argv: list[str] | None = None) -> int:
         payload["benchmarkEvidence"] = _read_json_or_error(Path(args.benchmark_artifact))
     if args.benchmark_artifact_digest:
         payload["benchmarkArtifactDigest"] = args.benchmark_artifact_digest
+    if args.benchmark_artifact_name:
+        payload["benchmarkArtifactName"] = args.benchmark_artifact_name
+    if args.benchmark_run_id or args.benchmark_artifact_id:
+        if args.benchmark_run_id and args.benchmark_artifact_id:
+            binding = _load_github_artifact_binding(args.repo, args.benchmark_run_id, args.benchmark_artifact_id)
+            payload["benchmarkArtifactBinding"] = binding
+            if not args.benchmark_artifact_digest and isinstance(binding, dict):
+                digest = binding.get("artifact_digest")
+                if isinstance(digest, str):
+                    payload["benchmarkArtifactDigest"] = digest
+        else:
+            payload["benchmarkArtifactBinding"] = {
+                "__load_error": "--benchmark-run-id and --benchmark-artifact-id must be supplied together"
+            }
     if args.require_github_artifact_digest:
         payload["requireGithubArtifactDigest"] = True
     if args.fallback_quorum:
@@ -279,6 +296,41 @@ def main(argv: list[str] | None = None) -> int:
     result = evaluate_readiness(payload)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["ready"] else 1
+
+
+def _load_github_artifact_binding(repo: str, run_id: str, artifact_id: str) -> dict[str, Any]:
+    try:
+        run = _gh_api_json(f"repos/{repo}/actions/runs/{run_id}")
+        artifact = _gh_api_json(f"repos/{repo}/actions/artifacts/{artifact_id}")
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        return {"__load_error": f"{type(exc).__name__}: {exc}"}
+    artifact_run = artifact.get("workflow_run") if isinstance(artifact.get("workflow_run"), dict) else {}
+    return {
+        "workflow_run_id": str(run.get("id") or ""),
+        "workflow_head_sha": run.get("head_sha"),
+        "workflow_status": run.get("status"),
+        "workflow_conclusion": run.get("conclusion"),
+        "workflow_event": run.get("event"),
+        "workflow_url": run.get("html_url"),
+        "artifact_id": str(artifact.get("id") or ""),
+        "artifact_name": artifact.get("name"),
+        "artifact_digest": artifact.get("digest"),
+        "artifact_expired": artifact.get("expired"),
+        "artifact_workflow_run_id": str(artifact_run.get("id") or ""),
+        "artifact_workflow_head_sha": artifact_run.get("head_sha"),
+    }
+
+
+def _gh_api_json(path: str) -> dict[str, Any]:
+    completed = subprocess.run(
+        ["gh", "api", path],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+    )
+    return json.loads(completed.stdout)
 
 
 def _workflow_result(workflow_contexts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -390,6 +442,7 @@ def _benchmark_result(payload: dict[str, Any]) -> dict[str, Any]:
         isinstance(artifact_digest, str) and DIGEST_RE.match(artifact_digest)
     ):
         errors.append("github artifact digest required in sha256:<hex> format")
+    errors.extend(_artifact_binding_errors(payload, artifact_digest))
     return _benchmark_result_payload(not errors, errors, phase1_decision, artifact_hash, artifact_digest)
 
 
@@ -511,6 +564,47 @@ def _case_evidence_errors(evidence: dict[str, Any], metrics: dict[str, Any]) -> 
     for name, value in recomputed.items():
         if metrics.get(name) != value:
             errors.append(f"metrics.{name} expected recomputed value {value}, got {metrics.get(name)!r}")
+    return errors
+
+
+def _artifact_binding_errors(payload: dict[str, Any], artifact_digest: str | None) -> list[str]:
+    binding = payload.get("benchmarkArtifactBinding")
+    if not payload.get("requireGithubArtifactDigest") and not isinstance(binding, dict):
+        return []
+    if not isinstance(binding, dict):
+        return ["github artifact binding required when github artifact digest is required"]
+    if binding.get("__load_error"):
+        return [f"github artifact binding could not be loaded: {binding['__load_error']}"]
+
+    errors: list[str] = []
+    expected_head = payload.get("headRefOid") or ""
+    expected_name = payload.get("benchmarkArtifactName") or "governance-benchmark-json"
+    run_id = str(binding.get("workflow_run_id") or "")
+    artifact_run_id = str(binding.get("artifact_workflow_run_id") or "")
+    artifact_id = str(binding.get("artifact_id") or "")
+    if not run_id:
+        errors.append("github artifact binding workflow_run_id missing")
+    if not artifact_id:
+        errors.append("github artifact binding artifact_id missing")
+    if artifact_run_id and run_id and artifact_run_id != run_id:
+        errors.append("github artifact binding artifact workflow_run_id does not match workflow_run_id")
+    if binding.get("workflow_status") != "completed":
+        errors.append("github artifact binding workflow_status must be completed")
+    if binding.get("workflow_conclusion") != "success":
+        errors.append("github artifact binding workflow_conclusion must be success")
+    if binding.get("workflow_head_sha") != expected_head:
+        errors.append("github artifact binding workflow_head_sha does not match latest head")
+    artifact_head = binding.get("artifact_workflow_head_sha")
+    if artifact_head and artifact_head != expected_head:
+        errors.append("github artifact binding artifact_workflow_head_sha does not match latest head")
+    if binding.get("artifact_name") != expected_name:
+        errors.append(f"github artifact binding artifact_name must be {expected_name}")
+    if binding.get("artifact_expired") is True:
+        errors.append("github artifact binding artifact is expired")
+    if binding.get("artifact_digest") != artifact_digest:
+        errors.append("github artifact binding artifact_digest does not match supplied digest")
+    if not (isinstance(binding.get("artifact_digest"), str) and DIGEST_RE.match(binding["artifact_digest"])):
+        errors.append("github artifact binding artifact_digest must be sha256:<hex>")
     return errors
 
 
@@ -718,7 +812,9 @@ def _body_has_blocking_finding(body: str) -> bool:
     normalized = re.sub(r"\s+", " ", body.lower())
     if "@codex review" in normalized:
         return False
-    if "resolved" in normalized and ("p0/p1/p2" in normalized or "p0-p2" in normalized):
+    if re.search(r"\bunresolved\b", normalized):
+        return True
+    if re.search(r"\bresolved\b", normalized) and ("p0/p1/p2" in normalized or "p0-p2" in normalized):
         return False
     return True
 
