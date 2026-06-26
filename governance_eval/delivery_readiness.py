@@ -120,27 +120,33 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
 
 def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str, Any]]:
     query = """
-    query($owner: String!, $name: String!, $number: Int!) {
+    query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
       repository(owner: $owner, name: $name) {
         pullRequest(number: $number) {
-          reviewThreads(first: 100) {
+          reviewThreads(first: 100, after: $cursor) {
             nodes {
               isResolved
               path
               line
-              comments(first: 20) {
+              comments(first: 100) {
                 nodes {
                   body
                 }
               }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
             }
           }
         }
       }
     }
     """
-    completed = subprocess.run(
-        [
+    threads: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        args = [
             "gh",
             "api",
             "graphql",
@@ -152,21 +158,38 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
             f"number={pr_number}",
             "-f",
             f"query={query}",
-        ],
-        check=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-    )
-    payload = json.loads(completed.stdout)
-    nodes = (
+        ]
+        if cursor:
+            args.extend(["-f", f"cursor={cursor}"])
+        completed = subprocess.run(
+            args,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+        )
+        connection = _review_threads_connection(json.loads(completed.stdout))
+        threads.extend(_unresolved_threads(connection.get("nodes", [])))
+        page_info = connection.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            raise RuntimeError("GitHub reviewThreads pagination did not return endCursor")
+    return threads
+
+
+def _review_threads_connection(payload: dict[str, Any]) -> dict[str, Any]:
+    return (
         payload.get("data", {})
         .get("repository", {})
         .get("pullRequest", {})
         .get("reviewThreads", {})
-        .get("nodes", [])
     )
+
+
+def _unresolved_threads(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     threads: list[dict[str, Any]] = []
     for thread in nodes:
         if thread.get("isResolved"):

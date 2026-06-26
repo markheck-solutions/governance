@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import unittest
+from subprocess import CompletedProcess
+from unittest.mock import patch
 
+from governance_eval import delivery_readiness
 from governance_eval.delivery_readiness import evaluate_readiness
 
 
@@ -104,6 +108,61 @@ class DeliveryReadinessTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertIsNone(result["final_review_timestamp"])
+
+    def test_live_thread_loader_paginates_review_threads(self) -> None:
+        pages = [
+            {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [
+                                    {
+                                        "isResolved": True,
+                                        "path": "a.py",
+                                        "line": 1,
+                                        "comments": {"nodes": [{"body": "severity: P1 fixed"}]},
+                                    }
+                                ],
+                                "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [
+                                    {
+                                        "isResolved": False,
+                                        "path": "b.py",
+                                        "line": 2,
+                                        "comments": {"nodes": [{"body": "severity: P2 still open"}]},
+                                    }
+                                ],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        }
+                    }
+                }
+            },
+        ]
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **_: object) -> CompletedProcess[str]:
+            calls.append(args)
+            page = pages.pop(0)
+            return CompletedProcess(args, 0, stdout=json.dumps(page), stderr="")
+
+        with patch.object(delivery_readiness.subprocess, "run", side_effect=fake_run):
+            threads = delivery_readiness._load_review_threads("owner", "repo", 12)
+
+        self.assertEqual(threads, [{"path": "b.py", "line": 2, "body": "severity: P2 still open"}])
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any("cursor=cursor-1" in arg for arg in calls[1]))
 
 
 if __name__ == "__main__":
