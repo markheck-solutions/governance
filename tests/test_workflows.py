@@ -32,6 +32,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("artifact-digest", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-id", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-id", workflows["governance-shadow.yml"])
+        self.assertIn("review-quorum-json:", workflows["governance-shadow.yml"])
         self.assertIn("governance-review-quorum-json", workflows["governance-shadow.yml"])
         self.assertIn("Review quorum digest", workflows["governance-shadow.yml"])
 

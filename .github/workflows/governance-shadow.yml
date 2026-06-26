@@ -6,6 +6,11 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      review-quorum-json:
+        description: Optional fallback review quorum JSON to upload with this run.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -60,6 +65,22 @@ jobs:
           name: governance-benchmark-json
           path: artifacts/phase1/*.json
           retention-days: 90
+      - name: Write fallback review quorum input
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.review-quorum-json != ''
+        shell: bash
+        env:
+          REVIEW_QUORUM_JSON: ${{ inputs.review-quorum-json }}
+        run: |
+          mkdir -p artifacts/review-quorum
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          Path("artifacts/review-quorum/review-quorum.json").write_text(
+              os.environ["REVIEW_QUORUM_JSON"],
+              encoding="utf-8",
+          )
+          PY
       - name: Upload fallback review quorum JSON
         id: upload_quorum
         if: always() && hashFiles('artifacts/review-quorum/*.json') != ''
