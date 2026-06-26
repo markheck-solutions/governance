@@ -332,6 +332,19 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertFalse(result["fallback_quorum_valid"])
 
+    def test_fallback_quorum_is_rejected_without_provenance(self) -> None:
+        sha = "b5" * 20
+        base = "c5" * 20
+        quorum = _quorum(base, sha)
+        quorum.pop("provenance")
+        payload = _payload(sha, base_sha=base, reviews=[], fallback_quorum=quorum)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["fallback_quorum_valid"])
+        self.assertTrue(any("provenance missing" in error for error in result["fallback_quorum_errors"]))
+
     def test_fallback_quorum_is_rejected_when_top_level_sha_is_stale(self) -> None:
         sha = "b4" * 20
         base = "c4" * 20
@@ -361,6 +374,18 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertIsNone(result["review_gate"])
         self.assertEqual(result["github_review_state"], "BLOCKING_FINDINGS_PRESENT")
+
+    def test_benchmark_schema_invalid_blocks_readiness(self) -> None:
+        sha = "b6" * 20
+        benchmark = _benchmark()
+        benchmark.pop("schema_version")
+        benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("benchmark schema invalid" in error for error in result["benchmark_evidence_errors"]))
 
     def test_live_thread_loader_paginates_review_threads(self) -> None:
         pages = [
@@ -468,10 +493,31 @@ def _blocking_review(head_sha: str, submitted_at: str, body: str) -> dict:
 
 
 def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
+    cases = [
+        _benchmark_case("critical", "historical_spaghetti", "REPRODUCED_BAD", True, "BLOCK_TECHNICAL"),
+        _benchmark_case("negative", "synthetic_structural", "REPRODUCED_BAD", False, "BLOCK_TECHNICAL"),
+        _benchmark_case("safe", "verified_safe", "VERIFIED_SAFE", False, "MERGE"),
+    ]
     benchmark = {
+        "schema_version": "1.0",
+        "run_id": "unit-test-run",
+        "generated_at": "2026-06-25T10:00:00Z",
+        "duration_seconds": 0.1,
+        "repeat_count": 1,
         "phase1_decision": phase1_decision,
         "acceptance_errors": [],
         "artifact_content_hash": "",
+        "target_lock": {
+            "repository_url": "https://github.com/example/repo.git",
+            "pull_request": 1,
+            "base_sha": "1" * 40,
+            "head_sha": "2" * 40,
+            "merge_commit_sha": "3" * 40,
+            "approved_oracle_sha": "4" * 40,
+            "observed_main_sha": "5" * 40,
+            "generated_at": "2026-06-25T10:00:00Z",
+            "evidence_source": "unit test",
+        },
         "metrics": {
             "case_count": 3,
             "critical_defect_recall": 1.0,
@@ -487,35 +533,40 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
             "execution_duration_seconds": 0.1,
             "verified_safe_count": 1,
         },
-        "cases": [
-            {
-                "id": "critical",
-                "category": "historical_spaghetti",
-                "label": "REPRODUCED_BAD",
-                "critical": True,
-                "expected_decision": "BLOCK_TECHNICAL",
-                "decision": {"decision": "BLOCK_TECHNICAL"},
-            },
-            {
-                "id": "negative",
-                "category": "synthetic_structural",
-                "label": "REPRODUCED_BAD",
-                "critical": False,
-                "expected_decision": "BLOCK_TECHNICAL",
-                "decision": {"decision": "BLOCK_TECHNICAL"},
-            },
-            {
-                "id": "safe",
-                "category": "verified_safe",
-                "label": "VERIFIED_SAFE",
-                "critical": False,
-                "expected_decision": "MERGE",
-                "decision": {"decision": "MERGE"},
-            },
-        ],
+        "cases": cases,
     }
     benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
     return benchmark
+
+
+def _benchmark_case(case_id: str, category: str, label: str, critical: bool, decision: str) -> dict:
+    evidence_id = f"{case_id}-evidence"
+    return {
+        "id": case_id,
+        "title": case_id,
+        "category": category,
+        "label": label,
+        "critical": critical,
+        "expected_decision": decision,
+        "decision": {
+            "case_id": case_id,
+            "decision": decision,
+            "reasons": ["unit test"],
+            "evidence_refs": [evidence_id],
+            "fail_closed": decision != "MERGE",
+        },
+        "evidence": [
+            {
+                "evidence_id": evidence_id,
+                "case_id": case_id,
+                "detector_id": "unit-test-detector",
+                "status": "FAIL" if decision == "BLOCK_TECHNICAL" else "PASS",
+                "message": "unit test",
+                "observed": {},
+                "findings": [],
+            }
+        ],
+    }
 
 
 def _quorum(base_sha: str, head_sha: str) -> dict:
@@ -525,6 +576,25 @@ def _quorum(base_sha: str, head_sha: str) -> dict:
         "github_review_state": "STALE",
         "reviewed_base_sha": base_sha,
         "reviewed_head_sha": head_sha,
+        "provenance": {
+            "source": "codex_multi_agent_v1_clean_room_review",
+            "created_in": "unit test",
+            "github_pr": "https://github.com/example/repo/pull/1",
+            "reviewed_base_sha": base_sha,
+            "reviewed_head_sha": head_sha,
+            "reviewer_outputs": [
+                {
+                    "reviewer_id": "clean-room-reviewer-a",
+                    "agent_id": "agent-a",
+                    "response_sha256": "a" * 64,
+                },
+                {
+                    "reviewer_id": "clean-room-reviewer-b",
+                    "agent_id": "agent-b",
+                    "response_sha256": "b" * 64,
+                },
+            ],
+        },
         "reviewers": [
             {
                 "reviewer_id": "clean-room-reviewer-a",

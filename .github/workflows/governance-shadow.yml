@@ -81,6 +81,10 @@ jobs:
               encoding="utf-8",
           )
           PY
+      - name: Validate fallback review quorum input
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.review-quorum-json != ''
+        shell: bash
+        run: python -m governance_eval validate-review-quorum --path artifacts/review-quorum/review-quorum.json --head-sha "$GITHUB_SHA"
       - name: Upload fallback review quorum JSON
         id: upload_quorum
         if: always() && hashFiles('artifacts/review-quorum/*.json') != ''

@@ -12,6 +12,7 @@ from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
 from governance_eval.delivery_readiness import main as delivery_readiness_main
+from governance_eval.delivery_readiness import validate_review_quorum_document
 from governance_eval.lock import write_spaghetti_lock
 from governance_eval.paths import repo_root
 from governance_eval.target_eval import evaluate_target
@@ -85,6 +86,11 @@ def main(argv: list[str] | None = None) -> int:
     delivery_parser.add_argument("--require-github-artifact-digest", action="store_true")
     delivery_parser.add_argument("--fallback-quorum", default=None)
 
+    quorum_parser = subparsers.add_parser("validate-review-quorum", help="validate fallback review quorum JSON")
+    quorum_parser.add_argument("--path", type=Path, required=True)
+    quorum_parser.add_argument("--head-sha", required=True)
+    quorum_parser.add_argument("--base-sha", default="")
+
     args = parser.parse_args(argv)
     root = repo_root(getattr(args, "root", None))
 
@@ -141,6 +147,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.fallback_quorum:
             delivery_args.extend(["--fallback-quorum", args.fallback_quorum])
         return delivery_readiness_main(delivery_args)
+    if args.command == "validate-review-quorum":
+        path = root / args.path if not args.path.is_absolute() else args.path
+        quorum = json.loads(path.read_text(encoding="utf-8"))
+        errors = validate_review_quorum_document(quorum, args.head_sha, args.base_sha)
+        print(json.dumps({"valid": not errors, "errors": errors}, indent=2, sort_keys=True))
+        return 0 if not errors else 1
     raise AssertionError(args.command)
 
 

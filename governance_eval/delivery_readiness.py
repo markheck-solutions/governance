@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from governance_eval.benchmark import validate_benchmark_result
 from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
@@ -327,6 +328,10 @@ def _benchmark_result(payload: dict[str, Any]) -> dict[str, Any]:
     if evidence.get("__load_error"):
         errors.append(f"benchmark evidence malformed JSON: {evidence['__load_error']}")
         return _benchmark_result_payload(False, errors, None, None, digest)
+    try:
+        validate_benchmark_result(evidence)
+    except SchemaValidationError as exc:
+        errors.append(f"benchmark schema invalid: {exc}")
     phase1_decision = evidence.get("phase1_decision")
     if phase1_decision != "BENCHMARK_PASS":
         errors.append(f"phase1_decision expected BENCHMARK_PASS, got {phase1_decision!r}")
@@ -490,6 +495,9 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
         errors.append("fallback quorum reviewed_head_sha does not match latest head")
     if expected_base_sha and quorum.get("reviewed_base_sha") != expected_base_sha:
         errors.append("fallback quorum reviewed_base_sha does not match base")
+    provenance = quorum.get("provenance")
+    provenance_outputs = _quorum_provenance_outputs(provenance, expected_base_sha, expected_head_sha)
+    errors.extend(provenance_outputs["errors"])
     reviewers = quorum.get("reviewers")
     if not isinstance(reviewers, list) or len(reviewers) < 2:
         errors.append("fallback quorum requires at least two reviewers")
@@ -506,6 +514,16 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
             errors.append(f"reviewers[{index}].reviewer_id duplicated")
         else:
             reviewer_ids.add(reviewer_id)
+        if isinstance(reviewer_id, str) and reviewer_id:
+            output = provenance_outputs["by_reviewer"].get(reviewer_id)
+            if output is None:
+                errors.append(f"reviewers[{index}].reviewer_id missing from provenance reviewer_outputs")
+            else:
+                if not isinstance(output.get("agent_id"), str) or not output["agent_id"]:
+                    errors.append(f"reviewers[{index}] provenance agent_id missing")
+                response_hash = output.get("response_sha256")
+                if not (isinstance(response_hash, str) and SHA256_RE.match(response_hash)):
+                    errors.append(f"reviewers[{index}] provenance response_sha256 invalid")
         reviewed_head = reviewer.get("reviewed_head_sha") or quorum.get("reviewed_head_sha")
         reviewed_base = reviewer.get("reviewed_base_sha") or quorum.get("reviewed_base_sha")
         if reviewed_head != expected_head_sha:
@@ -523,6 +541,44 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
             if severity in {"P0", "P1", "P2"}:
                 errors.append(f"reviewers[{index}].findings[{finding_index}] reports blocking {severity}")
     return {"valid": not errors, "errors": errors}
+
+
+def validate_review_quorum_document(quorum: dict[str, Any], expected_head_sha: str, expected_base_sha: str = "") -> list[str]:
+    return _fallback_quorum_result(quorum, expected_base_sha, expected_head_sha)["errors"]
+
+
+def _quorum_provenance_outputs(
+    provenance: Any,
+    expected_base_sha: str,
+    expected_head_sha: str,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    by_reviewer: dict[str, dict[str, Any]] = {}
+    if not isinstance(provenance, dict):
+        return {"errors": ["fallback quorum provenance missing or malformed"], "by_reviewer": by_reviewer}
+    if provenance.get("source") != "codex_multi_agent_v1_clean_room_review":
+        errors.append("fallback quorum provenance source must be codex_multi_agent_v1_clean_room_review")
+    if provenance.get("reviewed_head_sha") != expected_head_sha:
+        errors.append("fallback quorum provenance reviewed_head_sha does not match latest head")
+    if expected_base_sha and provenance.get("reviewed_base_sha") != expected_base_sha:
+        errors.append("fallback quorum provenance reviewed_base_sha does not match base")
+    outputs = provenance.get("reviewer_outputs")
+    if not isinstance(outputs, list) or len(outputs) < 2:
+        errors.append("fallback quorum provenance requires at least two reviewer_outputs")
+        return {"errors": errors, "by_reviewer": by_reviewer}
+    for index, output in enumerate(outputs):
+        if not isinstance(output, dict):
+            errors.append(f"provenance.reviewer_outputs[{index}] malformed")
+            continue
+        reviewer_id = output.get("reviewer_id")
+        if not isinstance(reviewer_id, str) or not reviewer_id:
+            errors.append(f"provenance.reviewer_outputs[{index}].reviewer_id missing")
+            continue
+        if reviewer_id in by_reviewer:
+            errors.append(f"provenance.reviewer_outputs[{index}].reviewer_id duplicated")
+            continue
+        by_reviewer[reviewer_id] = output
+    return {"errors": errors, "by_reviewer": by_reviewer}
 
 
 def _github_review_state(

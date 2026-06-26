@@ -9,6 +9,7 @@
     "github_review_state",
     "reviewed_base_sha",
     "reviewed_head_sha",
+    "provenance",
     "reviewers"
   ],
   "properties": {
@@ -17,6 +18,29 @@
     "github_review_state": { "type": "string", "enum": ["STALE", "UNAVAILABLE"] },
     "reviewed_base_sha": { "type": "string", "minLength": 40 },
     "reviewed_head_sha": { "type": "string", "minLength": 40 },
+    "provenance": {
+      "type": "object",
+      "required": ["source", "reviewed_base_sha", "reviewed_head_sha", "reviewer_outputs"],
+      "properties": {
+        "source": { "type": "string", "enum": ["codex_multi_agent_v1_clean_room_review"] },
+        "created_in": { "type": "string" },
+        "github_pr": { "type": "string" },
+        "reviewed_base_sha": { "type": "string", "minLength": 40 },
+        "reviewed_head_sha": { "type": "string", "minLength": 40 },
+        "reviewer_outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["reviewer_id", "agent_id", "response_sha256"],
+            "properties": {
+              "reviewer_id": { "type": "string", "minLength": 1 },
+              "agent_id": { "type": "string", "minLength": 1 },
+              "response_sha256": { "type": "string", "minLength": 64 }
+            }
+          }
+        }
+      }
+    },
     "github_review_history": { "type": "array", "items": { "type": "object" } },
     "workflow_evidence": { "type": "array", "items": { "type": "object" } },
     "benchmark_artifacts": { "type": "array", "items": { "type": "object" } },
