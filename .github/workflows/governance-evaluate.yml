@@ -19,6 +19,9 @@ on:
       target-pack-path:
         required: true
         type: string
+      governance-ref:
+        required: true
+        type: string
       artifact-name:
         required: false
         type: string
@@ -38,14 +41,14 @@ jobs:
       TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
       TARGET_MERGE_SHA: ${{ inputs.target-merge-sha }}
       TARGET_PACK_PATH: ${{ inputs.target-pack-path }}
+      GOVERNANCE_CHECKOUT_REF: ${{ inputs.governance-ref }}
       ARTIFACT_NAME: ${{ inputs.artifact-name }}
-      GOVERNANCE_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - name: Checkout governance evaluator
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: markheck-solutions/governance
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ inputs.governance-ref }}
           path: governance
           persist-credentials: false
       - name: Set up Python
@@ -81,6 +84,9 @@ jobs:
           merge_sha = os.environ.get("TARGET_MERGE_SHA", "")
           if merge_sha and not sha_re.fullmatch(merge_sha):
               print("Invalid target merge SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["GOVERNANCE_CHECKOUT_REF"]):
+              print("Invalid governance ref", file=sys.stderr)
               raise SystemExit(64)
           if not artifact_re.fullmatch(os.environ["ARTIFACT_NAME"]):
               print("Invalid artifact name", file=sys.stderr)
@@ -144,7 +150,7 @@ jobs:
             echo ""
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Governance commit SHA | \`${GOVERNANCE_WORKFLOW_SHA}\` |"
+            echo "| Governance commit SHA | \`${GOVERNANCE_CHECKOUT_REF}\` |"
             echo "| Target repository | \`${TARGET_REPOSITORY_URL}\` |"
             echo "| Target base SHA | \`${TARGET_BASE_SHA}\` |"
             echo "| Target head SHA | \`${TARGET_HEAD_SHA}\` |"

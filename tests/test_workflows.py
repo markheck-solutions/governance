@@ -23,7 +23,8 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("retention-days: 90", text)
             self.assertNotIn("secrets: inherit", text)
         self.assertIn("workflow_call:", workflows["governance-evaluate.yml"])
-        self.assertIn("github.workflow_sha", workflows["governance-evaluate.yml"])
+        self.assertIn("governance-ref:", workflows["governance-evaluate.yml"])
+        self.assertIn("GOVERNANCE_CHECKOUT_REF", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-digest", workflows["governance-evaluate.yml"])
 
 
