@@ -455,7 +455,6 @@ def _gate_config(root: Path, pack: dict[str, Any] | None) -> dict[str, Any]:
             "pyproject": _parse_pyproject(root / "pyproject.toml"),
             "workflows": _parse_workflows(root / ".github" / "workflows"),
             "files": {relative: (root / relative).exists() for relative in required_files if not relative.endswith("/")},
-            "command_text": _gate_text(root, required_files),
         })
     except Exception as exc:
         return {"status": "UNKNOWN", "reason": f"gate contract parsing failed: {type(exc).__name__}: {exc}"}
@@ -494,12 +493,14 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
             "present": False,
             "jobs": set(),
             "steps": set(),
+            "run_commands": set(),
             "continue_on_error": set(),
             "paths": set(),
             "paths_ignore": set(),
         }
     jobs: set[str] = set()
     steps: set[str] = set()
+    run_commands: set[str] = set()
     continue_on_error: set[str] = set()
     paths: set[str] = set()
     paths_ignore: set[str] = set()
@@ -520,6 +521,9 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
             step = re.search(r"name:\s*['\"]?([^'\"]+?)['\"]?\s*$", line)
             if step:
                 steps.add(f"{file.name}:{current_job}:{step.group(1).strip()}")
+            run_command = _workflow_run_command(lines, index)
+            if run_command and not _workflow_step_disabled(lines, index):
+                run_commands.add(f"{file.name}:{current_job}:{run_command}")
             if "continue-on-error:" in line and "true" in line.lower():
                 continue_on_error.add(f"{file.name}:{current_job}")
             match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", line)
@@ -533,10 +537,62 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
         "present": True,
         "jobs": jobs,
         "steps": steps,
+        "run_commands": run_commands,
         "continue_on_error": continue_on_error,
         "paths": paths,
         "paths_ignore": paths_ignore,
     }
+
+
+def _workflow_run_command(lines: list[str], index: int) -> str | None:
+    line = lines[index]
+    if line.lstrip().startswith("#"):
+        return None
+    match = re.match(r"^\s*run:\s*(.*)$", line)
+    if not match:
+        return None
+    inline = match.group(1).strip()
+    if not inline:
+        return ""
+    scalar_token = inline.split()[0]
+    if scalar_token in {"|", "|-", "|+", ">", ">-", ">+"}:
+        return _workflow_block_scalar(lines, index)
+    return inline.strip("'\"")
+
+
+def _workflow_block_scalar(lines: list[str], index: int) -> str:
+    base_indent = len(lines[index]) - len(lines[index].lstrip(" "))
+    block: list[str] = []
+    for line in lines[index + 1 :]:
+        if not line.strip():
+            block.append("")
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= base_indent:
+            break
+        block.append(line.strip())
+    return "\n".join(block).strip()
+
+
+def _workflow_step_disabled(lines: list[str], run_index: int) -> bool:
+    run_indent = len(lines[run_index]) - len(lines[run_index].lstrip(" "))
+    step_start = run_index
+    for index in range(run_index - 1, -1, -1):
+        line = lines[index]
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        stripped = line.strip()
+        if indent < run_indent and stripped.startswith("- "):
+            step_start = index
+            break
+        if indent < run_indent - 2:
+            break
+    for line in lines[step_start:run_index]:
+        stripped = line.strip().lower().replace(" ", "")
+        if stripped in {"if:false", "if:${{false}}", "if:${{0}}"}:
+            return True
+    return False
 
 
 def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]:
@@ -562,19 +618,6 @@ def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]
         elif ":" in stripped and not stripped.startswith("#"):
             break
     return values
-
-
-def _gate_text(root: Path, required_files: list[str]) -> str:
-    chunks: list[str] = []
-    for relative in required_files:
-        path = root / relative
-        if path.is_file():
-            chunks.append(path.read_text(encoding="utf-8", errors="ignore"))
-        elif path.is_dir():
-            for file in sorted(path.rglob("*")):
-                if file.is_file():
-                    chunks.append(file.read_text(encoding="utf-8", errors="ignore"))
-    return "\n".join(chunks)
 
 
 def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[str, Any]) -> dict[str, Any]:
@@ -611,12 +654,13 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
     introduced |= _added_items("workflow.continue-on-error", before_wf.get("continue_on_error"), after_wf.get("continue_on_error"))
     introduced |= _workflow_paths_narrowing(before_wf.get("paths"), after_wf.get("paths"))
     introduced |= _added_items("workflow.paths-ignore", before_wf.get("paths_ignore"), after_wf.get("paths_ignore"))
-    text = head.get("command_text") or ""
+    executable_commands = _workflow_command_text(after_wf)
+    gate_target_text = "\n".join([executable_commands, _pyproject_gate_target_text(after_py)])
     for command in head.get("required_commands") or []:
-        if command and command not in text:
+        if command and command not in executable_commands:
             introduced.add(f"required_command_missing:{command}")
     for governed_root in head.get("governed_roots") or []:
-        if governed_root and governed_root not in text:
+        if governed_root and governed_root not in gate_target_text:
             introduced.add(f"governed_root_missing_from_gates:{governed_root}")
     return {
         "status": "MEASURED",
@@ -630,6 +674,34 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
         "evidence": {"base": _sets_to_lists(base), "head": _sets_to_lists(head)},
         "reason": "",
     }
+
+
+def _workflow_command_text(workflows: dict[str, Any]) -> str:
+    commands: list[str] = []
+    for item in sorted(workflows.get("run_commands") or []):
+        parts = str(item).split(":", 2)
+        commands.append(parts[2] if len(parts) == 3 else str(item))
+    return "\n".join(commands)
+
+
+def _pyproject_gate_target_text(pyproject: dict[str, Any]) -> str:
+    values: list[str] = []
+    for key in (
+        "ruff_include",
+        "ruff_extend_include",
+        "mypy_files",
+        "pytest_testpaths",
+        "pytest_addopts",
+        "coverage_source",
+    ):
+        value = pyproject.get(key)
+        if isinstance(value, set):
+            values.extend(sorted(str(item) for item in value))
+        elif isinstance(value, (list, tuple)):
+            values.extend(str(item) for item in value)
+        elif value:
+            values.append(str(value))
+    return "\n".join(values)
 
 
 def _rename_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[str, Any]) -> dict[str, Any]:

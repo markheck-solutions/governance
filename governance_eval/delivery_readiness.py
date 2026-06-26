@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from governance_eval.benchmark import validate_benchmark_result
+from governance_eval.cases import load_cases
 from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
@@ -440,6 +441,7 @@ def _case_evidence_errors(evidence: dict[str, Any], metrics: dict[str, Any]) -> 
     cases = evidence.get("cases")
     if not isinstance(cases, list):
         return ["cases missing or malformed"]
+    errors.extend(_case_manifest_errors(cases))
     if metrics.get("case_count") != len(cases):
         errors.append("metrics.case_count must equal len(cases)")
     recomputed = {
@@ -476,6 +478,38 @@ def _case_evidence_errors(evidence: dict[str, Any], metrics: dict[str, Any]) -> 
     for name, value in recomputed.items():
         if metrics.get(name) != value:
             errors.append(f"metrics.{name} expected recomputed value {value}, got {metrics.get(name)!r}")
+    return errors
+
+
+def _case_manifest_errors(cases: list[Any]) -> list[str]:
+    try:
+        manifest_cases = load_cases()
+    except Exception as exc:
+        return [f"benchmark case manifest could not be loaded: {type(exc).__name__}: {exc}"]
+
+    manifest_fields = ("id", "title", "category", "label", "critical", "expected_decision")
+    expected_manifest = [{field: case.get(field) for field in manifest_fields} for case in manifest_cases]
+    actual_manifest = [
+        {field: case.get(field) for field in manifest_fields}
+        for case in cases
+        if isinstance(case, dict)
+    ]
+    if actual_manifest == expected_manifest:
+        return []
+
+    errors: list[str] = []
+    expected_ids = [case["id"] for case in expected_manifest]
+    actual_ids = [case.get("id") for case in actual_manifest]
+    if actual_ids != expected_ids:
+        errors.append(f"benchmark cases must match governed manifest ids {expected_ids!r}, got {actual_ids!r}")
+        return errors
+    for index, (actual, expected) in enumerate(zip(actual_manifest, expected_manifest, strict=True)):
+        for field in manifest_fields:
+            if actual.get(field) != expected.get(field):
+                errors.append(
+                    f"benchmark cases[{index}].{field} must match governed manifest "
+                    f"{expected.get(field)!r}, got {actual.get(field)!r}"
+                )
     return errors
 
 

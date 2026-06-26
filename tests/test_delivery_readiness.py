@@ -5,6 +5,7 @@ import unittest
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
+from governance_eval.cases import load_cases
 from governance_eval import delivery_readiness
 from governance_eval.delivery_readiness import evaluate_readiness
 from governance_eval.hashing import sha256_json
@@ -226,6 +227,31 @@ class DeliveryReadinessTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(any("cases[0].decision expected" in error for error in result["benchmark_evidence_errors"]))
+
+    def test_green_workflow_but_manifest_case_metadata_mismatch_blocks(self) -> None:
+        sha = "7e" * 20
+        benchmark = _benchmark()
+        benchmark["cases"][0]["title"] = "fabricated case title"
+        benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("cases[0].title must match governed manifest" in error for error in result["benchmark_evidence_errors"]))
+
+    def test_green_workflow_but_truncated_manifest_case_list_blocks(self) -> None:
+        sha = "7f" * 20
+        benchmark = _benchmark()
+        benchmark["cases"] = benchmark["cases"][:3]
+        benchmark["metrics"]["case_count"] = 3
+        benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(any("benchmark cases must match governed manifest ids" in error for error in result["benchmark_evidence_errors"]))
 
     def test_green_workflow_but_missing_stability_metrics_blocks(self) -> None:
         sha = "7c" * 20
@@ -493,11 +519,18 @@ def _blocking_review(head_sha: str, submitted_at: str, body: str) -> dict:
 
 
 def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
-    cases = [
-        _benchmark_case("critical", "historical_spaghetti", "REPRODUCED_BAD", True, "BLOCK_TECHNICAL"),
-        _benchmark_case("negative", "synthetic_structural", "REPRODUCED_BAD", False, "BLOCK_TECHNICAL"),
-        _benchmark_case("safe", "verified_safe", "VERIFIED_SAFE", False, "MERGE"),
-    ]
+    manifest_cases = load_cases()
+    cases = [_benchmark_case(case) for case in manifest_cases]
+    critical_defect_count = sum(1 for case in manifest_cases if case["critical"] and case["label"] == "REPRODUCED_BAD")
+    negative_control_count = sum(
+        1 for case in manifest_cases if case["category"] == "synthetic_structural" and case["label"] == "REPRODUCED_BAD"
+    )
+    verified_safe_count = sum(1 for case in manifest_cases if case["label"] == "VERIFIED_SAFE")
+    false_blocks = sum(
+        1
+        for case in manifest_cases
+        if case["label"] == "VERIFIED_SAFE" and case["expected_decision"] == "BLOCK_TECHNICAL"
+    )
     benchmark = {
         "schema_version": "1.0",
         "run_id": "unit-test-run",
@@ -519,19 +552,19 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
             "evidence_source": "unit test",
         },
         "metrics": {
-            "case_count": 3,
+            "case_count": len(cases),
             "critical_defect_recall": 1.0,
-            "critical_defects_blocked": 1,
-            "critical_defect_count": 1,
+            "critical_defects_blocked": critical_defect_count,
+            "critical_defect_count": critical_defect_count,
             "negative_control_recall": 1.0,
-            "negative_controls_blocked": 1,
-            "negative_control_count": 1,
+            "negative_controls_blocked": negative_control_count,
+            "negative_control_count": negative_control_count,
             "false_block_rate": 0.0,
-            "false_blocks": 0,
+            "false_blocks": false_blocks,
             "repeated_run_decision_stability": 1.0,
             "deterministic_flake_rate": 0.0,
             "execution_duration_seconds": 0.1,
-            "verified_safe_count": 1,
+            "verified_safe_count": verified_safe_count,
         },
         "cases": cases,
     }
@@ -539,14 +572,16 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
     return benchmark
 
 
-def _benchmark_case(case_id: str, category: str, label: str, critical: bool, decision: str) -> dict:
+def _benchmark_case(case: dict) -> dict:
+    case_id = case["id"]
+    decision = case["expected_decision"]
     evidence_id = f"{case_id}-evidence"
     return {
         "id": case_id,
-        "title": case_id,
-        "category": category,
-        "label": label,
-        "critical": critical,
+        "title": case["title"],
+        "category": case["category"],
+        "label": case["label"],
+        "critical": case["critical"],
         "expected_decision": decision,
         "decision": {
             "case_id": case_id,
