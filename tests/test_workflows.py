@@ -32,6 +32,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("artifact-digest", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-id", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-id", workflows["governance-shadow.yml"])
+        self.assertIn("github.event.pull_request.head.sha || github.sha", workflows["governance-shadow.yml"])
         self.assertIn("review-quorum-json:", workflows["governance-shadow.yml"])
         self.assertIn("validate-review-quorum", workflows["governance-shadow.yml"])
         self.assertIn("steps.validate_quorum.conclusion == 'success'", workflows["governance-shadow.yml"])
