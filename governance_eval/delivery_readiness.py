@@ -49,7 +49,7 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         and not payload.get("isDraft", False)
         and merge_state not in {"BLOCKED", "DIRTY", "DRAFT", "UNKNOWN"}
     )
-    benchmark_result = _benchmark_result(payload)
+    benchmark_result = _benchmark_result(payload, latest_head_sha)
     review_result = _review_gate_result(
         payload,
         latest_head_sha,
@@ -443,7 +443,7 @@ def _review_gate_result(
     }
 
 
-def _benchmark_result(payload: dict[str, Any]) -> dict[str, Any]:
+def _benchmark_result(payload: dict[str, Any], latest_head_sha: str = "") -> dict[str, Any]:
     evidence = payload.get("benchmarkEvidence")
     digest = payload.get("benchmarkArtifactDigest")
     errors: list[str] = []
@@ -460,6 +460,12 @@ def _benchmark_result(payload: dict[str, Any]) -> dict[str, Any]:
     phase1_decision = evidence.get("phase1_decision")
     if phase1_decision != "BENCHMARK_PASS":
         errors.append(f"phase1_decision expected BENCHMARK_PASS, got {phase1_decision!r}")
+    evaluator_sha = evidence.get("governance_evaluator_git_sha")
+    if latest_head_sha and evaluator_sha != latest_head_sha:
+        errors.append(
+            "governance_evaluator_git_sha must match latest head "
+            f"{latest_head_sha}, got {evaluator_sha!r}"
+        )
     acceptance_errors = evidence.get("acceptance_errors")
     if acceptance_errors != []:
         errors.append("acceptance_errors must be []")

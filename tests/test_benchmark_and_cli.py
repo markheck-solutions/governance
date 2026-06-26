@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,8 @@ from pathlib import Path
 from governance_eval.benchmark import run_benchmark
 from governance_eval.benchmark import validate_benchmark_result
 from governance_eval.benchmark import _metrics
+from governance_eval.benchmark import _stable_benchmark_payload
+from governance_eval.hashing import sha256_json
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
@@ -42,6 +45,17 @@ class BenchmarkCliTests(unittest.TestCase):
             data = json.loads(latest.read_text(encoding="utf-8"))
             validate_named("benchmark_run_result", data, self.root)
             self.assertEqual(result["phase1_decision"], "BENCHMARK_PASS")
+
+    def test_deterministic_hash_ignores_runtime_metric_noise(self) -> None:
+        result = run_benchmark(self.root, repeat=1)
+        rerun = copy.deepcopy(result)
+        rerun["duration_seconds"] = result["duration_seconds"] + 10
+        rerun["metrics"]["execution_duration_seconds"] = result["metrics"]["execution_duration_seconds"] + 10
+
+        self.assertEqual(
+            sha256_json(_stable_benchmark_payload(result)),
+            sha256_json(_stable_benchmark_payload(rerun)),
+        )
 
     def test_nested_benchmark_result_validation_rejects_tampering(self) -> None:
         result = run_benchmark(self.root, repeat=1)

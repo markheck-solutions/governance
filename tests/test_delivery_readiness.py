@@ -443,6 +443,19 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         self.assertEqual(result["benchmark_artifact_digest"], f"sha256:{'a' * 64}")
 
+    def test_green_workflow_but_benchmark_sha_mismatch_blocks(self) -> None:
+        sha = "a7" * 20
+        benchmark = _benchmark(evaluator_sha="0" * 40)
+        benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(
+            any("governance_evaluator_git_sha must match latest head" in error for error in result["benchmark_evidence_errors"])
+        )
+
     def test_github_context_requires_artifact_binding_when_digest_required(self) -> None:
         sha = "a5" * 20
         payload = _payload(sha, reviews=[_clean_review(sha)])
@@ -732,7 +745,7 @@ def _payload(
         "workflowContexts": workflow_contexts
         if workflow_contexts is not None
         else [{"name": "Phase 1 shadow run", "workflowName": "Governance Shadow Benchmark", "conclusion": "SUCCESS"}],
-        "benchmarkEvidence": benchmark_evidence if benchmark_evidence is not None else _benchmark(),
+        "benchmarkEvidence": benchmark_evidence if benchmark_evidence is not None else _benchmark(evaluator_sha=head_sha),
     }
     if fallback_quorum is not None:
         payload["fallbackQuorum"] = fallback_quorum
@@ -760,7 +773,7 @@ def _blocking_review(head_sha: str, submitted_at: str, body: str) -> dict:
     }
 
 
-def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
+def _benchmark(phase1_decision: str = "BENCHMARK_PASS", evaluator_sha: str = "6" * 40) -> dict:
     manifest_cases = load_cases()
     cases = [_benchmark_case(case) for case in manifest_cases]
     critical_defect_count = sum(1 for case in manifest_cases if case["critical"] and case["label"] == "REPRODUCED_BAD")
@@ -780,7 +793,7 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
         "duration_seconds": 0.1,
         "repeat_count": 1,
         "governance_repository_url": "https://github.com/markheck-solutions/governance.git",
-        "governance_evaluator_git_sha": "6" * 40,
+        "governance_evaluator_git_sha": evaluator_sha,
         "governance_target_pack_hash": "a" * 64,
         "schema_hashes": {"benchmark_run_result.schema.json": "b" * 64},
         "dependency_lock_hash": "c" * 64,
@@ -830,12 +843,15 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
         },
         "cases": cases,
     }
+    stable_metrics = dict(benchmark["metrics"])
+    stable_metrics["execution_duration_seconds"] = 0
     benchmark["deterministic_evidence_hash"] = sha256_json(
         {
             **benchmark,
             "generated_at": "",
             "run_id": "",
             "duration_seconds": 0,
+            "metrics": stable_metrics,
             "github_artifact_id": None,
             "github_artifact_digest": None,
             "deterministic_evidence_hash": "",

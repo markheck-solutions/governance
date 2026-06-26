@@ -641,7 +641,10 @@ def _workflow_if_false_line(line: str) -> bool:
     if line.lstrip().startswith("#") or ":" not in line:
         return False
     key, expression = line.split(":", 1)
-    return key.strip().lower() == "if" and _workflow_if_false_expression(expression)
+    normalized_key = key.strip().lower()
+    if normalized_key.startswith("- "):
+        normalized_key = normalized_key[2:].strip()
+    return normalized_key == "if" and _workflow_if_false_expression(expression)
 
 
 def _workflow_if_false_expression(expression: str) -> bool:

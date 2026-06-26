@@ -257,11 +257,14 @@ def _exact_commands(command: str, repeat: int, artifacts_dir: Path | None) -> li
 
 
 def _stable_benchmark_payload(result: dict[str, Any]) -> dict[str, Any]:
+    metrics = dict(result.get("metrics", {}))
+    metrics["execution_duration_seconds"] = 0
     return {
         **result,
         "generated_at": "",
         "run_id": "",
         "duration_seconds": 0,
+        "metrics": metrics,
         "github_artifact_id": None,
         "github_artifact_digest": None,
         "deterministic_evidence_hash": "",
