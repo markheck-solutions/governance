@@ -483,6 +483,20 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue(any("evidence content hash does not match" in error for error in result["benchmark_evidence_errors"]))
 
+    def test_green_workflow_but_missing_case_detector_evidence_blocks(self) -> None:
+        sha = "ag" * 20
+        benchmark = _benchmark()
+        for case in benchmark["cases"]:
+            case["evidence"] = []
+        benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
+        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=benchmark)
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["benchmark_evidence_valid"])
+        self.assertTrue(any("detector evidence" in error for error in result["benchmark_evidence_errors"]))
+
     def test_skipped_governance_context_is_missing_workflow_evidence(self) -> None:
         sha = "a4" * 20
         payload = _payload(

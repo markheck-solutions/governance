@@ -586,6 +586,29 @@ def _case_evidence_errors(evidence: dict[str, Any], metrics: dict[str, Any]) -> 
         actual = decision.get("decision") if isinstance(decision, dict) else None
         if actual != expected:
             errors.append(f"cases[{index}].decision expected {expected!r}, got {actual!r}")
+        case_evidence = case.get("evidence")
+        if not isinstance(case_evidence, list) or not case_evidence:
+            errors.append(f"cases[{index}].evidence must contain detector evidence")
+            evidence_ids: set[str] = set()
+        else:
+            evidence_ids = {
+                item.get("evidence_id")
+                for item in case_evidence
+                if isinstance(item, dict) and isinstance(item.get("evidence_id"), str)
+            }
+            if len(evidence_ids) != len(case_evidence):
+                errors.append(f"cases[{index}].evidence entries must have unique evidence_id values")
+            for evidence_index, item in enumerate(case_evidence):
+                if not isinstance(item, dict):
+                    errors.append(f"cases[{index}].evidence[{evidence_index}] malformed")
+                    continue
+                if item.get("case_id") != case.get("id"):
+                    errors.append(f"cases[{index}].evidence[{evidence_index}].case_id must match case id")
+        evidence_refs = decision.get("evidence_refs") if isinstance(decision, dict) else None
+        if not isinstance(evidence_refs, list) or not evidence_refs:
+            errors.append(f"cases[{index}].decision.evidence_refs must cite detector evidence")
+        elif not set(evidence_refs).issubset(evidence_ids):
+            errors.append(f"cases[{index}].decision.evidence_refs must match detector evidence ids")
         label = case.get("label")
         category = case.get("category")
         if case.get("critical") is True and label == "REPRODUCED_BAD":

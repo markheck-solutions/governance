@@ -584,11 +584,11 @@ def _workflow_run_command(lines: list[str], index: int) -> str | None:
         return ""
     scalar_token = inline.split()[0]
     if scalar_token in {"|", "|-", "|+", ">", ">-", ">+"}:
-        return _workflow_block_scalar(lines, index)
+        return _workflow_block_scalar(lines, index, folded=scalar_token.startswith(">"))
     return inline.strip("'\"")
 
 
-def _workflow_block_scalar(lines: list[str], index: int) -> str:
+def _workflow_block_scalar(lines: list[str], index: int, folded: bool = False) -> str:
     base_indent = len(lines[index]) - len(lines[index].lstrip(" "))
     block: list[str] = []
     for line in lines[index + 1 :]:
@@ -602,7 +602,8 @@ def _workflow_block_scalar(lines: list[str], index: int) -> str:
         if stripped.startswith("#"):
             continue
         block.append(stripped)
-    return "\n".join(block).strip()
+    separator = " " if folded else "\n"
+    return separator.join(block).strip()
 
 
 def _workflow_step_disabled(lines: list[str], run_index: int) -> bool:
