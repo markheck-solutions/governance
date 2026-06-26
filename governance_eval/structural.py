@@ -492,6 +492,7 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
         return {
             "present": False,
             "jobs": set(),
+            "disabled_jobs": set(),
             "steps": set(),
             "run_commands": set(),
             "continue_on_error": set(),
@@ -499,6 +500,7 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
             "paths_ignore": set(),
         }
     jobs: set[str] = set()
+    disabled_jobs: set[str] = set()
     steps: set[str] = set()
     run_commands: set[str] = set()
     continue_on_error: set[str] = set()
@@ -518,11 +520,15 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
                 if job:
                     current_job = job.group(1)
                     jobs.add(f"{file.name}:{current_job}")
+                    continue
+                if current_job and _workflow_job_disabled_line(line):
+                    disabled_jobs.add(f"{file.name}:{current_job}")
             step = re.search(r"name:\s*['\"]?([^'\"]+?)['\"]?\s*$", line)
             if step:
                 steps.add(f"{file.name}:{current_job}:{step.group(1).strip()}")
             run_command = _workflow_run_command(lines, index)
-            if run_command and not _workflow_step_disabled(lines, index):
+            job_disabled = f"{file.name}:{current_job}" in disabled_jobs
+            if run_command and not job_disabled and not _workflow_step_disabled(lines, index):
                 run_commands.add(f"{file.name}:{current_job}:{run_command}")
             if "continue-on-error:" in line and "true" in line.lower():
                 continue_on_error.add(f"{file.name}:{current_job}")
@@ -536,12 +542,21 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
     return {
         "present": True,
         "jobs": jobs,
+        "disabled_jobs": disabled_jobs,
         "steps": steps,
         "run_commands": run_commands,
         "continue_on_error": continue_on_error,
         "paths": paths,
         "paths_ignore": paths_ignore,
     }
+
+
+def _workflow_job_disabled_line(line: str) -> bool:
+    if line.lstrip().startswith("#"):
+        return False
+    if not re.match(r"^ {4}if:\s*", line):
+        return False
+    return _workflow_if_false_expression(line.split(":", 1)[1])
 
 
 def _workflow_run_command(lines: list[str], index: int) -> str | None:
@@ -589,10 +604,21 @@ def _workflow_step_disabled(lines: list[str], run_index: int) -> bool:
         if indent < run_indent - 2:
             break
     for line in lines[step_start:run_index]:
-        stripped = line.strip().lower().replace(" ", "")
-        if stripped in {"if:false", "if:${{false}}", "if:${{0}}"}:
+        if _workflow_if_false_line(line):
             return True
     return False
+
+
+def _workflow_if_false_line(line: str) -> bool:
+    if line.lstrip().startswith("#") or ":" not in line:
+        return False
+    key, expression = line.split(":", 1)
+    return key.strip().lower() == "if" and _workflow_if_false_expression(expression)
+
+
+def _workflow_if_false_expression(expression: str) -> bool:
+    stripped = expression.strip().lower().replace(" ", "")
+    return stripped in {"false", "${{false}}", "${{0}}"}
 
 
 def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]:

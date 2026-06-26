@@ -36,6 +36,11 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
     reviews = payload.get("reviews") or []
     unresolved = payload.get("unresolvedThreads") or []
     unresolved_blocking = [thread for thread in unresolved if _thread_is_p0_p2(thread)]
+    blocking_comments = [
+        comment
+        for comment in payload.get("comments", []) or []
+        if _comment_is_blocking(comment, latest_head_committed_at)
+    ]
     workflow_result = _workflow_result(payload.get("workflowContexts") or [])
     merge_state = payload.get("mergeStateStatus") or ""
     merge_eligible = (
@@ -44,7 +49,13 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         and merge_state not in {"BLOCKED", "DIRTY", "DRAFT", "UNKNOWN"}
     )
     benchmark_result = _benchmark_result(payload)
-    review_result = _review_gate_result(payload, latest_head_sha, latest_head_committed_at, unresolved_blocking)
+    review_result = _review_gate_result(
+        payload,
+        latest_head_sha,
+        latest_head_committed_at,
+        unresolved_blocking,
+        blocking_comments,
+    )
     ready = bool(
         latest_head_sha
         and review_result["review_gate"]
@@ -65,6 +76,7 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         "fallback_quorum_valid": review_result["fallback_quorum_valid"],
         "fallback_quorum_errors": review_result["fallback_quorum_errors"],
         "later_blocking_review_count": review_result["later_blocking_review_count"],
+        "blocking_pr_comment_count": len(blocking_comments),
         "unresolved_p0_count": _count_severity(unresolved_blocking, "P0"),
         "unresolved_p1_count": _count_severity(unresolved_blocking, "P1"),
         "unresolved_p2_count": _count_severity(unresolved_blocking, "P2"),
@@ -92,7 +104,7 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
             "--repo",
             repo,
             "--json",
-            "baseRefOid,commits,reviews,statusCheckRollup,headRefOid,isDraft,mergeStateStatus,state,url",
+            "baseRefOid,commits,comments,reviews,statusCheckRollup,headRefOid,isDraft,mergeStateStatus,state,url",
         ],
         check=True,
         text=True,
@@ -128,6 +140,18 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
                 "body": review.get("body"),
             }
         )
+    comments = []
+    for comment in pr.get("comments") or []:
+        author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+        comments.append(
+            {
+                "createdAt": comment.get("createdAt"),
+                "author": author.get("login") or comment.get("author"),
+                "body": comment.get("body"),
+                "isMinimized": comment.get("isMinimized"),
+                "minimizedReason": comment.get("minimizedReason"),
+            }
+        )
     return {
         "url": pr.get("url"),
         "state": pr.get("state"),
@@ -137,6 +161,7 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
         "headRefOid": pr.get("headRefOid"),
         "latestHeadCommittedAt": latest_commit.get("committedDate"),
         "reviews": reviews,
+        "comments": comments,
         "unresolvedThreads": threads,
         "workflowContexts": contexts,
     }
@@ -272,6 +297,7 @@ def _review_gate_result(
     latest_head_sha: str,
     latest_head_committed_at: str,
     unresolved_blocking: list[dict[str, Any]],
+    blocking_comments: list[dict[str, Any]],
 ) -> dict[str, Any]:
     reviews = payload.get("reviews") or []
     same_head_reviews = [
@@ -298,12 +324,19 @@ def _review_gate_result(
         for review in blocking_reviews
         if latest_clean is None or _dt(review["submittedAt"]) > _dt(latest_clean["submittedAt"])
     ]
-    github_final_review = latest_clean is not None and not later_blocking and not unresolved_blocking
-    github_review_state = _github_review_state(payload, github_final_review, later_blocking, unresolved_blocking)
+    github_final_review = latest_clean is not None and not later_blocking and not unresolved_blocking and not blocking_comments
+    github_review_state = _github_review_state(
+        payload,
+        github_final_review,
+        later_blocking,
+        unresolved_blocking,
+        blocking_comments,
+    )
     fallback_result = _fallback_quorum_result(payload.get("fallbackQuorum"), payload.get("baseRefOid") or "", latest_head_sha)
     fallback_allowed = (
         github_review_state in {GITHUB_REVIEW_STALE, GITHUB_REVIEW_UNAVAILABLE}
         and not unresolved_blocking
+        and not blocking_comments
         and not later_blocking
         and fallback_result["valid"]
     )
@@ -620,8 +653,9 @@ def _github_review_state(
     github_final_review: bool,
     later_blocking: list[dict[str, Any]],
     unresolved_blocking: list[dict[str, Any]],
+    blocking_comments: list[dict[str, Any]],
 ) -> str:
-    if later_blocking or unresolved_blocking:
+    if later_blocking or unresolved_blocking or blocking_comments:
         return GITHUB_REVIEW_BLOCKING
     if github_final_review:
         return GITHUB_REVIEW_CLEAN
@@ -664,6 +698,29 @@ def _latest_review(reviews: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 def _thread_is_p0_p2(thread: dict[str, Any]) -> bool:
     return bool(BLOCKING_RE.search(thread.get("body") or ""))
+
+
+def _comment_is_blocking(comment: dict[str, Any], latest_head_committed_at: str) -> bool:
+    body = comment.get("body") or ""
+    if not _body_has_blocking_finding(body):
+        return False
+    if comment.get("isMinimized"):
+        return False
+    created_at = comment.get("createdAt")
+    if created_at and latest_head_committed_at and _dt(created_at) < _dt(latest_head_committed_at):
+        return False
+    return True
+
+
+def _body_has_blocking_finding(body: str) -> bool:
+    if not BLOCKING_RE.search(body):
+        return False
+    normalized = re.sub(r"\s+", " ", body.lower())
+    if "@codex review" in normalized:
+        return False
+    if "resolved" in normalized and ("p0/p1/p2" in normalized or "p0-p2" in normalized):
+        return False
+    return True
 
 
 def _is_success_context(item: dict[str, Any]) -> bool:

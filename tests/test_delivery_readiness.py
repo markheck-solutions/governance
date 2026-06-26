@@ -183,6 +183,64 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertEqual(result["github_review_state"], "BLOCKING_FINDINGS_PRESENT")
 
+    def test_later_pr_comment_containing_blocking_severity_blocks(self) -> None:
+        sha = "5a" * 20
+        payload = _payload(
+            sha,
+            reviews=[_clean_review(sha)],
+            comments=[
+                {
+                    "body": "P1: benchmark evidence can be bypassed",
+                    "createdAt": "2026-06-25T10:06:00Z",
+                    "author": "chatgpt-codex-connector",
+                }
+            ],
+        )
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["github_review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertEqual(result["blocking_pr_comment_count"], 1)
+
+    def test_status_comment_about_resolved_blocking_threads_does_not_block(self) -> None:
+        sha = "5b" * 20
+        payload = _payload(
+            sha,
+            reviews=[_clean_review(sha)],
+            comments=[
+                {
+                    "body": "All P0/P1/P2 review threads are resolved; please review this latest head.",
+                    "createdAt": "2026-06-25T10:06:00Z",
+                    "author": "markheck-solutions",
+                }
+            ],
+        )
+
+        result = evaluate_readiness(payload)
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["blocking_pr_comment_count"], 0)
+
+    def test_stale_pr_comment_before_latest_head_does_not_block(self) -> None:
+        sha = "5c" * 20
+        payload = _payload(
+            sha,
+            reviews=[_clean_review(sha)],
+            comments=[
+                {
+                    "body": "P2: older head issue",
+                    "createdAt": "2026-06-25T09:59:00Z",
+                    "author": "chatgpt-codex-connector",
+                }
+            ],
+        )
+
+        result = evaluate_readiness(payload)
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["blocking_pr_comment_count"], 0)
+
     def test_green_workflow_but_missing_benchmark_artifact_blocks(self) -> None:
         sha = "6" * 40
         payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=None)
@@ -478,6 +536,7 @@ def _payload(
     workflow_contexts: list[dict] | None = None,
     benchmark_evidence: dict | None = None,
     fallback_quorum: dict | None = None,
+    comments: list[dict] | None = None,
 ) -> dict:
     payload = {
         "state": "OPEN",
@@ -487,6 +546,7 @@ def _payload(
         "headRefOid": head_sha,
         "latestHeadCommittedAt": "2026-06-25T10:00:00Z",
         "reviews": reviews if reviews is not None else [],
+        "comments": comments if comments is not None else [],
         "unresolvedThreads": unresolved_threads if unresolved_threads is not None else [{"body": "nit: wording"}],
         "workflowContexts": workflow_contexts
         if workflow_contexts is not None
