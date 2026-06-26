@@ -43,6 +43,8 @@ def evaluate_target(
     revision_mode: str | None = None,
     target_pr_number: int | None = None,
     require_governance_owned_pack: bool = False,
+    review_gate: str | None = None,
+    github_review_state: str | None = None,
 ) -> dict[str, Any]:
     root = repo_root(Path(__file__).resolve())
     pack = load_target_pack(pack_path, root=root, require_governance_owned=require_governance_owned_pack)
@@ -96,7 +98,15 @@ def evaluate_target(
         delta = structural_delta(base_struct, head_struct, pack)
 
     structural_measurements = _structural_measurement_summary(delta)
-    acceptance_errors, business_ambiguities = _target_acceptance_errors(behavior, delta, pack, setup_results, validation)
+    required_behavior = [item for item in behavior if item["required_behavior_evidence"]]
+    acceptance_errors, business_ambiguities = _target_acceptance_errors(
+        behavior,
+        delta,
+        pack,
+        setup_results,
+        validation,
+        mode,
+    )
     decision = SHADOW_BLOCK_TECHNICAL if acceptance_errors else SHADOW_ASK_BUSINESS if business_ambiguities else SHADOW_MERGE
     result: dict[str, Any] = {
         "schema_version": "1.1",
@@ -117,12 +127,17 @@ def evaluate_target(
         "operating_system": platform.platform(),
         "runner_os": os.environ.get("RUNNER_OS", platform.system()),
         "python_version": platform.python_version(),
+        "review_gate": review_gate or os.environ.get("GOVERNANCE_REVIEW_GATE") or "NOT_APPLICABLE",
+        "github_review_state": github_review_state or os.environ.get("GOVERNANCE_GITHUB_REVIEW_STATE") or "NOT_APPLICABLE",
         "enforcement_mode": NON_BLOCKING,
         "real_target_shadow_decision": decision,
         "acceptance_errors": acceptance_errors,
         "business_ambiguities": business_ambiguities,
+        "applicable_behavior_case_count": len(required_behavior),
         "case_counts": {
             "behavior_case_count": len(behavior),
+            "required_behavior_case_count": len(required_behavior),
+            "advisory_behavior_case_count": len(behavior) - len(required_behavior),
             "behavior_cases_passed": sum(1 for item in behavior if item["status"] == "PASS"),
             "behavior_cases_failed": sum(1 for item in behavior if item["status"] == "FAIL"),
             "behavior_cases_business_ambiguous": sum(1 for item in behavior if item["status"] == "BUSINESS_AMBIGUITY"),
@@ -317,6 +332,10 @@ def _case_applies(case: dict[str, Any], revision_mode: str) -> bool:
     return not modes or revision_mode in set(modes)
 
 
+def _case_requires_behavior_evidence(case: dict[str, Any]) -> bool:
+    return bool(case.get("required_behavior_evidence", case.get("required", True)))
+
+
 def _run_behavior_case(
     root: Path,
     pack: dict[str, Any],
@@ -338,6 +357,7 @@ def _run_behavior_case(
     return {
         "case_id": case["id"],
         "status": status,
+        "required_behavior_evidence": _case_requires_behavior_evidence(case),
         "behavior_comparison_policy": policy,
         "provenance_classification": case["provenance_classification"],
         "classification_reason": case.get("classification_reason", ""),
@@ -552,9 +572,13 @@ def _target_acceptance_errors(
     pack: dict[str, Any],
     setup_results: dict[str, list[dict[str, Any]]],
     revision_validation: dict[str, Any],
+    revision_mode: str,
 ) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     business: list[str] = []
+    required_behavior = [item for item in behavior if item.get("required_behavior_evidence", True)]
+    if not required_behavior:
+        errors.append(f"no applicable behavior cases for revision mode {revision_mode}")
     if revision_validation.get("status") != "PASS":
         errors.append("revision validation failed")
     if not revision_validation.get("base_commit_exists") or not revision_validation.get("head_commit_exists"):
@@ -567,6 +591,8 @@ def _target_acceptance_errors(
             if result["exit_code"] != 0:
                 errors.append(f"{side} setup failed: {result['command']}")
     for item in behavior:
+        if not item.get("required_behavior_evidence", True):
+            continue
         if item["provenance_classification"] == "FIXTURE_ONLY":
             errors.append(f"{item['case_id']}: FIXTURE_ONLY provenance not accepted for required behavior")
         if item["source_hash_validation"] != "PASS":

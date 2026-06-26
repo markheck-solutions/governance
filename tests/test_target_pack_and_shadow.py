@@ -108,11 +108,71 @@ class TargetPackAndShadowTests(unittest.TestCase):
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_MERGE)
         self.assertEqual(result["enforcement_mode"], NON_BLOCKING)
         self.assertEqual(result["case_counts"]["behavior_cases_passed"], 1)
+        self.assertEqual(result["applicable_behavior_case_count"], 1)
+        self.assertEqual(result["case_counts"]["required_behavior_case_count"], 1)
         self.assertEqual(result["behavior_results"][0]["provenance_classification"], "EXECUTES_PINNED_TARGET_CODE")
         self.assertEqual(result["revision_mode"], "HISTORICAL_FIXED")
+        self.assertEqual(result["review_gate"], "NOT_APPLICABLE")
+        self.assertEqual(result["github_review_state"], "NOT_APPLICABLE")
         self.assertRegex(result["artifact_content_hash"], r"^[0-9a-f]{64}$")
         self.assertRegex(result["deterministic_evidence_hash"], r"^[0-9a-f]{64}$")
         self.assertEqual(result["deterministic_evidence_hash"], repeated["deterministic_evidence_hash"])
+
+    def test_candidate_dynamic_with_all_behavior_cases_filtered_out_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = _make_synthetic_repo(Path(tmp), evasion=False)
+            pack_path = _pack_copy(
+                self.root / "target_packs/synthetic_clean/v1/pack.json",
+                Path(tmp) / "pack.json",
+                target,
+            )
+            data = _mutable_pack(pack_path)
+            data["behavior_cases"][0]["revision_modes"] = ["HISTORICAL_FIXED"]
+            pack_path.write_text(json.dumps(data), encoding="utf-8")
+            result = evaluate_target(pack_path, target["base"], target["head"], revision_mode="CANDIDATE_DYNAMIC")
+
+        self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
+        self.assertEqual(result["applicable_behavior_case_count"], 0)
+        self.assertTrue(
+            any("no applicable behavior cases for revision mode CANDIDATE_DYNAMIC" in error for error in result["acceptance_errors"])
+        )
+
+    def test_historical_fixed_with_all_behavior_cases_filtered_out_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = _make_synthetic_repo(Path(tmp), evasion=False)
+            pack_path = _pack_copy(
+                self.root / "target_packs/synthetic_clean/v1/pack.json",
+                Path(tmp) / "pack.json",
+                target,
+            )
+            data = _mutable_pack(pack_path)
+            data["behavior_cases"][0]["revision_modes"] = ["CANDIDATE_DYNAMIC"]
+            pack_path.write_text(json.dumps(data), encoding="utf-8")
+            result = evaluate_target(pack_path, target["base"], target["head"], revision_mode="HISTORICAL_FIXED")
+
+        self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
+        self.assertEqual(result["applicable_behavior_case_count"], 0)
+        self.assertTrue(
+            any("no applicable behavior cases for revision mode HISTORICAL_FIXED" in error for error in result["acceptance_errors"])
+        )
+
+    def test_advisory_behavior_cases_do_not_satisfy_required_behavior_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = _make_synthetic_repo(Path(tmp), evasion=False)
+            pack_path = _pack_copy(
+                self.root / "target_packs/synthetic_clean/v1/pack.json",
+                Path(tmp) / "pack.json",
+                target,
+            )
+            data = _mutable_pack(pack_path)
+            data["behavior_cases"][0]["required_behavior_evidence"] = False
+            pack_path.write_text(json.dumps(data), encoding="utf-8")
+            result = evaluate_target(pack_path, target["base"], target["head"], revision_mode="CANDIDATE_DYNAMIC")
+
+        self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
+        self.assertEqual(result["applicable_behavior_case_count"], 0)
+        self.assertEqual(result["case_counts"]["advisory_behavior_case_count"], 1)
+        self.assertTrue(any("no applicable behavior cases" in error for error in result["acceptance_errors"]))
 
     def test_required_unknown_structural_detector_blocks_and_advisory_unknown_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,6 +267,7 @@ class TargetPackAndShadowTests(unittest.TestCase):
                 mock.patch("governance_eval.target_eval._run_behavior_case", return_value={
                     "case_id": "mock",
                     "status": "PASS",
+                    "required_behavior_evidence": True,
                     "behavior_comparison_policy": "PRESERVE_BASE_BEHAVIOR",
                     "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
                     "classification_reason": "",

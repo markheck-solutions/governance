@@ -96,6 +96,7 @@
             "enum": ["EXECUTES_PINNED_TARGET_CODE", "EXECUTES_EXTRACTED_REPRODUCER", "FIXTURE_ONLY"]
           },
           "classification_reason": { "type": "string" },
+          "required_behavior_evidence": { "type": "boolean" },
           "reproducer": { "type": "string", "minLength": 1 },
           "timeout_seconds": { "type": "integer", "minimum": 1 },
           "source_files": { "type": "array", "items": { "type": "string" } },

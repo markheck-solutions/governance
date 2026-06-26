@@ -19,10 +19,13 @@
     "operating_system",
     "runner_os",
     "python_version",
+    "review_gate",
+    "github_review_state",
     "enforcement_mode",
     "real_target_shadow_decision",
     "acceptance_errors",
     "business_ambiguities",
+    "applicable_behavior_case_count",
     "case_counts",
     "setup_results",
     "behavior_results",
@@ -68,6 +71,14 @@
     "operating_system": { "type": "string" },
     "runner_os": { "type": "string" },
     "python_version": { "type": "string" },
+    "review_gate": {
+      "type": "string",
+      "enum": ["GITHUB_CODEX_FINAL_REVIEW", "FALLBACK_CLEAN_ROOM_QUORUM", "NOT_APPLICABLE"]
+    },
+    "github_review_state": {
+      "type": "string",
+      "enum": ["CLEAN", "STALE", "UNAVAILABLE", "BLOCKING_FINDINGS_PRESENT", "NOT_APPLICABLE"]
+    },
     "enforcement_mode": { "type": "string", "enum": ["NON_BLOCKING"] },
     "real_target_shadow_decision": {
       "type": "string",
@@ -75,16 +86,21 @@
     },
     "acceptance_errors": { "type": "array", "items": { "type": "string" } },
     "business_ambiguities": { "type": "array", "items": { "type": "string" } },
+    "applicable_behavior_case_count": { "type": "integer", "minimum": 0 },
     "case_counts": {
       "type": "object",
       "required": [
         "behavior_case_count",
+        "required_behavior_case_count",
+        "advisory_behavior_case_count",
         "behavior_cases_passed",
         "behavior_cases_failed",
         "behavior_cases_business_ambiguous"
       ],
       "properties": {
         "behavior_case_count": { "type": "integer", "minimum": 0 },
+        "required_behavior_case_count": { "type": "integer", "minimum": 0 },
+        "advisory_behavior_case_count": { "type": "integer", "minimum": 0 },
         "behavior_cases_passed": { "type": "integer", "minimum": 0 },
         "behavior_cases_failed": { "type": "integer", "minimum": 0 },
         "behavior_cases_business_ambiguous": { "type": "integer", "minimum": 0 }
@@ -98,6 +114,7 @@
         "required": [
           "case_id",
           "status",
+          "required_behavior_evidence",
           "behavior_comparison_policy",
           "provenance_classification",
           "target_repository_url",
@@ -116,6 +133,7 @@
         "properties": {
           "case_id": { "type": "string" },
           "status": { "type": "string", "enum": ["PASS", "FAIL", "BUSINESS_AMBIGUITY"] },
+          "required_behavior_evidence": { "type": "boolean" },
           "behavior_comparison_policy": {
             "type": "string",
             "enum": ["PINNED_EXPECTED", "PRESERVE_BASE_BEHAVIOR", "BUSINESS_REVIEW_ON_CHANGE"]

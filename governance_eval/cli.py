@@ -52,6 +52,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     target_parser.add_argument("--target-pr-number", type=int, default=None)
     target_parser.add_argument("--governance-owned-pack", action="store_true")
+    target_parser.add_argument(
+        "--review-gate",
+        choices=["GITHUB_CODEX_FINAL_REVIEW", "FALLBACK_CLEAN_ROOM_QUORUM", "NOT_APPLICABLE"],
+        default=None,
+    )
+    target_parser.add_argument(
+        "--github-review-state",
+        choices=["CLEAN", "STALE", "UNAVAILABLE", "BLOCKING_FINDINGS_PRESENT", "NOT_APPLICABLE"],
+        default=None,
+    )
     target_parser.add_argument("--artifacts-dir", type=Path, default=Path("artifacts/target"))
 
     validate_target_parser = subparsers.add_parser("validate-target-request", help="validate target pack and revision inputs")
@@ -70,6 +80,10 @@ def main(argv: list[str] | None = None) -> int:
     delivery_parser.add_argument("--repo", required=True)
     delivery_parser.add_argument("--pr", required=True, type=int)
     delivery_parser.add_argument("--payload", default=None)
+    delivery_parser.add_argument("--benchmark-artifact", default=None)
+    delivery_parser.add_argument("--benchmark-artifact-digest", default=None)
+    delivery_parser.add_argument("--require-github-artifact-digest", action="store_true")
+    delivery_parser.add_argument("--fallback-quorum", default=None)
 
     args = parser.parse_args(argv)
     root = repo_root(getattr(args, "root", None))
@@ -97,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
             args.revision_mode,
             args.target_pr_number,
             args.governance_owned_pack,
+            args.review_gate,
+            args.github_review_state,
         )
         print(json.dumps(_target_summary(result), indent=2, sort_keys=True))
         return 0
@@ -116,6 +132,14 @@ def main(argv: list[str] | None = None) -> int:
         delivery_args = ["--repo", args.repo, "--pr", str(args.pr)]
         if args.payload:
             delivery_args.extend(["--payload", args.payload])
+        if args.benchmark_artifact:
+            delivery_args.extend(["--benchmark-artifact", args.benchmark_artifact])
+        if args.benchmark_artifact_digest:
+            delivery_args.extend(["--benchmark-artifact-digest", args.benchmark_artifact_digest])
+        if args.require_github_artifact_digest:
+            delivery_args.append("--require-github-artifact-digest")
+        if args.fallback_quorum:
+            delivery_args.extend(["--fallback-quorum", args.fallback_quorum])
         return delivery_readiness_main(delivery_args)
     raise AssertionError(args.command)
 
@@ -158,6 +182,8 @@ def _target_summary(result: dict) -> dict:
         "acceptance_errors": result["acceptance_errors"],
         "case_counts": result["case_counts"],
         "revision_mode": result["revision_mode"],
+        "review_gate": result["review_gate"],
+        "github_review_state": result["github_review_state"],
         "target_pr_number": result["target_pr_number"],
         "unknown_required_measurements": result["structural_measurements"]["unknown_required_count"],
         "unknown_advisory_measurements": result["structural_measurements"]["unknown_advisory_count"],

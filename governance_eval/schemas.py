@@ -16,6 +16,7 @@ SCHEMA_FILES = {
     "final_decision": "final_decision.schema.json",
     "target_pack": "target_pack.schema.json",
     "target_evaluation_result": "target_evaluation_result.schema.json",
+    "review_quorum": "review_quorum.schema.json",
 }
 
 
