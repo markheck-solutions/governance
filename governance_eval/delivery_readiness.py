@@ -56,107 +56,36 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
 
 def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
     owner, name = repo.split("/", 1)
-    query = """
-    query($owner: String!, $name: String!, $number: Int!) {
-      repository(owner: $owner, name: $name) {
-        pullRequest(number: $number) {
-          url
-          state
-          isDraft
-          mergeStateStatus
-          headRefOid
-          commits(last: 1) {
-            nodes {
-              commit {
-                oid
-                committedDate
-              }
-            }
-          }
-          reviews(last: 50) {
-            nodes {
-              state
-              submittedAt
-              body
-              commit {
-                oid
-              }
-              author {
-                login
-              }
-            }
-          }
-          reviewThreads(first: 100) {
-            nodes {
-              isResolved
-              path
-              line
-              comments(first: 20) {
-                nodes {
-                  body
-                  createdAt
-                  url
-                }
-              }
-            }
-          }
-          statusCheckRollup {
-            contexts(first: 100) {
-              nodes {
-                __typename
-                ... on CheckRun {
-                  name
-                  status
-                  conclusion
-                  detailsUrl
-                  workflowName
-                }
-                ... on StatusContext {
-                  context
-                  state
-                  targetUrl
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    """
     completed = subprocess.run(
         [
             "gh",
-            "api",
-            "graphql",
-            "-f",
-            f"owner={owner}",
-            "-f",
-            f"name={name}",
-            "-F",
-            f"number={pr_number}",
-            "-f",
-            f"query={query}",
+            "pr",
+            "view",
+            str(pr_number),
+            "--repo",
+            repo,
+            "--json",
+            "commits,reviews,statusCheckRollup,headRefOid,isDraft,mergeStateStatus,state,url",
         ],
         check=True,
         text=True,
         capture_output=True,
     )
-    pr = json.loads(completed.stdout)["data"]["repository"]["pullRequest"]
-    latest_commit = (pr.get("commits", {}).get("nodes") or [{}])[-1].get("commit") or {}
-    threads = []
-    for thread in pr.get("reviewThreads", {}).get("nodes") or []:
-        if thread.get("isResolved"):
-            continue
-        bodies = [comment.get("body", "") for comment in thread.get("comments", {}).get("nodes") or []]
-        threads.append(
-            {
-                "path": thread.get("path"),
-                "line": thread.get("line"),
-                "body": "\n".join(bodies),
-            }
-        )
+    pr = json.loads(completed.stdout)
+    latest_commit = (pr.get("commits") or [{}])[-1]
+    comments_completed = subprocess.run(
+        ["gh", "api", f"repos/{owner}/{name}/pulls/{pr_number}/comments"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    comments = json.loads(comments_completed.stdout)
+    threads = [
+        {"path": comment.get("path"), "line": comment.get("line"), "body": comment.get("body", "")}
+        for comment in comments
+    ]
     contexts = []
-    for node in (pr.get("statusCheckRollup", {}) or {}).get("contexts", {}).get("nodes") or []:
+    for node in pr.get("statusCheckRollup") or []:
         contexts.append(
             {
                 "name": node.get("name") or node.get("context"),
@@ -168,13 +97,15 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
             }
         )
     reviews = []
-    for review in pr.get("reviews", {}).get("nodes") or []:
+    for review in pr.get("reviews") or []:
+        commit = review.get("commit") if isinstance(review.get("commit"), dict) else {}
+        author = review.get("author") if isinstance(review.get("author"), dict) else {}
         reviews.append(
             {
                 "state": review.get("state"),
                 "submittedAt": review.get("submittedAt"),
-                "commitOid": (review.get("commit") or {}).get("oid"),
-                "author": (review.get("author") or {}).get("login"),
+                "commitOid": review.get("commitOid") or commit.get("oid"),
+                "author": author.get("login") or review.get("author"),
                 "body": review.get("body"),
             }
         )
