@@ -31,6 +31,8 @@ def scan_structural_metrics(
     fanout_threshold = _threshold(pack, "module_dependency_fanout", "max_imports")
     size_lines = _threshold(pack, "production_module_size_function_count", "max_lines")
     size_functions = _threshold(pack, "production_module_size_function_count", "max_functions")
+    typed_size_lines = _threshold(pack, "large_typed_god_modules", "max_lines")
+    typed_size_functions = _threshold(pack, "large_typed_god_modules", "max_functions")
     complexity_threshold = _threshold(pack, "touched_function_complexity", "max_complexity")
     module_sizes = _module_sizes(prod_files, root)
     fanout = {module: len(imports) for module, imports in graph.items()}
@@ -58,7 +60,9 @@ def scan_structural_metrics(
         "large_typed_god_modules": sorted(
             path
             for path, data in module_sizes.items()
-            if data["lines"] > size_lines and data["function_count"] > size_functions and data["has_typing"]
+            if data["lines"] > typed_size_lines
+            and data["function_count"] > typed_size_functions
+            and data["has_typing"]
         ),
         "touched_function_complexity": _complexity(prod_files, root, changed_files or set(), complexity_threshold),
         "gate_scope_or_threshold_weakening": _gate_config(root, pack),

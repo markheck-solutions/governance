@@ -17,6 +17,7 @@ from governance_eval.target_eval import (
     SHADOW_BLOCK_TECHNICAL,
     SHADOW_MERGE,
     evaluate_target,
+    _parse_github_repository,
 )
 from governance_eval.target_pack import load_target_pack, validate_target_request
 
@@ -78,6 +79,16 @@ class TargetPackAndShadowTests(unittest.TestCase):
             base_sha: {"files": {}, "symbols": {}},
             head_sha: {"files": {}, "symbols": {}},
         }
+        with tempfile.TemporaryDirectory() as tmp:
+            pack_path = Path(tmp) / "pack.json"
+            pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            with self.assertRaises(SchemaValidationError):
+                load_target_pack(pack_path)
+
+    def test_partial_comparison_policy_defaults_still_require_pinned_expected_result(self) -> None:
+        pack = _mutable_pack(self.root / "target_packs/synthetic_clean/v1/pack.json")
+        del pack["behavior_cases"][0]["expected_base_result"]
+        pack["behavior_cases"][0]["comparison_policies"] = {"CANDIDATE_DYNAMIC": "PRESERVE_BASE_BEHAVIOR"}
         with tempfile.TemporaryDirectory() as tmp:
             pack_path = Path(tmp) / "pack.json"
             pack_path.write_text(json.dumps(pack), encoding="utf-8")
@@ -237,6 +248,12 @@ class TargetPackAndShadowTests(unittest.TestCase):
 
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
         self.assertTrue(any("candidate pull request validation failed" in error for error in result["acceptance_errors"]))
+
+    def test_github_repository_parser_accepts_dotted_repository_names(self) -> None:
+        self.assertEqual(
+            _parse_github_repository("https://github.com/example/repo.name.git"),
+            ("example", "repo.name"),
+        )
 
     def test_historical_pair_requires_merge_sha(self) -> None:
         pack_path = self.root / "target_packs/spaghetti/v1/pack.json"

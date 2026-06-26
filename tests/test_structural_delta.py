@@ -171,6 +171,34 @@ files = ["src", "tests"]
         self.assertEqual(metric["status"], "MEASURED")
         self.assertEqual(metric["introduced"], ["src/demo/api.py:_helper->helper"])
 
+    def test_large_typed_module_uses_large_typed_threshold_policy(self) -> None:
+        pack = _pack()
+        pack["structural_detectors"].append("large_typed_god_modules")
+        pack["detector_policies"]["large_typed_god_modules"] = {
+            "required": True,
+            "blocking": True,
+            "fail_on_unknown": True,
+            "thresholds": {"max_lines": 5, "max_functions": 1},
+        }
+        pack["detector_policies"]["production_module_size_function_count"] = {
+            "required": True,
+            "blocking": True,
+            "fail_on_unknown": True,
+            "thresholds": {"max_lines": 1000, "max_functions": 1000},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(
+                root / "src/demo/typed.py",
+                "from typing import TypedDict\n\nclass Row(TypedDict):\n    value: int\n\n"
+                "def one():\n    return 1\n\n"
+                "def two():\n    return 2\n",
+            )
+
+            metrics = scan_structural_metrics(root, pack=pack)
+
+        self.assertEqual(metrics["large_typed_god_modules"], ["src/demo/typed.py"])
+
     def test_clean_equivalent_gate_change_is_not_blocked(self) -> None:
         pack = _pack()
         text = """

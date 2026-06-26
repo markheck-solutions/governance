@@ -95,10 +95,11 @@ def _validate_behavior_cases(pack: dict[str, Any], root: Path) -> None:
 
 
 def _case_policies(case: dict[str, Any]) -> dict[str, str]:
+    default = case.get("behavior_comparison_policy", "PINNED_EXPECTED")
     if isinstance(case.get("comparison_policies"), dict):
-        return dict(case["comparison_policies"])
-    policy = case.get("behavior_comparison_policy", "PINNED_EXPECTED")
-    return {mode: policy for mode in ("HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC")}
+        explicit = dict(case["comparison_policies"])
+        return {mode: explicit.get(mode, default) for mode in ("HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC")}
+    return {mode: default for mode in ("HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC")}
 
 
 def _validate_historical_hash_expectations(pack: dict[str, Any], case: dict[str, Any]) -> None:

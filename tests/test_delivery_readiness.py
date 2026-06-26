@@ -43,6 +43,30 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertEqual(len(result["failed_workflow_contexts"]), 1)
         self.assertIsNone(result["final_review_timestamp"])
 
+    def test_change_request_review_is_not_final_clean_review(self) -> None:
+        payload = {
+            "state": "OPEN",
+            "isDraft": False,
+            "mergeStateStatus": "CLEAN",
+            "headRefOid": "c" * 40,
+            "latestHeadCommittedAt": "2026-06-25T10:00:00Z",
+            "reviews": [
+                {
+                    "state": "CHANGES_REQUESTED",
+                    "submittedAt": "2026-06-25T10:05:00Z",
+                    "commitOid": "c" * 40,
+                    "body": "Please fix this.",
+                }
+            ],
+            "unresolvedThreads": [],
+            "workflowContexts": [{"name": "tests", "conclusion": "SUCCESS"}],
+        }
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertIsNone(result["final_review_timestamp"])
+
 
 if __name__ == "__main__":
     unittest.main()

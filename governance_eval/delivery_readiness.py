@@ -23,6 +23,8 @@ def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
         if review.get("submittedAt")
         and review.get("commitOid") == latest_head_sha
         and _dt(review["submittedAt"]) >= _dt(latest_head_committed_at)
+        and review.get("state") not in {"CHANGES_REQUESTED", "DISMISSED"}
+        and not BLOCKING_RE.search(review.get("body") or "")
     ]
     unresolved = payload.get("unresolvedThreads") or []
     unresolved_blocking = [thread for thread in unresolved if _thread_is_p0_p2(thread)]
@@ -69,6 +71,8 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
         ],
         check=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
     )
     pr = json.loads(completed.stdout)
@@ -77,6 +81,8 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
         ["gh", "api", f"repos/{owner}/{name}/pulls/{pr_number}/comments"],
         check=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
     )
     comments = json.loads(comments_completed.stdout)

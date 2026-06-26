@@ -281,7 +281,7 @@ def _candidate_pull_request_validation(
 
 
 def _parse_github_repository(repository_url: str) -> tuple[str, str] | None:
-    match = re.search(r"github\.com[:/]([^/]+)/([^/.]+)(?:\.git)?/?$", repository_url)
+    match = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$", repository_url)
     if not match:
         return None
     return match.group(1), match.group(2)
