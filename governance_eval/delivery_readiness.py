@@ -903,13 +903,25 @@ def _body_has_blocking_finding(body: str) -> bool:
     if not BLOCKING_RE.search(body):
         return False
     normalized = re.sub(r"\s+", " ", body.lower())
-    if "@codex review" in normalized:
+    if _is_pure_codex_review_trigger(normalized):
         return False
     if re.search(r"\bunresolved\b", normalized):
         return True
     if re.search(r"\bresolved\b", normalized) and ("p0/p1/p2" in normalized or "p0-p2" in normalized):
         return False
     return True
+
+
+def _is_pure_codex_review_trigger(normalized_body: str) -> bool:
+    stripped = normalized_body.strip().strip(".")
+    if not stripped.startswith("@codex review"):
+        return False
+    allowed_prefixes = (
+        "@codex review",
+        "@codex review final head",
+        "@codex review final verification requested",
+    )
+    return any(stripped.startswith(prefix) for prefix in allowed_prefixes) and not BLOCKING_RE.search(stripped)
 
 
 def _is_success_context(item: dict[str, Any]) -> bool:

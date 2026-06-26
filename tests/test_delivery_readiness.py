@@ -265,6 +265,26 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertEqual(result["github_review_state"], "BLOCKING_FINDINGS_PRESENT")
         self.assertEqual(result["blocking_pr_comment_count"], 1)
 
+    def test_codex_review_trigger_comment_with_blocking_finding_blocks(self) -> None:
+        sha = "5e" * 20
+        payload = _payload(
+            sha,
+            reviews=[_clean_review(sha)],
+            comments=[
+                {
+                    "body": "@codex review\n\nP1: benchmark artifact can be forged",
+                    "createdAt": "2026-06-25T10:06:00Z",
+                    "author": "chatgpt-codex-connector",
+                }
+            ],
+        )
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["github_review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertEqual(result["blocking_pr_comment_count"], 1)
+
     def test_stale_pr_comment_before_latest_head_does_not_block(self) -> None:
         sha = "5c" * 20
         payload = _payload(
