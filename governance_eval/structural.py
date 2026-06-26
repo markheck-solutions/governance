@@ -718,8 +718,9 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
     introduced |= _added_items("workflow.continue-on-error", before_wf.get("continue_on_error"), after_wf.get("continue_on_error"))
     introduced |= _workflow_paths_narrowing(before_wf.get("paths"), after_wf.get("paths"))
     introduced |= _added_items("workflow.paths-ignore", before_wf.get("paths_ignore"), after_wf.get("paths_ignore"))
-    executable_commands = _workflow_command_text(after_wf)
-    gate_target_text = "\n".join([executable_commands, _pyproject_gate_target_text(after_py)])
+    executable_commands = _workflow_command_lines(after_wf)
+    executable_command_text = "\n".join(executable_commands)
+    gate_target_text = "\n".join([executable_command_text, _pyproject_gate_target_text(after_py)])
     for command in head.get("required_commands") or []:
         if command and command not in executable_commands:
             introduced.add(f"required_command_missing:{command}")
@@ -741,12 +742,16 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
 
 
 def _workflow_command_text(workflows: dict[str, Any]) -> str:
+    return "\n".join(_workflow_command_lines(workflows))
+
+
+def _workflow_command_lines(workflows: dict[str, Any]) -> list[str]:
     commands: list[str] = []
     for item in sorted(workflows.get("run_commands") or []):
         parts = str(item).split(":", 2)
         text = parts[2] if len(parts) == 3 else str(item)
         commands.extend(_workflow_executable_lines(text))
-    return "\n".join(commands)
+    return commands
 
 
 def _workflow_executable_lines(text: str) -> list[str]:
@@ -754,6 +759,9 @@ def _workflow_executable_lines(text: str) -> list[str]:
     for line in text.splitlines() or [text]:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
+            continue
+        stripped = stripped.split("#", 1)[0].strip()
+        if not stripped:
             continue
         first = stripped.split(maxsplit=1)[0].lower()
         if first in {"echo", "printf"}:

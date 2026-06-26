@@ -323,6 +323,46 @@ files = ["src", "tests"]
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
 
+    def test_required_command_with_or_true_does_not_satisfy_gate_contract(self) -> None:
+        pack = _pack()
+        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["governed_roots"] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            head = root / "head"
+            workflow = "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n"
+            _write(base / ".github/workflows/validation.yml", workflow)
+            _write(
+                head / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests || true\n",
+            )
+
+            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+
+    def test_required_command_in_false_shell_branch_does_not_satisfy_gate_contract(self) -> None:
+        pack = _pack()
+        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["governed_roots"] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            head = root / "head"
+            workflow = "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n"
+            _write(base / ".github/workflows/validation.yml", workflow)
+            _write(
+                head / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: if false; then python -m mypy src scripts tests; fi\n",
+            )
+
+            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+
     def test_publicized_private_helper_rename_is_measured(self) -> None:
         pack = _pack()
         with tempfile.TemporaryDirectory() as tmp:
