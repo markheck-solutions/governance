@@ -283,6 +283,27 @@ files = ["src", "tests"]
         self.assertTrue(any("workflow.paths_removed:validation.yml:src/**" in item for item in introduced))
         self.assertTrue(any("workflow.paths_removed:validation.yml:tests/**" in item for item in introduced))
 
+    def test_commented_workflow_paths_do_not_hide_path_narrowing(self) -> None:
+        pack = _pack()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            head = root / "head"
+            _write(
+                base / ".github/workflows/validation.yml",
+                "on:\n  pull_request:\n    paths:\n      - 'src/**'\n      - 'tests/**'\njobs:\n  test:\n    steps:\n      - name: Tests\n",
+            )
+            _write(
+                head / ".github/workflows/validation.yml",
+                "on:\n  pull_request:\n    # paths: ['src/**', 'tests/**']\n    paths: ['docs/**']\njobs:\n  test:\n    steps:\n      - name: Tests\n",
+            )
+
+            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertTrue(any("workflow.paths_removed:validation.yml:src/**" in item for item in introduced))
+        self.assertTrue(any("workflow.paths_removed:validation.yml:tests/**" in item for item in introduced))
+
     def test_publicized_private_helper_rename_is_measured(self) -> None:
         pack = _pack()
         with tempfile.TemporaryDirectory() as tmp:

@@ -88,11 +88,13 @@ def main(argv: list[str] | None = None) -> int:
     delivery_parser.add_argument("--benchmark-artifact-name", default="governance-benchmark-json")
     delivery_parser.add_argument("--require-github-artifact-digest", action="store_true")
     delivery_parser.add_argument("--fallback-quorum", default=None)
+    delivery_parser.add_argument("--trusted-reviewer-agent", action="append", default=[])
 
     quorum_parser = subparsers.add_parser("validate-review-quorum", help="validate fallback review quorum JSON")
     quorum_parser.add_argument("--path", type=Path, required=True)
     quorum_parser.add_argument("--head-sha", required=True)
     quorum_parser.add_argument("--base-sha", default="")
+    quorum_parser.add_argument("--trusted-reviewer-agent", action="append", default=[])
 
     args = parser.parse_args(argv)
     root = repo_root(getattr(args, "root", None))
@@ -104,11 +106,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run-case":
         return _run_case(args.case_id, root)
     if args.command == "benchmark":
-        result = run_benchmark(root=root, repeat=args.repeat, artifacts_dir=root / args.artifacts_dir)
+        artifacts_dir = root / args.artifacts_dir
+        result = run_benchmark(
+            root=root,
+            repeat=args.repeat,
+            artifacts_dir=artifacts_dir,
+            exact_commands=[_artifact_command("benchmark", args.repeat, args.artifacts_dir)],
+        )
         print(json.dumps(_summary(result), indent=2, sort_keys=True))
         return 0 if result["phase1_decision"] == BENCHMARK_PASS else 1
     if args.command == "verify":
-        return _verify(root, args.repeat, root / args.artifacts_dir)
+        return _verify(root, args.repeat, root / args.artifacts_dir, args.artifacts_dir)
     if args.command == "evaluate-target":
         result = evaluate_target(
             root / args.pack if not args.pack.is_absolute() else args.pack,
@@ -155,11 +163,13 @@ def main(argv: list[str] | None = None) -> int:
             delivery_args.append("--require-github-artifact-digest")
         if args.fallback_quorum:
             delivery_args.extend(["--fallback-quorum", args.fallback_quorum])
+        for agent_id in args.trusted_reviewer_agent:
+            delivery_args.extend(["--trusted-reviewer-agent", agent_id])
         return delivery_readiness_main(delivery_args)
     if args.command == "validate-review-quorum":
         path = root / args.path if not args.path.is_absolute() else args.path
         quorum = json.loads(path.read_text(encoding="utf-8"))
-        errors = validate_review_quorum_document(quorum, args.head_sha, args.base_sha)
+        errors = validate_review_quorum_document(quorum, args.head_sha, args.base_sha, args.trusted_reviewer_agent)
         print(json.dumps({"valid": not errors, "errors": errors}, indent=2, sort_keys=True))
         return 0 if not errors else 1
     raise AssertionError(args.command)
@@ -177,14 +187,27 @@ def _run_case(case_id: str, root: Path) -> int:
     return 0 if decision.decision.value == case["expected_decision"] else 1
 
 
-def _verify(root: Path, repeat: int, artifacts_dir: Path) -> int:
+def _verify(root: Path, repeat: int, artifacts_dir: Path, command_artifacts_dir: Path) -> int:
     test_command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
     tests = subprocess.run(test_command, cwd=root)
     if tests.returncode != 0:
         return tests.returncode
-    result = run_benchmark(root=root, repeat=repeat, artifacts_dir=artifacts_dir)
+    result = run_benchmark(
+        root=root,
+        repeat=repeat,
+        artifacts_dir=artifacts_dir,
+        exact_commands=[_artifact_command("verify", repeat, command_artifacts_dir)],
+    )
     print(json.dumps(_summary(result), indent=2, sort_keys=True))
     return 0 if result["phase1_decision"] == BENCHMARK_PASS else 1
+
+
+def _artifact_command(command: str, repeat: int, artifacts_dir: Path) -> str:
+    parts = ["python -m governance_eval", command]
+    if repeat != 3:
+        parts.extend(["--repeat", str(repeat)])
+    parts.extend(["--artifacts-dir", artifacts_dir.as_posix()])
+    return " ".join(parts)
 
 
 def _summary(result: dict) -> dict:

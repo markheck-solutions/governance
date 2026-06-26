@@ -11,6 +11,10 @@ on:
         description: Optional fallback review quorum JSON to upload with this run.
         required: false
         type: string
+      trusted-reviewer-agents:
+        description: Comma-separated trusted fallback reviewer agent IDs.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -85,7 +89,21 @@ jobs:
         id: validate_quorum
         if: always() && github.event_name == 'workflow_dispatch' && inputs.review-quorum-json != ''
         shell: bash
-        run: python -m governance_eval validate-review-quorum --path artifacts/review-quorum/review-quorum.json --head-sha "$GITHUB_SHA"
+        env:
+          TRUSTED_REVIEWER_AGENTS: ${{ inputs.trusted-reviewer-agents }}
+        run: |
+          args=()
+          IFS=',' read -ra agents <<< "$TRUSTED_REVIEWER_AGENTS"
+          for agent in "${agents[@]}"; do
+            agent="$(echo "$agent" | xargs)"
+            if [ -n "$agent" ]; then
+              args+=(--trusted-reviewer-agent "$agent")
+            fi
+          done
+          python -m governance_eval validate-review-quorum \
+            --path artifacts/review-quorum/review-quorum.json \
+            --head-sha "$GITHUB_SHA" \
+            "${args[@]}"
       - name: Upload fallback review quorum JSON
         id: upload_quorum
         if: success() && steps.validate_quorum.conclusion == 'success' && hashFiles('artifacts/review-quorum/*.json') != ''

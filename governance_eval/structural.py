@@ -531,7 +531,8 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
                 run_commands.add(f"{file.name}:{current_job}:{run_command}")
             if "continue-on-error:" in line and "true" in line.lower():
                 continue_on_error.add(f"{file.name}:{current_job}")
-            match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", line)
+            semantic_line = _workflow_semantic_line(line)
+            match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", semantic_line)
             if match:
                 key = match.group(1)
                 values = _workflow_path_values(lines, index, match.group(2))
@@ -647,10 +648,19 @@ def _workflow_if_false_expression(expression: str) -> bool:
     return stripped in {"false", "${{false}}", "${{0}}"}
 
 
+def _workflow_semantic_line(line: str) -> str:
+    stripped = line.lstrip()
+    if stripped.startswith("#"):
+        return ""
+    return line.split("#", 1)[0].rstrip()
+
+
 def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]:
     values: set[str] = set()
     if inline.strip():
-        text = inline.strip()
+        text = inline.split("#", 1)[0].strip()
+        if not text:
+            return values
         if text.startswith("[") and text.endswith("]"):
             for item in text.strip("[]").split(","):
                 cleaned = item.strip().strip("'\"")
@@ -662,7 +672,9 @@ def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]
         if not line.strip():
             continue
         indent = len(line) - len(line.lstrip(" "))
-        stripped = line.strip()
+        stripped = _workflow_semantic_line(line).strip()
+        if not stripped:
+            continue
         if indent <= base_indent:
             break
         if stripped.startswith("- "):

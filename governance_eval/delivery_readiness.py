@@ -269,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--benchmark-artifact-name", default="governance-benchmark-json")
     parser.add_argument("--require-github-artifact-digest", action="store_true")
     parser.add_argument("--fallback-quorum", help="fallback clean-room review quorum JSON path")
+    parser.add_argument("--trusted-reviewer-agent", action="append", default=[])
     args = parser.parse_args(argv)
     payload = json.loads(open(args.payload, encoding="utf-8").read()) if args.payload else load_github_payload(args.repo, args.pr)
     if args.benchmark_artifact:
@@ -293,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
         payload["requireGithubArtifactDigest"] = True
     if args.fallback_quorum:
         payload["fallbackQuorum"] = _read_json_or_error(Path(args.fallback_quorum))
+    if args.trusted_reviewer_agent:
+        payload["trustedReviewerAgentIds"] = args.trusted_reviewer_agent
     result = evaluate_readiness(payload)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["ready"] else 1
@@ -384,7 +387,8 @@ def _review_gate_result(
         unresolved_blocking,
         blocking_comments,
     )
-    fallback_result = _fallback_quorum_result(payload.get("fallbackQuorum"), payload.get("baseRefOid") or "", latest_head_sha)
+    fallback_quorum = _with_trusted_reviewers(payload.get("fallbackQuorum"), payload.get("trustedReviewerAgentIds"))
+    fallback_result = _fallback_quorum_result(fallback_quorum, payload.get("baseRefOid") or "", latest_head_sha)
     fallback_allowed = (
         github_review_state in {GITHUB_REVIEW_STALE, GITHUB_REVIEW_UNAVAILABLE}
         and not unresolved_blocking
@@ -646,8 +650,10 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
         return {"valid": False, "errors": ["fallback quorum missing or malformed"]}
     if quorum.get("__load_error"):
         return {"valid": False, "errors": [f"fallback quorum malformed JSON: {quorum['__load_error']}"]}
+    trusted_agents = quorum.get("_trustedReviewerAgentIds")
+    public_quorum = {key: value for key, value in quorum.items() if key != "_trustedReviewerAgentIds"}
     try:
-        validate_named("review_quorum", quorum)
+        validate_named("review_quorum", public_quorum)
     except SchemaValidationError as exc:
         errors.append(f"fallback quorum schema invalid: {exc}")
     if quorum.get("review_gate") != REVIEW_GATE_FALLBACK:
@@ -657,7 +663,7 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
     if expected_base_sha and quorum.get("reviewed_base_sha") != expected_base_sha:
         errors.append("fallback quorum reviewed_base_sha does not match base")
     provenance = quorum.get("provenance")
-    provenance_outputs = _quorum_provenance_outputs(provenance, expected_base_sha, expected_head_sha)
+    provenance_outputs = _quorum_provenance_outputs(provenance, expected_base_sha, expected_head_sha, trusted_agents)
     errors.extend(provenance_outputs["errors"])
     reviewers = quorum.get("reviewers")
     if not isinstance(reviewers, list) or len(reviewers) < 2:
@@ -682,9 +688,13 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
             else:
                 if not isinstance(output.get("agent_id"), str) or not output["agent_id"]:
                     errors.append(f"reviewers[{index}] provenance agent_id missing")
+                elif isinstance(trusted_agents, set) and output["agent_id"] not in trusted_agents:
+                    errors.append(f"reviewers[{index}] provenance agent_id is not trusted")
                 response_hash = output.get("response_sha256")
                 if not (isinstance(response_hash, str) and SHA256_RE.match(response_hash)):
                     errors.append(f"reviewers[{index}] provenance response_sha256 invalid")
+                elif response_hash != sha256_json(reviewer):
+                    errors.append(f"reviewers[{index}] provenance response_sha256 does not match reviewer JSON")
         reviewed_head = reviewer.get("reviewed_head_sha") or quorum.get("reviewed_head_sha")
         reviewed_base = reviewer.get("reviewed_base_sha") or quorum.get("reviewed_base_sha")
         if reviewed_head != expected_head_sha:
@@ -704,14 +714,34 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
     return {"valid": not errors, "errors": errors}
 
 
-def validate_review_quorum_document(quorum: dict[str, Any], expected_head_sha: str, expected_base_sha: str = "") -> list[str]:
-    return _fallback_quorum_result(quorum, expected_base_sha, expected_head_sha)["errors"]
+def validate_review_quorum_document(
+    quorum: dict[str, Any],
+    expected_head_sha: str,
+    expected_base_sha: str = "",
+    trusted_reviewer_agent_ids: list[str] | None = None,
+) -> list[str]:
+    quorum_with_trust = dict(quorum)
+    if trusted_reviewer_agent_ids:
+        quorum_with_trust["_trustedReviewerAgentIds"] = set(trusted_reviewer_agent_ids)
+    return _fallback_quorum_result(quorum_with_trust, expected_base_sha, expected_head_sha)["errors"]
+
+
+def _with_trusted_reviewers(quorum: Any, trusted_reviewer_agent_ids: Any) -> Any:
+    if not isinstance(quorum, dict):
+        return quorum
+    trusted = {item for item in trusted_reviewer_agent_ids or [] if isinstance(item, str) and item}
+    if not trusted:
+        return quorum
+    wrapped = dict(quorum)
+    wrapped["_trustedReviewerAgentIds"] = trusted
+    return wrapped
 
 
 def _quorum_provenance_outputs(
     provenance: Any,
     expected_base_sha: str,
     expected_head_sha: str,
+    trusted_agents: Any = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     by_reviewer: dict[str, dict[str, Any]] = {}
@@ -723,6 +753,8 @@ def _quorum_provenance_outputs(
         errors.append("fallback quorum provenance reviewed_head_sha does not match latest head")
     if expected_base_sha and provenance.get("reviewed_base_sha") != expected_base_sha:
         errors.append("fallback quorum provenance reviewed_base_sha does not match base")
+    if not isinstance(trusted_agents, set) or len(trusted_agents) < 2:
+        errors.append("fallback quorum requires at least two trusted reviewer agent IDs outside quorum JSON")
     outputs = provenance.get("reviewer_outputs")
     if not isinstance(outputs, list) or len(outputs) < 2:
         errors.append("fallback quorum provenance requires at least two reviewer_outputs")
@@ -738,6 +770,9 @@ def _quorum_provenance_outputs(
         if reviewer_id in by_reviewer:
             errors.append(f"provenance.reviewer_outputs[{index}].reviewer_id duplicated")
             continue
+        agent_id = output.get("agent_id")
+        if isinstance(trusted_agents, set) and isinstance(agent_id, str) and agent_id not in trusted_agents:
+            errors.append(f"provenance.reviewer_outputs[{index}].agent_id is not trusted")
         by_reviewer[reviewer_id] = output
     return {"errors": errors, "by_reviewer": by_reviewer}
 

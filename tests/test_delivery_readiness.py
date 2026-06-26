@@ -448,6 +448,18 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertEqual(result["github_review_state"], "STALE")
         self.assertTrue(result["fallback_quorum_valid"])
 
+    def test_fallback_quorum_without_trusted_agents_is_rejected(self) -> None:
+        sha = "bd" * 20
+        base = "cd" * 20
+        payload = _payload(sha, base_sha=base, reviews=[], fallback_quorum=_quorum(base, sha))
+        payload.pop("trustedReviewerAgentIds")
+
+        result = evaluate_readiness(payload)
+
+        self.assertFalse(result["ready"])
+        self.assertFalse(result["fallback_quorum_valid"])
+        self.assertTrue(any("trusted reviewer agent IDs" in error for error in result["fallback_quorum_errors"]))
+
     def test_fallback_quorum_is_rejected_when_reviewer_reports_p1(self) -> None:
         sha = "b2" * 20
         base = "c2" * 20
@@ -593,6 +605,8 @@ class DeliveryReadinessTests(unittest.TestCase):
                     "456",
                     "--benchmark-artifact-name",
                     "governance-benchmark-json",
+                    "--trusted-reviewer-agent",
+                    "agent-a",
                 ]
             )
 
@@ -601,6 +615,8 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertIn("123", captured)
         self.assertIn("--benchmark-artifact-id", captured)
         self.assertIn("456", captured)
+        self.assertIn("--trusted-reviewer-agent", captured)
+        self.assertIn("agent-a", captured)
 
 
 def _payload(
@@ -631,6 +647,7 @@ def _payload(
     }
     if fallback_quorum is not None:
         payload["fallbackQuorum"] = fallback_quorum
+        payload["trustedReviewerAgentIds"] = ["agent-a", "agent-b"]
     return payload
 
 
@@ -673,6 +690,26 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
         "generated_at": "2026-06-25T10:00:00Z",
         "duration_seconds": 0.1,
         "repeat_count": 1,
+        "governance_repository_url": "https://github.com/markheck-solutions/governance.git",
+        "governance_evaluator_git_sha": "6" * 40,
+        "governance_target_pack_hash": "a" * 64,
+        "schema_hashes": {"benchmark_run_result.schema.json": "b" * 64},
+        "dependency_lock_hash": "c" * 64,
+        "target_repository_url": "https://github.com/example/repo.git",
+        "target_pr_number": 1,
+        "target_base_sha": "1" * 40,
+        "target_head_sha": "2" * 40,
+        "target_merge_sha": "3" * 40,
+        "revision_mode": "HISTORICAL_FIXED",
+        "exact_commands": ["python -m governance_eval benchmark --repeat 1"],
+        "operating_system": "unit-test-os",
+        "runner_os": "unit-test-runner",
+        "python_version": "3.12.0",
+        "review_gate": "NOT_APPLICABLE",
+        "github_review_state": "NOT_APPLICABLE",
+        "github_artifact_id": None,
+        "github_artifact_digest": None,
+        "deterministic_evidence_hash": "d" * 64,
         "phase1_decision": phase1_decision,
         "acceptance_errors": [],
         "artifact_content_hash": "",
@@ -704,6 +741,18 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS") -> dict:
         },
         "cases": cases,
     }
+    benchmark["deterministic_evidence_hash"] = sha256_json(
+        {
+            **benchmark,
+            "generated_at": "",
+            "run_id": "",
+            "duration_seconds": 0,
+            "github_artifact_id": None,
+            "github_artifact_digest": None,
+            "deterministic_evidence_hash": "",
+            "artifact_content_hash": "",
+        }
+    )
     benchmark["artifact_content_hash"] = sha256_json({**benchmark, "artifact_content_hash": ""})
     return benchmark
 
@@ -741,6 +790,26 @@ def _benchmark_case(case: dict) -> dict:
 
 
 def _quorum(base_sha: str, head_sha: str) -> dict:
+    reviewers = [
+        {
+            "reviewer_id": "clean-room-reviewer-a",
+            "reviewed_base_sha": base_sha,
+            "reviewed_head_sha": head_sha,
+            "reviewed_files": ["governance_eval/delivery_readiness.py"],
+            "findings": [],
+            "commands": ["python -m unittest tests.test_delivery_readiness"],
+            "final_verdict": "CLEAN",
+        },
+        {
+            "reviewer_id": "clean-room-reviewer-b",
+            "reviewed_base_sha": base_sha,
+            "reviewed_head_sha": head_sha,
+            "reviewed_files": ["governance_eval/delivery_readiness.py"],
+            "findings": [],
+            "commands": ["python -m unittest tests.test_delivery_readiness"],
+            "final_verdict": "CLEAN",
+        },
+    ]
     return {
         "schema_version": "1.0",
         "review_gate": "FALLBACK_CLEAN_ROOM_QUORUM",
@@ -757,35 +826,16 @@ def _quorum(base_sha: str, head_sha: str) -> dict:
                 {
                     "reviewer_id": "clean-room-reviewer-a",
                     "agent_id": "agent-a",
-                    "response_sha256": "a" * 64,
+                    "response_sha256": sha256_json(reviewers[0]),
                 },
                 {
                     "reviewer_id": "clean-room-reviewer-b",
                     "agent_id": "agent-b",
-                    "response_sha256": "b" * 64,
+                    "response_sha256": sha256_json(reviewers[1]),
                 },
             ],
         },
-        "reviewers": [
-            {
-                "reviewer_id": "clean-room-reviewer-a",
-                "reviewed_base_sha": base_sha,
-                "reviewed_head_sha": head_sha,
-                "reviewed_files": ["governance_eval/delivery_readiness.py"],
-                "findings": [],
-                "commands": ["python -m unittest tests.test_delivery_readiness"],
-                "final_verdict": "CLEAN",
-            },
-            {
-                "reviewer_id": "clean-room-reviewer-b",
-                "reviewed_base_sha": base_sha,
-                "reviewed_head_sha": head_sha,
-                "reviewed_files": ["governance_eval/delivery_readiness.py"],
-                "findings": [],
-                "commands": ["python -m unittest tests.test_delivery_readiness"],
-                "final_verdict": "CLEAN",
-            },
-        ],
+        "reviewers": reviewers,
     }
 
 
