@@ -54,7 +54,17 @@
       "type": "string",
       "enum": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"]
     },
-    "revision_validation": { "type": "object" },
+    "revision_validation": {
+      "type": "object",
+      "required": ["status", "mode", "base_commit_exists", "head_commit_exists", "candidate_pull_request_validation"],
+      "properties": {
+        "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+        "mode": { "type": "string" },
+        "base_commit_exists": { "type": "boolean" },
+        "head_commit_exists": { "type": "boolean" },
+        "candidate_pull_request_validation": { "type": "object", "required": ["status"] }
+      }
+    },
     "operating_system": { "type": "string" },
     "runner_os": { "type": "string" },
     "python_version": { "type": "string" },
@@ -325,8 +335,30 @@
     },
     "structural_metrics_before": { "type": "object" },
     "structural_metrics_after": { "type": "object" },
-    "structural_delta": { "type": "object" },
-    "structural_measurements": { "type": "object" },
+    "structural_delta": { "type": "object", "minProperties": 1 },
+    "structural_measurements": {
+      "type": "object",
+      "required": [
+        "unknown_required",
+        "unknown_required_count",
+        "unknown_advisory",
+        "unknown_advisory_count",
+        "unsupported_required",
+        "unsupported_required_count",
+        "unsupported_advisory",
+        "unsupported_advisory_count"
+      ],
+      "properties": {
+        "unknown_required": { "type": "array" },
+        "unknown_required_count": { "type": "integer", "minimum": 0 },
+        "unknown_advisory": { "type": "array" },
+        "unknown_advisory_count": { "type": "integer", "minimum": 0 },
+        "unsupported_required": { "type": "array" },
+        "unsupported_required_count": { "type": "integer", "minimum": 0 },
+        "unsupported_advisory": { "type": "array" },
+        "unsupported_advisory_count": { "type": "integer", "minimum": 0 }
+      }
+    },
     "commands": { "type": "array", "items": { "type": "string" } },
     "github_artifact_id": { "type": ["string", "null"] },
     "github_artifact_digest": { "type": ["string", "null"] },

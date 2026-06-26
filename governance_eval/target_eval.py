@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -57,6 +60,19 @@ def evaluate_target(
         head_dir = _checkout(target_repository_url, head_sha, temp_root / "head")
         validation["base_commit_exists"] = _commit_exists(base_dir, base_sha)
         validation["head_commit_exists"] = _commit_exists(head_dir, head_sha)
+        validation["candidate_pull_request_validation"] = _candidate_pull_request_validation(
+            target_repository_url,
+            base_sha,
+            head_sha,
+            mode,
+            target_pr_number,
+        )
+        if (
+            not validation["base_commit_exists"]
+            or not validation["head_commit_exists"]
+            or validation["candidate_pull_request_validation"].get("status") == "FAIL"
+        ):
+            validation["status"] = "FAIL"
         setup_results = {"base": _run_setup_commands(pack, base_dir), "head": _run_setup_commands(pack, head_dir)}
         changed = _changed_files(base_dir, head_dir, base_sha, head_sha)
         behavior = [
@@ -223,6 +239,52 @@ def _checkout(repo_url: str, sha: str, path: Path) -> Path:
 
 def _commit_exists(repo_dir: Path, sha: str) -> bool:
     return subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo_dir).returncode == 0
+
+
+def _candidate_pull_request_validation(
+    repository_url: str,
+    base_sha: str,
+    head_sha: str,
+    revision_mode: str,
+    target_pr_number: int | None,
+) -> dict[str, Any]:
+    if revision_mode != "CANDIDATE_DYNAMIC":
+        return {"status": "NOT_APPLICABLE", "reason": "fixed revision mode"}
+    parsed = _parse_github_repository(repository_url)
+    if parsed is None:
+        return {"status": "SKIPPED", "reason": "non-GitHub repository"}
+    if target_pr_number is None:
+        return {"status": "FAIL", "reason": "candidate GitHub evaluation requires target PR number"}
+    owner, repo = parsed
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{target_pr_number}"
+    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return {"status": "FAIL", "reason": f"GitHub pull request lookup failed: HTTP {exc.code}"}
+    except Exception as exc:
+        return {"status": "FAIL", "reason": f"GitHub pull request lookup failed: {type(exc).__name__}: {exc}"}
+    actual_base = data.get("base", {}).get("sha")
+    actual_head = data.get("head", {}).get("sha")
+    matches = actual_base == base_sha and actual_head == head_sha
+    return {
+        "status": "PASS" if matches else "FAIL",
+        "pull_request": target_pr_number,
+        "expected_base_sha": actual_base,
+        "expected_head_sha": actual_head,
+        "reason": "" if matches else "target PR base/head does not match supplied revisions",
+    }
+
+
+def _parse_github_repository(repository_url: str) -> tuple[str, str] | None:
+    match = re.search(r"github\.com[:/]([^/]+)/([^/.]+)(?:\.git)?/?$", repository_url)
+    if not match:
+        return None
+    return match.group(1), match.group(2)
 
 
 def _changed_files(base_dir: Path, head_dir: Path, base_sha: str, head_sha: str) -> set[str]:
@@ -497,6 +559,9 @@ def _target_acceptance_errors(
         errors.append("revision validation failed")
     if not revision_validation.get("base_commit_exists") or not revision_validation.get("head_commit_exists"):
         errors.append("target commit validation failed")
+    pr_validation = revision_validation.get("candidate_pull_request_validation") or {}
+    if pr_validation.get("status") == "FAIL":
+        errors.append(f"candidate pull request validation failed: {pr_validation.get('reason', '')}")
     for side, results in setup_results.items():
         for result in results:
             if result["exit_code"] != 0:

@@ -61,6 +61,28 @@ class StructuralDeltaTests(unittest.TestCase):
 
         self.assertTrue(metrics["tests_private_production_internals"])
 
+    def test_production_private_attribute_access_after_module_import_is_detected(self) -> None:
+        pack = _pack()
+        pack["structural_detectors"].append("cross_module_private_references")
+        pack["detector_policies"]["cross_module_private_references"] = {
+            "required": True,
+            "blocking": True,
+            "fail_on_unknown": True,
+            "thresholds": {},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            head = root / "head"
+            _write(base / "src/pkg/api.py", "def call():\n    return 1\n")
+            _write(base / "src/pkg/util.py", "def _helper():\n    return 1\n")
+            _write(head / "src/pkg/api.py", "import pkg.util\n\n\ndef call():\n    return pkg.util._helper()\n")
+            _write(head / "src/pkg/util.py", "def _helper():\n    return 1\n")
+
+            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+
+        self.assertTrue(delta["cross_module_private_references"]["introduced"])
+
     def test_gate_scope_narrowing_is_detected_without_headline_threshold_change(self) -> None:
         pack = _pack()
         base_text = """
@@ -109,6 +131,30 @@ files = ["src", "tests"]
         self.assertTrue(any("ruff.exclude_added:src/pkg/**" in item for item in introduced))
         self.assertTrue(any("pytest.testpaths_removed:integration" in item for item in introduced))
         self.assertTrue(any("mypy.files_removed:scripts" in item for item in introduced))
+
+    def test_ruff_include_and_workflow_path_narrowing_are_detected(self) -> None:
+        pack = _pack()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            head = root / "head"
+            _write(base / "pyproject.toml", "[tool.ruff.lint]\nselect = [\"E\", \"F\"]\n")
+            _write(head / "pyproject.toml", "[tool.ruff]\ninclude = [\"src/pkg/*.py\"]\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\"]\n")
+            _write(
+                base / ".github/workflows/validation.yml",
+                "on:\n  pull_request:\n    paths:\n      - 'src/**'\n      - 'tests/**'\njobs:\n  test:\n    steps:\n      - name: Tests\n",
+            )
+            _write(
+                head / ".github/workflows/validation.yml",
+                "on:\n  pull_request:\n    paths:\n      - 'docs/**'\njobs:\n  test:\n    steps:\n      - name: Tests\n",
+            )
+
+            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertTrue(any("ruff.include_narrowed:src/pkg/*.py" in item for item in introduced))
+        self.assertTrue(any("workflow.paths_removed:validation.yml:src/**" in item for item in introduced))
+        self.assertTrue(any("workflow.paths_removed:validation.yml:tests/**" in item for item in introduced))
 
     def test_publicized_private_helper_rename_is_measured(self) -> None:
         pack = _pack()

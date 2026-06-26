@@ -19,6 +19,9 @@ def validate(instance: Any, schema: dict[str, Any], path: str = "$") -> None:
         for key in schema.get("required", []):
             if key not in instance:
                 raise SchemaValidationError(f"{path}: missing required key {key!r}")
+        min_properties = schema.get("minProperties")
+        if min_properties is not None and len(instance) < min_properties:
+            raise SchemaValidationError(f"{path}: expected at least {min_properties} properties")
 
         properties = schema.get("properties", {})
         for key, value in instance.items():

@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
@@ -175,6 +176,68 @@ class TargetPackAndShadowTests(unittest.TestCase):
             result = evaluate_target(dynamic_pack, dynamic["base"], dynamic["head"], revision_mode="CANDIDATE_DYNAMIC")
         self.assertEqual(result["revision_mode"], "CANDIDATE_DYNAMIC")
 
+    def test_github_candidate_pr_number_must_match_base_and_head(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = _make_synthetic_repo(Path(tmp), evasion=False)
+            pack_path = _pack_copy(
+                self.root / "target_packs/synthetic_clean/v1/pack.json",
+                Path(tmp) / "pack.json",
+                target,
+            )
+            data = _mutable_pack(pack_path)
+            data["repository_url"] = "https://github.com/example/synthetic-clean.git"
+            data["repository_identity"]["canonical_url"] = data["repository_url"]
+            pack_path.write_text(json.dumps(data), encoding="utf-8")
+            with mock.patch("governance_eval.target_eval._checkout", side_effect=[Path(tmp) / "base", Path(tmp) / "head"]), \
+                mock.patch("governance_eval.target_eval._commit_exists", return_value=True), \
+                mock.patch("governance_eval.target_eval._candidate_pull_request_validation", return_value={"status": "FAIL", "reason": "target PR base/head does not match supplied revisions"}), \
+                mock.patch("governance_eval.target_eval._run_setup_commands", return_value=[]), \
+                mock.patch("governance_eval.target_eval._changed_files", return_value=set()), \
+                mock.patch("governance_eval.target_eval._run_behavior_case", return_value={
+                    "case_id": "mock",
+                    "status": "PASS",
+                    "behavior_comparison_policy": "PRESERVE_BASE_BEHAVIOR",
+                    "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
+                    "classification_reason": "",
+                    "target_repository_url": data["repository_url"],
+                    "pull_request": None,
+                    "base_sha": target["base"],
+                    "head_sha": target["head"],
+                    "merge_sha": None,
+                    "base_execution": _mock_execution(target["base"]),
+                    "head_execution": _mock_execution(target["head"]),
+                    "expected_result": {},
+                    "observed_result": {},
+                    "source_files": {"base": [], "head": []},
+                    "source_symbols": {"base": [], "head": []},
+                    "source_hash_validation": "PASS",
+                    "reproducer_files": [],
+                    "commands": [],
+                }), \
+                mock.patch("governance_eval.target_eval.scan_structural_metrics", return_value={"cross_module_private_references": []}), \
+                mock.patch("governance_eval.target_eval.structural_delta", return_value={"cross_module_private_references": {
+                    "status": "MEASURED",
+                    "introduced": [],
+                    "policy": data["detector_policies"]["cross_module_private_references"],
+                    "base_count": 0,
+                    "head_count": 0,
+                    "existing": [],
+                    "removed": [],
+                    "threshold": {},
+                    "evidence": {},
+                    "reason": "",
+                }}):
+                result = evaluate_target(
+                    pack_path,
+                    target["base"],
+                    target["head"],
+                    revision_mode="CANDIDATE_DYNAMIC",
+                    target_pr_number=999,
+                )
+
+        self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
+        self.assertTrue(any("candidate pull request validation failed" in error for error in result["acceptance_errors"]))
+
     def test_historical_pair_requires_merge_sha(self) -> None:
         pack_path = self.root / "target_packs/spaghetti/v1/pack.json"
         pack = load_target_pack(pack_path)
@@ -240,6 +303,27 @@ class TargetPackAndShadowTests(unittest.TestCase):
         result["behavior_results"][0]["base_execution"]["source_files"] = [{}]
         with self.assertRaises(SchemaValidationError):
             validate_named("target_evaluation_result", result, self.root)
+
+    def test_result_schema_rejects_empty_revision_and_structural_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = _make_synthetic_repo(Path(tmp), evasion=False)
+            pack_path = _pack_copy(
+                self.root / "target_packs/synthetic_clean/v1/pack.json",
+                Path(tmp) / "pack.json",
+                target,
+            )
+            result = evaluate_target(pack_path, target["base"], target["head"])
+            result["revision_validation"] = {}
+            with self.assertRaises(SchemaValidationError):
+                validate_named("target_evaluation_result", result, self.root)
+            result = evaluate_target(pack_path, target["base"], target["head"])
+            result["structural_delta"] = {}
+            with self.assertRaises(SchemaValidationError):
+                validate_named("target_evaluation_result", result, self.root)
+            result = evaluate_target(pack_path, target["base"], target["head"])
+            result["structural_measurements"] = {}
+            with self.assertRaises(SchemaValidationError):
+                validate_named("target_evaluation_result", result, self.root)
 
     def test_synthetic_evasion_target_shadow_blocks_structural_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -316,6 +400,21 @@ def _make_synthetic_repo(root: Path, evasion: bool, behavior_change: bool = Fals
     else:
         head = base
     return {"url": repo.as_uri(), "base": base, "head": head}
+
+
+def _mock_execution(sha: str) -> dict:
+    return {
+        "exact_revision_executed": sha,
+        "command": "mock",
+        "exit_code": 0,
+        "timed_out": False,
+        "stdout_hash": "0" * 64,
+        "stderr_hash": "0" * 64,
+        "observed_result": {},
+        "source_files": [],
+        "source_symbols": [],
+        "source_hash_validation": "PASS",
+    }
 
 
 def _write(path: Path, text: str) -> None:

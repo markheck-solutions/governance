@@ -35,7 +35,7 @@ def scan_structural_metrics(
     module_sizes = _module_sizes(prod_files, root)
     fanout = {module: len(imports) for module, imports in graph.items()}
     return {
-        "cross_module_private_references": _private_imports(prod_files, root, include_attribute_access=False),
+        "cross_module_private_references": _private_imports(prod_files, root, include_attribute_access=True),
         "private_helper_reexports": _private_reexports(prod_files, root),
         "tests_private_production_internals": _private_imports(test_files, root, include_attribute_access=True),
         "import_cycles": _cycles(graph),
@@ -470,6 +470,8 @@ def _parse_pyproject(path: Path) -> dict[str, Any]:
         "present": True,
         "ruff_select": _as_set(lint.get("select") or ruff.get("select")),
         "ruff_ignore": _as_set(lint.get("ignore") or ruff.get("ignore")),
+        "ruff_include": _as_set(ruff.get("include")),
+        "ruff_extend_include": _as_set(ruff.get("extend-include")),
         "ruff_exclude": _as_set(ruff.get("exclude")) | _as_set(ruff.get("extend-exclude")),
         "ruff_per_file_ignores": set((lint.get("per-file-ignores") or {}).keys()),
         "ruff_max_complexity": _int_or_none(lint.get("mccabe", {}).get("max-complexity") or ruff.get("max-complexity")),
@@ -484,16 +486,25 @@ def _parse_pyproject(path: Path) -> dict[str, Any]:
 
 def _parse_workflows(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"present": False, "jobs": set(), "steps": set(), "continue_on_error": set(), "paths_filters": set()}
+        return {
+            "present": False,
+            "jobs": set(),
+            "steps": set(),
+            "continue_on_error": set(),
+            "paths": set(),
+            "paths_ignore": set(),
+        }
     jobs: set[str] = set()
     steps: set[str] = set()
     continue_on_error: set[str] = set()
-    paths_filters: set[str] = set()
+    paths: set[str] = set()
+    paths_ignore: set[str] = set()
     for file in sorted(path.glob("*.yml")) + sorted(path.glob("*.yaml")):
         text = file.read_text(encoding="utf-8", errors="ignore")
         in_jobs = False
         current_job = ""
-        for line in text.splitlines():
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
             if re.match(r"^jobs:\s*$", line):
                 in_jobs = True
                 continue
@@ -507,15 +518,46 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
                 steps.add(f"{file.name}:{current_job}:{step.group(1).strip()}")
             if "continue-on-error:" in line and "true" in line.lower():
                 continue_on_error.add(f"{file.name}:{current_job}")
-            if re.search(r"\bpaths(-ignore)?:\s*$", line):
-                paths_filters.add(f"{file.name}:{line.strip()}")
+            match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", line)
+            if match:
+                key = match.group(1)
+                values = _workflow_path_values(lines, index, match.group(2))
+                target = paths_ignore if key == "paths-ignore" else paths
+                for value in values:
+                    target.add(f"{file.name}:{value}")
     return {
         "present": True,
         "jobs": jobs,
         "steps": steps,
         "continue_on_error": continue_on_error,
-        "paths_filters": paths_filters,
+        "paths": paths,
+        "paths_ignore": paths_ignore,
     }
+
+
+def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]:
+    values: set[str] = set()
+    if inline.strip():
+        text = inline.strip()
+        if text.startswith("[") and text.endswith("]"):
+            for item in text.strip("[]").split(","):
+                cleaned = item.strip().strip("'\"")
+                if cleaned:
+                    values.add(cleaned)
+        return values or {text.strip("'\"")}
+    base_indent = len(lines[index]) - len(lines[index].lstrip(" "))
+    for line in lines[index + 1 :]:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        stripped = line.strip()
+        if indent <= base_indent:
+            break
+        if stripped.startswith("- "):
+            values.add(stripped[2:].strip().strip("'\""))
+        elif ":" in stripped and not stripped.startswith("#"):
+            break
+    return values
 
 
 def _gate_text(root: Path, required_files: list[str]) -> str:
@@ -542,6 +584,8 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
     before_py = base.get("pyproject") or {}
     after_py = head.get("pyproject") or {}
     introduced |= _removed_items("ruff.select", before_py.get("ruff_select"), after_py.get("ruff_select"))
+    introduced |= _include_narrowing("ruff.include", before_py.get("ruff_include"), after_py.get("ruff_include"))
+    introduced |= _removed_items("ruff.extend-include", before_py.get("ruff_extend_include"), after_py.get("ruff_extend_include"))
     introduced |= _added_items("ruff.ignore", before_py.get("ruff_ignore"), after_py.get("ruff_ignore"))
     introduced |= _added_items("ruff.exclude", before_py.get("ruff_exclude"), after_py.get("ruff_exclude"))
     introduced |= _added_items("ruff.per-file-ignores", before_py.get("ruff_per_file_ignores"), after_py.get("ruff_per_file_ignores"))
@@ -561,7 +605,8 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
     introduced |= _removed_items("workflow.job", before_wf.get("jobs"), after_wf.get("jobs"))
     introduced |= _removed_items("workflow.step", before_wf.get("steps"), after_wf.get("steps"))
     introduced |= _added_items("workflow.continue-on-error", before_wf.get("continue_on_error"), after_wf.get("continue_on_error"))
-    introduced |= _added_items("workflow.paths-filter", before_wf.get("paths_filters"), after_wf.get("paths_filters"))
+    introduced |= _workflow_paths_narrowing(before_wf.get("paths"), after_wf.get("paths"))
+    introduced |= _added_items("workflow.paths-ignore", before_wf.get("paths_ignore"), after_wf.get("paths_ignore"))
     text = head.get("command_text") or ""
     for command in head.get("required_commands") or []:
         if command and command not in text:
@@ -752,6 +797,22 @@ def _added_items(prefix: str, before: Any, after: Any) -> set[str]:
     before_set = set(before or set())
     after_set = set(after or set())
     return {f"{prefix}_added:{item}" for item in sorted(after_set - before_set)}
+
+
+def _include_narrowing(prefix: str, before: Any, after: Any) -> set[str]:
+    before_set = set(before or set())
+    after_set = set(after or set())
+    if not before_set and after_set:
+        return {f"{prefix}_narrowed:{item}" for item in sorted(after_set)}
+    return _removed_items(prefix, before_set, after_set)
+
+
+def _workflow_paths_narrowing(before: Any, after: Any) -> set[str]:
+    before_set = set(before or set())
+    after_set = set(after or set())
+    if not before_set and after_set:
+        return {f"workflow.paths_added:{item}" for item in sorted(after_set)}
+    return _removed_items("workflow.paths", before_set, after_set)
 
 
 def _int_or_none(value: Any) -> int | None:
