@@ -15,7 +15,7 @@
     "owner_status": {"type": "string", "enum": ["GREEN", "RED"]},
     "repository": {"type": "string"},
     "pull_request_number": {"type": ["integer", "null"]},
-    "head_sha": {"type": "string", "minLength": 40},
+    "head_sha": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
     "reviewer_login_patterns": {"type": "array", "items": {"type": "string"}},
     "review_status": {"type": "object"},
     "errors": {"type": "array", "items": {"type": "string"}}

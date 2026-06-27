@@ -57,6 +57,35 @@ class SchemaAndLockTests(unittest.TestCase):
         with self.assertRaisesRegex(SchemaValidationError, "does not match pattern"):
             validate("prefix-def-suffix", {"type": "string", "pattern": "abc"}, "$.field")
 
+    def test_supportability_result_schemas_reject_malformed_shas(self) -> None:
+        gate_result = {
+            "schema_version": "1.0",
+            "generated_at": "2026-06-27T00:00:00Z",
+            "owner_status": "RED",
+            "base_sha": "not-a-sha",
+            "head_sha": "2" * 40,
+            "standard": {},
+            "changed_files": [],
+            "high_risk_files": [],
+            "coverage": {},
+            "commands": [],
+            "errors": [],
+        }
+        with self.assertRaisesRegex(SchemaValidationError, "base_sha"):
+            validate_named("supportability_gate_result", gate_result, self.root)
+
+        copilot_result = {
+            "schema_version": "1.0",
+            "generated_at": "2026-06-27T00:00:00Z",
+            "owner_status": "RED",
+            "head_sha": "not-a-sha",
+            "reviewer_login_patterns": ["*copilot*"],
+            "review_status": {},
+            "errors": [],
+        }
+        with self.assertRaisesRegex(SchemaValidationError, "head_sha"):
+            validate_named("copilot_review_gate_result", copilot_result, self.root)
+
     def test_spaghetti_lock_contains_full_immutable_shas(self) -> None:
         lock_path = self.root / "targets/spaghetti.lock.toml"
         self.assertEqual(validate_spaghetti_lock(lock_path), [])

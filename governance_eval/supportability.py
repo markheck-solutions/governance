@@ -134,8 +134,11 @@ def run_supportability_gate(
 ) -> dict[str, Any]:
     config = load_supportability_config(config_path)
     errors = validate_supportability_config(config)
-    errors.extend(_sha_errors(base_sha, head_sha))
+    revision_errors = _sha_errors(base_sha, head_sha)
+    errors.extend(revision_errors)
+    changed_error_start = len(errors)
     changed = _changed_files_or_empty(target_repo, base_sha, head_sha, changed_files, errors)
+    changed_discovery_errors = errors[changed_error_start:]
     high_risk = _high_risk_files(target_repo, changed)
     config_change_errors = _self_modified_config_errors(config_path, target_repo, changed)
     errors.extend(config_change_errors)
@@ -145,6 +148,10 @@ def run_supportability_gate(
     sql_commands, sql_errors = _sql_gate_commands(config, target_repo, changed, high_risk)
     errors.extend(sql_errors)
     command_results = _protected_command_results(config_change_errors)
+    if not command_results and (revision_errors or changed_discovery_errors):
+        command_results = _skipped_command_results(
+            "revision inputs invalid or changed-file discovery failed; commands not executed without verifiable diff"
+        )
     if not command_results:
         command_results = _run_commands_with_revision_env(
             config,
@@ -161,8 +168,8 @@ def run_supportability_gate(
         "owner_status": STATUS_RED if errors else STATUS_GREEN,
         "repository_url": repository_url,
         "pull_request_url": pr_url,
-        "base_sha": base_sha,
-        "head_sha": head_sha,
+        "base_sha": _schema_safe_sha(base_sha),
+        "head_sha": _schema_safe_sha(head_sha),
         "standard": config.get("standard", {}),
         "changed_files": changed,
         "high_risk_files": high_risk,
@@ -201,7 +208,7 @@ def evaluate_copilot_review_gate(
         "owner_status": STATUS_RED if errors else STATUS_GREEN,
         "repository": repo,
         "pull_request_number": pr_number,
-        "head_sha": head_sha,
+        "head_sha": _schema_safe_sha(head_sha),
         "reviewer_login_patterns": patterns,
         "review_status": _review_status(payload, head_sha, patterns),
         "errors": errors,
@@ -503,6 +510,10 @@ def _diff_sha_inputs_are_valid(base_sha: str, head_sha: str) -> bool:
     return bool(SHA1_RE.fullmatch(base_sha) and SHA1_RE.fullmatch(head_sha))
 
 
+def _schema_safe_sha(value: str) -> str:
+    return value if SHA1_RE.fullmatch(value) else "0" * 40
+
+
 def _standard_hash_errors(config: dict[str, Any], target_repo: Path) -> list[str]:
     standard = config.get("standard") if isinstance(config.get("standard"), dict) else {}
     source = str(standard.get("source") or "")
@@ -697,6 +708,10 @@ def _run_configured_commands(
 def _protected_command_results(config_change_errors: list[str]) -> list[dict[str, Any]]:
     if not config_change_errors:
         return []
+    return _skipped_command_results("supportability config changed; commands not executed from untrusted head config")
+
+
+def _skipped_command_results(stderr: str) -> list[dict[str, Any]]:
     return [
         {
             "gate": gate,
@@ -704,7 +719,7 @@ def _protected_command_results(config_change_errors: list[str]) -> list[dict[str
             "status": "SKIPPED",
             "exit_code": None,
             "stdout": "",
-            "stderr": "supportability config changed; commands not executed from untrusted head config",
+            "stderr": stderr,
         }
         for gate in ALL_COMMAND_GATES
     ]

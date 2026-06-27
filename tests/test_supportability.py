@@ -187,32 +187,47 @@ class SupportabilityGateTests(unittest.TestCase):
     def test_invalid_sha_returns_red_without_git_diff_exception(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
+            seen: list[str] = []
+
+            def runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+                seen.append(command)
+                return _passing_runner(command, cwd)
 
             result = run_supportability_gate(
                 repo / ".github/governance/supportability.yml",
                 repo,
                 "not-a-sha",
                 "b" * 40,
-                command_runner=_passing_runner,
+                command_runner=runner,
             )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("base_sha" in error for error in result["errors"]))
+            self.assertEqual(result["base_sha"], "0" * 40)
+            self.assertEqual(seen, [])
+            self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
     def test_changed_file_discovery_failure_returns_structured_red(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
+            seen: list[str] = []
+
+            def runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+                seen.append(command)
+                return _passing_runner(command, cwd)
 
             result = run_supportability_gate(
                 repo / ".github/governance/supportability.yml",
                 repo,
                 "a" * 40,
                 "b" * 40,
-                command_runner=_passing_runner,
+                command_runner=runner,
             )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("git diff changed-file discovery failed" in error for error in result["errors"]))
+            self.assertEqual(seen, [])
+            self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
     def test_changed_file_discovery_timeout_raises_supportability_error(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
