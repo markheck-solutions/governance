@@ -1047,7 +1047,10 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
         page = connection.get("pageInfo") or {}
         if not page.get("hasNextPage"):
             return threads
-        cursor = page.get("endCursor") or ""
+        next_cursor = page.get("endCursor") or ""
+        if not next_cursor or next_cursor == cursor:
+            raise SupportabilityError("GitHub review thread pagination did not advance")
+        cursor = next_cursor
 
 
 def _normalize_threads(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1485,6 +1488,7 @@ def _gh_json(args: list[str]) -> dict[str, Any]:
         encoding="utf-8",
         errors="replace",
         capture_output=True,
+        timeout=GIT_NETWORK_TIMEOUT_SECONDS,
     )
     return json.loads(completed.stdout)
 

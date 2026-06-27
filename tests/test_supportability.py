@@ -400,8 +400,26 @@ class CopilotReviewGateTests(unittest.TestCase):
                 payload=payload,
             )
 
-            self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertEqual(result["review_status"]["blocking_thread_count"], 1)
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertEqual(result["review_status"]["blocking_thread_count"], 1)
+
+    def test_review_thread_pagination_fails_when_cursor_does_not_advance(self) -> None:
+        payload = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [],
+                            "pageInfo": {"hasNextPage": True, "endCursor": ""},
+                        }
+                    }
+                }
+            }
+        }
+
+        with mock.patch("governance_eval.supportability._gh_graphql", return_value=payload):
+            with self.assertRaises(SupportabilityError):
+                supportability_module._load_review_threads("example", "repo", 7)
 
 
 class DeliveryReceiptTests(unittest.TestCase):
@@ -586,6 +604,18 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(artifact["digest"], expected_digest)
         api_bytes.assert_called_once_with("repos/example/repo/actions/artifacts/456/zip")
+
+    def test_gh_json_uses_network_timeout(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(kwargs)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
+
+        with mock.patch("governance_eval.supportability.subprocess.run", side_effect=fake_run):
+            self.assertEqual(supportability_module._gh_json(["api", "repos/example/repo"]), {})
+
+        self.assertEqual(calls[0]["timeout"], supportability_module.GIT_NETWORK_TIMEOUT_SECONDS)
 
     def test_fresh_clone_log_uses_full_history_fetch(self) -> None:
         calls: list[list[str]] = []
