@@ -133,6 +133,7 @@ def run_supportability_gate(
     changed = changed_files if changed_files is not None else _git_changed_files(target_repo, base_sha, head_sha)
     high_risk = _high_risk_files(target_repo, changed)
     errors.extend(_sha_errors(base_sha, head_sha))
+    errors.extend(_self_modified_config_errors(config_path, target_repo, changed))
     errors.extend(_standard_hash_errors(config, target_repo))
     coverage_plan = _build_coverage_plan(config, changed, high_risk)
     errors.extend(coverage_plan["errors"])
@@ -451,6 +452,16 @@ def _standard_hash_errors(config: dict[str, Any], target_repo: Path) -> list[str
     return []
 
 
+def _self_modified_config_errors(config_path: Path, target_repo: Path, changed: list[str]) -> list[str]:
+    try:
+        relative = config_path.resolve().relative_to(target_repo.resolve()).as_posix()
+    except ValueError:
+        relative = config_path.as_posix()
+    if relative in {path.replace("\\", "/") for path in changed}:
+        return ["supportability config changed in this PR; use trusted base config or merge config separately"]
+    return []
+
+
 def _build_coverage_plan(config: dict[str, Any], changed: list[str], high_risk: list[str]) -> dict[str, Any]:
     gates = config.get("required_gates") if isinstance(config.get("required_gates"), dict) else {}
     files = _unique_paths(changed + high_risk)
@@ -548,7 +559,9 @@ def _looks_like_scope_token(token: str) -> bool:
 
 def _normalize_scope(token: str) -> str:
     clean = token.strip("'\"").replace("\\", "/").rstrip("/")
-    return "." if clean in {"", "."} else clean
+    if clean in {"", ".", "./", "...", "./..."}:
+        return "."
+    return clean[2:] if clean.startswith("./") else clean
 
 
 def _file_is_in_any_scope(path: str, scopes: list[str]) -> bool:
@@ -978,6 +991,8 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
     errors = []
     if receipt.get("owner_status") not in {STATUS_GREEN, "YELLOW", STATUS_RED}:
         errors.append("owner_status must be GREEN, YELLOW, or RED")
+    if receipt.get("owner_status") != STATUS_GREEN:
+        errors.append("receipt owner_status must be GREEN before verification")
     errors.extend(_receipt_sha_errors(receipt))
     artifact = receipt.get("artifact") if isinstance(receipt.get("artifact"), dict) else {}
     if not artifact.get("name"):

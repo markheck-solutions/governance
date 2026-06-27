@@ -151,8 +151,40 @@ class SupportabilityGateTests(unittest.TestCase):
             )
 
             self.assertEqual(result["commands"][0]["command"], "python -c pass")
-            self.assertNotIn("p", seen[:1])
+            self.assertEqual(seen[0], "python -c pass")
             self.assertIn(("a" * 40, "b" * 40), env_seen)
+
+    def test_gate_fails_when_supportability_config_is_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=[".github/governance/supportability.yml", "src/app.py"],
+                command_runner=_passing_runner,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("supportability config changed" in error for error in result["errors"]))
+
+    def test_dot_slash_scope_is_repo_wide(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            _rewrite_gate_command(repo, "lint", ["go test ./..."])
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=["src/app.py"],
+                command_runner=_passing_runner,
+            )
+
+            self.assertFalse(any("command scope excludes" in error for error in result["errors"]))
 
     def test_sql_like_repo_without_explicit_sql_gate_returns_red(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,6 +323,16 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(result["owner_status"], STATUS_RED)
         self.assertTrue(any("delivery receipt schema invalid" in error for error in result["errors"]))
+
+    def test_receipt_verifier_rejects_red_receipt(self) -> None:
+        gate = _gate_result()
+        gate["owner_status"] = STATUS_RED
+        receipt = generate_delivery_receipt(gate, _copilot_result(), artifact_name="supportability-delivery-receipt")
+
+        result = verify_delivery_receipt(receipt)
+
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any("receipt owner_status must be GREEN" in error for error in result["errors"]))
 
 
 def _synthetic_repo(path: Path, root: Path) -> Path:

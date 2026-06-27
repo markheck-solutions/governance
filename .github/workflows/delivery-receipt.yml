@@ -148,9 +148,16 @@ jobs:
           import json
           import os
           from pathlib import Path
+          import shutil
 
           gate = Path("evidence/supportability-gate-result.json")
           copilot = Path("evidence/copilot-review-gate-result.json")
+          gate_candidates = sorted(Path("evidence").rglob("supportability-gate-result.json"))
+          copilot_candidates = sorted(Path("evidence").rglob("copilot-review-gate-result.json"))
+          if not gate.exists() and gate_candidates:
+              shutil.copyfile(gate_candidates[0], gate)
+          if not copilot.exists() and copilot_candidates:
+              shutil.copyfile(copilot_candidates[0], copilot)
           if not gate.exists():
               gate.write_text(json.dumps({
                   "owner_status": "RED",
