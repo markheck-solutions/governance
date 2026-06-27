@@ -78,6 +78,14 @@ class SupportabilityConfigTests(unittest.TestCase):
             with self.assertRaises(SupportabilityError):
                 load_supportability_config(config_path)
 
+    def test_yaml_parser_fails_closed_on_unsupported_flow_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "supportability.yml"
+            config_path.write_text("required_gates: [lint, tests]\n", encoding="utf-8")
+
+            with self.assertRaises(SupportabilityError):
+                load_supportability_config(config_path)
+
     def test_json_config_parse_error_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "supportability.json"
@@ -578,6 +586,25 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["owner_status"], STATUS_RED)
         self.assertEqual(receipt["merged_sha"], "")
         self.assertTrue(any("merged_sha must be empty" in error for error in receipt["errors"]))
+
+    def test_receipt_generation_rejects_bad_gate_shas_without_schema_crash(self) -> None:
+        gate = _gate_result()
+        gate["base_sha"] = "bad-base"
+        gate["head_sha"] = "bad-head"
+
+        receipt = generate_delivery_receipt(
+            gate,
+            _copilot_result(),
+            artifact_name="supportability-gate-evidence",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertEqual(receipt["base_sha"], "0" * 40)
+        self.assertEqual(receipt["head_sha"], "0" * 40)
+        self.assertTrue(any("base_sha must be" in error for error in receipt["errors"]))
+        self.assertTrue(any("head_sha must be" in error for error in receipt["errors"]))
 
     def test_receipt_schema_validation_is_independent_of_current_working_directory(self) -> None:
         receipt = generate_delivery_receipt(

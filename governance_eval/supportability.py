@@ -240,7 +240,13 @@ def generate_delivery_receipt(
 ) -> dict[str, Any]:
     resolved_repository_url = repository_url or str(gate_result.get("repository_url") or "")
     resolved_pr_url = pr_url or str(gate_result.get("pull_request_url") or "")
+    base_sha = str(gate_result.get("base_sha") or "")
+    head_sha = str(gate_result.get("head_sha") or "")
     errors = _receipt_input_errors(gate_result, copilot_result, artifact_name, artifact_id, artifact_digest)
+    if not SHA1_RE.fullmatch(base_sha):
+        errors.append("base_sha must be a 40-character lowercase Git SHA")
+    if not SHA1_RE.fullmatch(head_sha):
+        errors.append("head_sha must be a 40-character lowercase Git SHA")
     resolved_merged_sha = merged_sha
     if merged_sha and not SHA1_RE.fullmatch(merged_sha):
         errors.append("merged_sha must be empty or a 40-character lowercase Git SHA")
@@ -256,8 +262,8 @@ def generate_delivery_receipt(
         "owner_status": status,
         "repository_url": resolved_repository_url,
         "pull_request_url": resolved_pr_url,
-        "base_sha": gate_result.get("base_sha", ""),
-        "head_sha": gate_result.get("head_sha", ""),
+        "base_sha": _schema_safe_sha(base_sha),
+        "head_sha": _schema_safe_sha(head_sha),
         "merged_sha": resolved_merged_sha,
         "workflow": {
             "run_id": run_id,
@@ -1330,7 +1336,11 @@ def _parse_yaml_scalar(value: str) -> Any:
         return value == "true"
     if value in {"null", "~"}:
         return None
-    if value.startswith("[") or value.startswith("{") or value.startswith('"'):
+    if value == "[]":
+        return []
+    if value.startswith("[") or value.startswith("{"):
+        raise SupportabilityError(f"unsupported YAML flow scalar: {value}")
+    if value.startswith('"'):
         try:
             return json.loads(value)
         except json.JSONDecodeError as exc:
