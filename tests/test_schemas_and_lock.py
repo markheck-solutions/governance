@@ -52,6 +52,11 @@ class SchemaAndLockTests(unittest.TestCase):
         with self.assertRaisesRegex(SchemaValidationError, "invalid pattern"):
             validate("abc", {"type": "string", "pattern": "["}, "$.field")
 
+    def test_schema_validator_pattern_uses_search_semantics(self) -> None:
+        validate("prefix-abc-suffix", {"type": "string", "pattern": "abc"}, "$.field")
+        with self.assertRaisesRegex(SchemaValidationError, "does not match pattern"):
+            validate("prefix-def-suffix", {"type": "string", "pattern": "abc"}, "$.field")
+
     def test_spaghetti_lock_contains_full_immutable_shas(self) -> None:
         lock_path = self.root / "targets/spaghetti.lock.toml"
         self.assertEqual(validate_spaghetti_lock(lock_path), [])

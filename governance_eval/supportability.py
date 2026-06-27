@@ -227,14 +227,20 @@ def generate_delivery_receipt(
     artifact_digest: str = "",
     merged_sha: str = "",
 ) -> dict[str, Any]:
+    resolved_repository_url = repository_url or str(gate_result.get("repository_url") or "")
+    resolved_pr_url = pr_url or str(gate_result.get("pull_request_url") or "")
     errors = _receipt_input_errors(gate_result, copilot_result, artifact_name, artifact_id, artifact_digest)
+    if not resolved_repository_url:
+        errors.append("repository_url is required for a GREEN delivery receipt")
+    if not resolved_pr_url:
+        errors.append("pull_request_url is required for a GREEN delivery receipt")
     status = STATUS_RED if errors else STATUS_GREEN
     receipt = {
         "schema_version": "1.0",
         "generated_at": _utc_now(),
         "owner_status": status,
-        "repository_url": repository_url or gate_result.get("repository_url", ""),
-        "pull_request_url": pr_url or gate_result.get("pull_request_url", ""),
+        "repository_url": resolved_repository_url,
+        "pull_request_url": resolved_pr_url,
         "base_sha": gate_result.get("base_sha", ""),
         "head_sha": gate_result.get("head_sha", ""),
         "merged_sha": merged_sha,
@@ -1543,7 +1549,7 @@ def _fresh_clone_log(repository_url: str) -> list[str]:
             timeout=GIT_NETWORK_TIMEOUT_SECONDS,
         )
         completed = subprocess.run(
-            ["git", "log", "--oneline", "--decorate", "-n", "10"],
+            ["git", "log", "--oneline", "--decorate", "-n", "10", "origin/main"],
             cwd=tmp,
             check=True,
             text=True,

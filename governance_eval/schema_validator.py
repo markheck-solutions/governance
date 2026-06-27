@@ -48,7 +48,7 @@ def validate(instance: Any, schema: dict[str, Any], path: str = "$") -> None:
                 compiled = re.compile(pattern)
             except (re.error, TypeError) as exc:
                 raise SchemaValidationError(f"{path}: invalid pattern {pattern!r}: {exc}") from exc
-            if not compiled.fullmatch(instance):
+            if not compiled.search(instance):
                 raise SchemaValidationError(f"{path}: does not match pattern {pattern!r}")
 
     if isinstance(instance, (int, float)) and not isinstance(instance, bool):

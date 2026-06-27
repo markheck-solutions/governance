@@ -574,6 +574,7 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(log, ["abc1234 (HEAD -> main) ok"])
         self.assertNotIn("--depth", calls[0])
         self.assertIn("--filter=blob:none", calls[0])
+        self.assertIn("origin/main", calls[1])
         self.assertEqual(timeouts, [supportability_module.GIT_NETWORK_TIMEOUT_SECONDS] * 2)
 
     def test_fresh_clone_contains_commit_raises_on_git_error(self) -> None:
@@ -624,6 +625,23 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["owner_status"], STATUS_RED)
         self.assertTrue(any("artifact ID is missing" in error for error in receipt["errors"]))
         self.assertTrue(any("artifact digest is missing" in error for error in receipt["errors"]))
+
+    def test_receipt_generation_requires_repository_and_pr_urls_for_green(self) -> None:
+        gate = _gate_result()
+        gate["repository_url"] = ""
+        gate["pull_request_url"] = ""
+
+        receipt = generate_delivery_receipt(
+            gate,
+            _copilot_result(),
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertTrue(any("repository_url is required" in error for error in receipt["errors"]))
+        self.assertTrue(any("pull_request_url is required" in error for error in receipt["errors"]))
 
 
 def _synthetic_repo(path: Path, root: Path) -> Path:
