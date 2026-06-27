@@ -6,7 +6,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import governance_eval.supportability as supportability_module
 from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
 from governance_eval.supportability import (
@@ -309,6 +311,7 @@ class DeliveryReceiptTests(unittest.TestCase):
         observations = {
             "ls_remote_main_sha": "0" * 40,
             "fresh_clone_head_log": ["0000000 (HEAD -> main) stale"],
+            "fresh_clone_contains_merged_sha": False,
             "pr": {
                 "state": "OPEN",
                 "baseRefOid": gate["base_sha"],
@@ -330,6 +333,91 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertTrue(any("not MERGED" in error for error in result["errors"]))
         self.assertTrue(any("expired" in error for error in result["errors"]))
         self.assertTrue(any("digest" in error for error in result["errors"]))
+
+    def test_receipt_verifier_allows_main_to_advance_after_merge(self) -> None:
+        gate = _gate_result()
+        copilot = _copilot_result()
+        merged_sha = "3" * 40
+        digest = f"sha256:{'a' * 64}"
+        receipt = generate_delivery_receipt(
+            gate,
+            copilot,
+            repository_url="https://github.com/example/repo.git",
+            pr_url="https://github.com/example/repo/pull/7",
+            run_id="123",
+            workflow_run_url="https://github.com/example/repo/actions/runs/123",
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=digest,
+            merged_sha=merged_sha,
+        )
+        observations = {
+            "ls_remote_main_sha": "9" * 40,
+            "fresh_clone_head_log": ["9999999 (HEAD -> main) later commit"],
+            "fresh_clone_contains_merged_sha": True,
+            "pr": {
+                "state": "MERGED",
+                "baseRefOid": gate["base_sha"],
+                "headRefOid": gate["head_sha"],
+                "mergeCommit": {"oid": merged_sha},
+            },
+            "run": {"status": "completed", "conclusion": "success", "headSha": gate["head_sha"]},
+            "artifact": {"id": 456, "name": "supportability-delivery-receipt", "digest": digest, "expired": False},
+        }
+
+        result = verify_delivery_receipt(receipt, live_observations=observations)
+
+        self.assertEqual(result["owner_status"], STATUS_GREEN)
+
+    def test_receipt_verifier_rejects_merged_sha_missing_from_main_history(self) -> None:
+        gate = _gate_result()
+        copilot = _copilot_result()
+        merged_sha = "3" * 40
+        digest = f"sha256:{'a' * 64}"
+        receipt = generate_delivery_receipt(
+            gate,
+            copilot,
+            repository_url="https://github.com/example/repo.git",
+            pr_url="https://github.com/example/repo/pull/7",
+            run_id="123",
+            workflow_run_url="https://github.com/example/repo/actions/runs/123",
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=digest,
+            merged_sha=merged_sha,
+        )
+        observations = {
+            "ls_remote_main_sha": "9" * 40,
+            "fresh_clone_head_log": ["9999999 (HEAD -> main) later commit"],
+            "fresh_clone_contains_merged_sha": False,
+            "pr": {
+                "state": "MERGED",
+                "baseRefOid": gate["base_sha"],
+                "headRefOid": gate["head_sha"],
+                "mergeCommit": {"oid": merged_sha},
+            },
+            "run": {"status": "completed", "conclusion": "success", "headSha": gate["head_sha"]},
+            "artifact": {"id": 456, "name": "supportability-delivery-receipt", "digest": digest, "expired": False},
+        }
+
+        result = verify_delivery_receipt(receipt, live_observations=observations)
+
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any("main history" in error for error in result["errors"]))
+
+    def test_fresh_clone_log_uses_full_history_fetch(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="abc1234 (HEAD -> main) ok\n", stderr="")
+
+        with mock.patch("governance_eval.supportability.subprocess.run", side_effect=fake_run):
+            log = supportability_module._fresh_clone_log("https://github.com/example/repo.git")
+
+        self.assertEqual(log, ["abc1234 (HEAD -> main) ok"])
+        self.assertNotIn("--depth", calls[0])
+        self.assertIn("--filter=blob:none", calls[0])
 
     def test_receipt_verifier_rejects_schema_invalid_receipt(self) -> None:
         receipt = generate_delivery_receipt(

@@ -320,15 +320,42 @@ def load_live_receipt_observations(receipt: dict[str, Any]) -> dict[str, Any]:
     pr_number = _pr_number_from_url(receipt.get("pull_request_url", ""))
     artifact_id = str(receipt.get("artifact", {}).get("id") or "")
     run_id = str(receipt.get("workflow", {}).get("run_id") or "")
+    merged_sha = str(receipt.get("merged_sha") or "")
+    repository_url = str(receipt.get("repository_url") or "")
     errors: list[str] = []
     return {
         "__load_errors": errors,
-        "ls_remote_main_sha": _safe_live("git ls-remote", errors, _ls_remote_main, receipt.get("repository_url", "")),
-        "fresh_clone_head_log": _safe_live("fresh clone log", errors, _fresh_clone_log, receipt.get("repository_url", "")),
-        "pr": _safe_live("GitHub PR", errors, _live_pr, repo, pr_number) if repo and pr_number else {},
-        "run": _safe_live("GitHub run", errors, _live_run, repo, run_id) if repo and run_id else {},
-        "artifact": _safe_live("GitHub artifact", errors, _live_artifact, repo, artifact_id) if repo and artifact_id else {},
+        "ls_remote_main_sha": _safe_live("git ls-remote", errors, _ls_remote_main, repository_url),
+        "fresh_clone_head_log": _safe_live("fresh clone log", errors, _fresh_clone_log, repository_url),
+        "fresh_clone_contains_merged_sha": _fresh_clone_merge_observation(errors, repository_url, merged_sha),
+        "pr": _live_pr_observation(errors, repo, pr_number),
+        "run": _live_run_observation(errors, repo, run_id),
+        "artifact": _live_artifact_observation(errors, repo, artifact_id),
     }
+
+
+def _fresh_clone_merge_observation(errors: list[str], repository_url: str, merged_sha: str) -> bool | None:
+    if not merged_sha:
+        return None
+    return _safe_live("fresh clone contains merged_sha", errors, _fresh_clone_contains_commit, repository_url, merged_sha)
+
+
+def _live_pr_observation(errors: list[str], repo: str, pr_number: int | None) -> dict[str, Any]:
+    if not repo or pr_number is None:
+        return {}
+    return _safe_live("GitHub PR", errors, _live_pr, repo, pr_number)
+
+
+def _live_run_observation(errors: list[str], repo: str, run_id: str) -> dict[str, Any]:
+    if not repo or not run_id:
+        return {}
+    return _safe_live("GitHub run", errors, _live_run, repo, run_id)
+
+
+def _live_artifact_observation(errors: list[str], repo: str, artifact_id: str) -> dict[str, Any]:
+    if not repo or not artifact_id:
+        return {}
+    return _safe_live("GitHub artifact", errors, _live_artifact, repo, artifact_id)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1050,12 +1077,11 @@ def _live_observation_errors(receipt: dict[str, Any], observations: dict[str, An
     errors.extend(_live_pr_errors(receipt, observations.get("pr") or {}))
     errors.extend(_live_run_errors(receipt, observations.get("run") or {}))
     errors.extend(_live_artifact_errors(receipt, observations.get("artifact") or {}))
-    main_sha = observations.get("ls_remote_main_sha")
     merged_sha = receipt.get("merged_sha")
-    if merged_sha and main_sha and merged_sha != main_sha:
-        errors.append("git ls-remote main SHA does not match receipt merged_sha")
     if not observations.get("fresh_clone_head_log"):
         errors.append("fresh clone log proof is missing")
+    if merged_sha and observations.get("fresh_clone_contains_merged_sha") is not True:
+        errors.append("fresh clone main history does not contain receipt merged_sha")
     return errors
 
 
@@ -1406,6 +1432,8 @@ def _safe_live(label: str, errors: list[str], func: Callable[..., Any], *args: A
         errors.append(f"{label}: {type(exc).__name__}: {exc}")
         if label.startswith("git ls-remote"):
             return ""
+        if "contains" in label:
+            return False
         return [] if "log" in label else {}
 
 
@@ -1455,7 +1483,7 @@ def _ls_remote_main(repository_url: str) -> str:
 
 def _fresh_clone_log(repository_url: str) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="supportability-receipt-") as tmp:
-        subprocess.run(["git", "clone", "--quiet", "--depth", "10", repository_url, tmp], check=True)
+        subprocess.run(["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", repository_url, tmp], check=True)
         completed = subprocess.run(
             ["git", "log", "--oneline", "--decorate", "-n", "10"],
             cwd=tmp,
@@ -1466,3 +1494,17 @@ def _fresh_clone_log(repository_url: str) -> list[str]:
             capture_output=True,
         )
     return [line for line in completed.stdout.splitlines() if line]
+
+
+def _fresh_clone_contains_commit(repository_url: str, commit_sha: str) -> bool:
+    with tempfile.TemporaryDirectory(prefix="supportability-receipt-") as tmp:
+        subprocess.run(["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", repository_url, tmp], check=True)
+        completed = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", commit_sha, "origin/main"],
+            cwd=tmp,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+        )
+    return completed.returncode == 0
