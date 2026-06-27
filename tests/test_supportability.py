@@ -173,6 +173,37 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("base_sha" in error for error in result["errors"]))
 
+    def test_changed_file_discovery_ignores_unrelated_hash_config_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            _git(repo, "init")
+            _git(repo, "config", "user.email", "test@example.com")
+            _git(repo, "config", "user.name", "Test User")
+            _git(repo, "add", ".")
+            _git(repo, "commit", "-m", "base")
+            base = _git(repo, "rev-parse", "HEAD").strip()
+            (repo / "src/app.py").write_text("def app():\n    return 2\n", encoding="utf-8")
+            _git(repo, "add", "src/app.py")
+            _git(repo, "commit", "-m", "change app")
+            head = _git(repo, "rev-parse", "HEAD").strip()
+
+            config_path = repo / ".github/governance/supportability.yml"
+            config = load_supportability_config(config_path)
+            config["standard"]["hash"] = "not-a-hash"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result = run_supportability_gate(
+                config_path,
+                repo,
+                base,
+                head,
+                command_runner=_passing_runner,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertIn("src/app.py", result["changed_files"])
+            self.assertTrue(any("standard.hash" in error for error in result["errors"]))
+
     def test_gate_fails_when_supportability_config_is_changed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
@@ -413,6 +444,19 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(result["owner_status"], STATUS_RED)
         self.assertTrue(any("ls-remote" in error for error in result["errors"]))
 
+    def test_receipt_verifier_rejects_invalid_merged_sha_shape(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            artifact_name="supportability-delivery-receipt",
+        )
+        receipt["merged_sha"] = "not-a-sha"
+
+        result = verify_delivery_receipt(receipt)
+
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any("merged_sha" in error for error in result["errors"]))
+
     def test_receipt_verifier_rejects_merged_sha_missing_from_main_history(self) -> None:
         gate = _gate_result()
         copilot = _copilot_result()
@@ -586,6 +630,19 @@ def _rewrite_gate_command(repo: Path, gate: str, commands: object) -> None:
 
 def _passing_runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+
+def _git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+    )
+    return completed.stdout
 
 
 def _copilot_payload(head_sha: str, *, reviews: list[dict], review_threads: list[dict] | None = None) -> dict:

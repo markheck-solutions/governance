@@ -8,7 +8,7 @@
       "properties": {
         "name": {"type": "string", "minLength": 1},
         "source": {"type": "string", "minLength": 1},
-        "hash": {"type": "string", "minLength": 64}
+        "hash": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"}
       }
     },
     "required_gates": {

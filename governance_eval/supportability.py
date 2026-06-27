@@ -478,9 +478,13 @@ def _changed_files_or_empty(
 ) -> list[str]:
     if changed_files is not None:
         return changed_files
-    if any("sha" in error.lower() for error in errors):
+    if not _diff_sha_inputs_are_valid(base_sha, head_sha):
         return []
     return _git_changed_files(target_repo, base_sha, head_sha)
+
+
+def _diff_sha_inputs_are_valid(base_sha: str, head_sha: str) -> bool:
+    return bool(SHA1_RE.fullmatch(base_sha) and SHA1_RE.fullmatch(head_sha))
 
 
 def _standard_hash_errors(config: dict[str, Any], target_repo: Path) -> list[str]:
@@ -1065,11 +1069,15 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
 
 
 def _receipt_sha_errors(receipt: dict[str, Any]) -> list[str]:
-    return [
+    errors = [
         f"{key} must be a 40-character lowercase Git SHA"
         for key in ("base_sha", "head_sha")
         if not SHA1_RE.fullmatch(str(receipt.get(key) or ""))
     ]
+    merged_sha = str(receipt.get("merged_sha") or "")
+    if merged_sha and not SHA1_RE.fullmatch(merged_sha):
+        errors.append("merged_sha must be empty or a 40-character lowercase Git SHA")
+    return errors
 
 
 def _live_observation_errors(receipt: dict[str, Any], observations: dict[str, Any]) -> list[str]:
