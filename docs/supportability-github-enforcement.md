@@ -23,13 +23,20 @@ standard:
   hash: "<sha256 of adopted standard text>"
 
 required_gates:
-  lint: ["..."]
-  format_check: ["..."]
-  typecheck: ["..."]
-  complexity: ["..."]
-  architecture: ["..."]
-  tests: ["..."]
-  compile_or_build: ["..."]
+  lint:
+    - "..."
+  format_check:
+    - "..."
+  typecheck:
+    - "..."
+  complexity:
+    - "..."
+  architecture:
+    - "..."
+  tests:
+    - "..."
+  compile_or_build:
+    - "..."
   package_audit: []
   sql_supportability: auto
 
