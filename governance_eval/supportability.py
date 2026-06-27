@@ -1044,10 +1044,14 @@ def _receipt_input_errors(
         errors.append("Copilot review gate is not GREEN")
     if not artifact_name:
         errors.append("artifact name is missing")
-    if artifact_id and not artifact_id.isdigit():
-        errors.append("artifact ID must be numeric when supplied")
-    if artifact_digest and not DIGEST_RE.fullmatch(artifact_digest):
-        errors.append("artifact digest must be sha256:<hex> when supplied")
+    if not artifact_id:
+        errors.append("artifact ID is missing")
+    elif not artifact_id.isdigit():
+        errors.append("artifact ID must be numeric")
+    if not artifact_digest:
+        errors.append("artifact digest is missing")
+    elif not DIGEST_RE.fullmatch(artifact_digest):
+        errors.append("artifact digest must be sha256:<hex>")
     return errors
 
 
@@ -1271,7 +1275,10 @@ def _parse_yaml_scalar(value: str) -> Any:
     if value in {"null", "~"}:
         return None
     if value.startswith("[") or value.startswith("{") or value.startswith('"'):
-        return json.loads(value)
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise SupportabilityError(f"unsupported YAML scalar: {value}") from exc
     if value.startswith("'") and value.endswith("'"):
         return value[1:-1]
     if re.fullmatch(r"-?[0-9]+", value):

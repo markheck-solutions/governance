@@ -58,6 +58,14 @@ class SupportabilityConfigTests(unittest.TestCase):
             with self.assertRaises(SupportabilityError):
                 load_supportability_config(config_path)
 
+    def test_yaml_parser_fails_closed_on_unsupported_flow_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "supportability.yml"
+            config_path.write_text("standard: {name: supportability-standard}\n", encoding="utf-8")
+
+            with self.assertRaises(SupportabilityError):
+                load_supportability_config(config_path)
+
 
 class SupportabilityGateTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -571,6 +579,17 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(result["owner_status"], STATUS_RED)
         self.assertTrue(any("receipt owner_status must be GREEN" in error for error in result["errors"]))
+
+    def test_receipt_generation_requires_artifact_metadata_for_green(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            artifact_name="supportability-delivery-receipt",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertTrue(any("artifact ID is missing" in error for error in receipt["errors"]))
+        self.assertTrue(any("artifact digest is missing" in error for error in receipt["errors"]))
 
 
 def _synthetic_repo(path: Path, root: Path) -> Path:
