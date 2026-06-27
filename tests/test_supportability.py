@@ -150,9 +150,26 @@ class SupportabilityGateTests(unittest.TestCase):
                 command_runner=runner,
             )
 
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("required_gates.lint" in error for error in result["errors"]))
             self.assertEqual(result["commands"][0]["command"], "python -c pass")
             self.assertEqual(seen[0], "python -c pass")
             self.assertIn(("a" * 40, "b" * 40), env_seen)
+
+    def test_invalid_sha_returns_red_without_git_diff_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "not-a-sha",
+                "b" * 40,
+                command_runner=_passing_runner,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("base_sha" in error for error in result["errors"]))
 
     def test_gate_fails_when_supportability_config_is_changed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,6 +186,7 @@ class SupportabilityGateTests(unittest.TestCase):
 
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("supportability config changed" in error for error in result["errors"]))
+            self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
     def test_dot_slash_scope_is_repo_wide(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -203,6 +221,8 @@ class SupportabilityGateTests(unittest.TestCase):
 
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("SQL files require explicit SQL gate" in error for error in result["errors"]))
+            self.assertTrue(any("explicit SQL gate command missing" in error for error in result["errors"]))
+            self.assertNotIn("sql_supportability", result["coverage"]["changed_files"]["sql/report.sql"])
 
 
 class CopilotReviewGateTests(unittest.TestCase):
