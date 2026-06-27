@@ -130,6 +130,8 @@ jobs:
         id: gate
         continue-on-error: true
         shell: bash
+        env:
+          GH_TOKEN: ""
         run: |
           cd governance
           python -m governance_eval supportability-gate \

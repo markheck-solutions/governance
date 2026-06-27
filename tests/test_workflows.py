@@ -50,6 +50,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("continue-on-error: true", workflows["supportability-gate.yml"])
         self.assertIn("supportability-gate", workflows["supportability-gate.yml"])
         self.assertIn("copilot-review-gate", workflows["supportability-gate.yml"])
+        self.assertRegex(
+            workflows["supportability-gate.yml"],
+            r"(?s)- name: Run configured supportability gates.*?env:\s+GH_TOKEN: \"\".*?python -m governance_eval supportability-gate",
+        )
         self.assertIn('replace("\\r", " ").replace("\\n", " ")', workflows["supportability-gate.yml"])
         self.assertIn("pull-requests: read", workflows["supportability-gate.yml"])
         self.assertIn("artifact-digest", workflows["supportability-gate.yml"])
