@@ -1,0 +1,46 @@
+name: Supportability Enforcement
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  supportability:
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    uses: ./.github/workflows/supportability-gate.yml
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      governance-ref: ${{ github.event.pull_request.head.sha }}
+
+  delivery-receipt:
+    needs: supportability
+    if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
+    uses: ./.github/workflows/delivery-receipt.yml
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      governance-ref: ${{ github.event.pull_request.head.sha }}

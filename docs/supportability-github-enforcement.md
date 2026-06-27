@@ -60,6 +60,8 @@ Config changes are protected. A PR that changes `.github/governance/supportabili
 
 Target repos should pin the governance reusable workflow to an exact commit SHA, not to floating `main`.
 
+The governance repo also includes `.github/workflows/supportability-enforcement.yml` as its own caller. This proves the same reusable workflow wiring GitHub will enforce in opted-in target repos.
+
 ```yaml
 name: Governed PR
 
@@ -85,6 +87,7 @@ jobs:
 
   delivery-receipt:
     needs: supportability
+    if: ${{ always() }}
     uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@<governance-commit-sha>
     with:
       target-repository: ${{ github.repository }}
