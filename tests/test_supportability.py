@@ -66,6 +66,22 @@ class SupportabilityConfigTests(unittest.TestCase):
             with self.assertRaises(SupportabilityError):
                 load_supportability_config(config_path)
 
+    def test_json_config_parse_error_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "supportability.json"
+            config_path.write_text("{name: supportability-standard}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(SupportabilityError, "JSON invalid"):
+                load_supportability_config(config_path)
+
+    def test_sql_supportability_error_names_accepted_shapes(self) -> None:
+        config = _valid_config(self.root)
+        config["required_gates"]["sql_supportability"] = 123
+
+        errors = validate_supportability_config(config)
+
+        self.assertTrue(any("auto, a non-empty command string, or a non-empty command list" in error for error in errors))
+
 
 class SupportabilityGateTests(unittest.TestCase):
     def setUp(self) -> None:

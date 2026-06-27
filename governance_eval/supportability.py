@@ -95,7 +95,10 @@ def load_supportability_config(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     stripped = text.lstrip()
     if path.suffix == ".json" or stripped.startswith("{"):
-        parsed = json.loads(text)
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise SupportabilityError(f"supportability config JSON invalid: {exc}") from exc
     else:
         parsed = _parse_simple_yaml(text)
     if not isinstance(parsed, dict):
@@ -458,7 +461,9 @@ def _sql_config_errors(value: Any) -> list[str]:
         return []
     if isinstance(value, str) and value.strip():
         return []
-    return _command_list_errors(value, "required_gates.sql_supportability", allow_empty=False)
+    if isinstance(value, list):
+        return _command_list_errors(value, "required_gates.sql_supportability", allow_empty=False)
+    return ["required_gates.sql_supportability must be auto, a non-empty command string, or a non-empty command list"]
 
 
 def _sha_errors(base_sha: str, head_sha: str) -> list[str]:
