@@ -161,12 +161,16 @@ jobs:
 
           gate = Path("evidence/supportability-gate-result.json")
           copilot = Path("evidence/copilot-review-gate-result.json")
+          architecture = Path("evidence/architecture-gate-result.json")
           gate_candidates = sorted(Path("evidence").rglob("supportability-gate-result.json"))
           copilot_candidates = sorted(Path("evidence").rglob("copilot-review-gate-result.json"))
+          architecture_candidates = sorted(Path("evidence").rglob("architecture-gate-result.json"))
           if not gate.exists() and gate_candidates:
               shutil.copyfile(gate_candidates[0], gate)
           if not copilot.exists() and copilot_candidates:
               shutil.copyfile(copilot_candidates[0], copilot)
+          if not architecture.exists() and architecture_candidates:
+              shutil.copyfile(architecture_candidates[0], architecture)
           if not gate.exists():
               gate.write_text(json.dumps({
                   "owner_status": "RED",
@@ -185,6 +189,14 @@ jobs:
                   "review_status": {},
                   "errors": ["Copilot review evidence artifact missing"],
               }), encoding="utf-8")
+          if not architecture.exists():
+              architecture.write_text(json.dumps({
+                  "owner_status": "RED",
+                  "gate_implementation": "FAIL",
+                  "repo_architecture_supportability": "FAIL",
+                  "architecture_behavior_proof": "FAIL",
+                  "errors": ["architecture gate evidence artifact missing"],
+              }), encoding="utf-8")
           PY
       - name: Generate delivery receipt
         id: receipt
@@ -195,6 +207,7 @@ jobs:
           python -m governance_eval delivery-receipt \
             --gate-result ../evidence/supportability-gate-result.json \
             --copilot-result ../evidence/copilot-review-gate-result.json \
+            --architecture-result ../evidence/architecture-gate-result.json \
             --output-dir ../artifacts/supportability \
             --repository-url "$TARGET_REPOSITORY_URL" \
             --pr-url "$TARGET_PR_URL" \
@@ -212,6 +225,7 @@ jobs:
           cd governance
           python -m governance_eval verify-receipt \
             --receipt ../artifacts/supportability/supportability-delivery-receipt.json \
+            --allow-current-run-pending \
             > ../artifacts/supportability/supportability-receipt-verification.json
       - name: Read delivery summary
         id: summary

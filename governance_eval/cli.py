@@ -11,6 +11,7 @@ from governance_eval.benchmark import run_benchmark
 from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
+from governance_eval.architecture_gate import main as architecture_gate_main
 from governance_eval.delivery_readiness import main as delivery_readiness_main
 from governance_eval.delivery_readiness import validate_review_quorum_document
 from governance_eval.lock import write_spaghetti_lock
@@ -22,6 +23,8 @@ from governance_eval.target_pack import validate_target_request
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "architecture-gate":
+        return architecture_gate_main(argv)
     if argv and argv[0] in {
         "supportability-config",
         "supportability-gate",

@@ -20,7 +20,21 @@ permissions:
   pull-requests: read
 
 jobs:
-  supportability:
+  baseline-supportability:
+    name: Baseline Protected Supportability Gate
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@main
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      governance-ref: ${{ github.event.pull_request.base.sha }}
+
+  candidate-supportability:
+    name: Candidate Supportability Gate
     if: ${{ github.event.pull_request.base.ref == 'main' }}
     uses: ./.github/workflows/supportability-gate.yml
     with:
@@ -33,9 +47,12 @@ jobs:
       governance-ref: ${{ github.event.pull_request.head.sha }}
 
   delivery-receipt:
-    needs: supportability
+    name: Baseline Protected Delivery Receipt
+    needs:
+      - baseline-supportability
+      - candidate-supportability
     if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
-    uses: ./.github/workflows/delivery-receipt.yml
+    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@main
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
@@ -43,6 +60,6 @@ jobs:
       target-head-sha: ${{ github.event.pull_request.head.sha }}
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: ${{ github.event.pull_request.head.sha }}
-      supportability-artifact-id: ${{ needs.supportability.outputs['artifact-id'] }}
-      supportability-artifact-digest: ${{ needs.supportability.outputs['artifact-digest'] }}
+      governance-ref: ${{ github.event.pull_request.base.sha }}
+      supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] }}
+      supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] }}

@@ -95,8 +95,12 @@ class SupportabilityError(ValueError):
 
 def load_supportability_config(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
+    return _parse_supportability_config_text(text, path.suffix)
+
+
+def _parse_supportability_config_text(text: str, suffix: str = "") -> dict[str, Any]:
     stripped = text.lstrip()
-    if path.suffix == ".json" or stripped.startswith("{"):
+    if suffix == ".json" or stripped.startswith("{"):
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
@@ -119,6 +123,7 @@ def validate_supportability_config(config: dict[str, Any]) -> list[str]:
     errors.extend(_coverage_errors(config.get("coverage")))
     errors.extend(_ai_review_errors(config.get("ai_review")))
     errors.extend(_receipt_config_errors(config.get("receipt")))
+    errors.extend(_architecture_policy_errors(config.get("architecture_policy")))
     return errors
 
 
@@ -142,14 +147,16 @@ def run_supportability_gate(
     changed = _changed_files_or_empty(target_repo, base_sha, head_sha, changed_files, errors)
     changed_discovery_errors = errors[changed_error_start:]
     high_risk = _high_risk_files(target_repo, changed)
-    config_change_errors = _self_modified_config_errors(config_path, target_repo, changed)
+    config_change_errors = _self_modified_config_errors(config_path, target_repo, changed, base_sha, config)
     errors.extend(config_change_errors)
+    architecture_governance_errors = _architecture_governance_change_errors(target_repo, changed, base_sha, config_path)
+    errors.extend(architecture_governance_errors)
     errors.extend(_standard_hash_errors(config, target_repo))
     coverage_plan = _build_coverage_plan(config, changed, high_risk)
     errors.extend(coverage_plan["errors"])
     sql_commands, sql_errors = _sql_gate_commands(config, target_repo, changed, high_risk)
     errors.extend(sql_errors)
-    command_results = _protected_command_results(config_change_errors)
+    command_results = _protected_command_results(config_change_errors + architecture_governance_errors)
     if not command_results and (revision_errors or changed_discovery_errors):
         command_results = _skipped_command_results(
             "revision inputs invalid or changed-file discovery failed; commands not executed without verifiable diff"
@@ -227,6 +234,7 @@ def generate_delivery_receipt(
     gate_result: dict[str, Any],
     copilot_result: dict[str, Any],
     *,
+    architecture_result: dict[str, Any] | None = None,
     output_dir: Path | None = None,
     repository_url: str = "",
     pr_url: str = "",
@@ -242,7 +250,14 @@ def generate_delivery_receipt(
     resolved_pr_url = pr_url or str(gate_result.get("pull_request_url") or "")
     base_sha = str(gate_result.get("base_sha") or "")
     head_sha = str(gate_result.get("head_sha") or "")
-    errors = _receipt_input_errors(gate_result, copilot_result, artifact_name, artifact_id, artifact_digest)
+    architecture_result = architecture_result or {
+        "owner_status": STATUS_RED,
+        "gate_implementation": "FAIL",
+        "repo_architecture_supportability": "FAIL",
+        "architecture_behavior_proof": "FAIL",
+        "errors": ["architecture gate result missing"],
+    }
+    errors = _receipt_input_errors(gate_result, copilot_result, artifact_name, artifact_id, artifact_digest, architecture_result)
     if not SHA1_RE.fullmatch(base_sha):
         errors.append("base_sha must be a 40-character lowercase Git SHA")
     if not SHA1_RE.fullmatch(head_sha):
@@ -288,6 +303,18 @@ def generate_delivery_receipt(
             "review_status": copilot_result.get("review_status", {}),
             "errors": copilot_result.get("errors", []),
         },
+        "architecture": {
+            "owner_status": architecture_result.get("owner_status"),
+            "gate_implementation": architecture_result.get("gate_implementation"),
+            "repo_architecture_supportability": architecture_result.get("repo_architecture_supportability"),
+            "architecture_behavior_proof": architecture_result.get("architecture_behavior_proof"),
+            "enforcement_mode": architecture_result.get("enforcement_mode"),
+            "violation_count": len(architecture_result.get("violations") or []),
+            "new_violation_count": len(architecture_result.get("new_violations") or []),
+            "existing_violation_count": len(architecture_result.get("existing_violations") or []),
+            "expired_exception_count": len(architecture_result.get("expired_exceptions") or []),
+            "errors": architecture_result.get("errors", []),
+        },
         "remote_audit": {
             "ls_remote_main_sha": "",
             "fresh_clone_head_log": [],
@@ -308,10 +335,11 @@ def verify_delivery_receipt(
     receipt: dict[str, Any],
     *,
     live_observations: dict[str, Any] | None = None,
+    allow_current_run_pending: bool = False,
 ) -> dict[str, Any]:
     errors = _receipt_document_errors(receipt)
     if live_observations is not None:
-        errors.extend(_live_observation_errors(receipt, live_observations))
+        errors.extend(_live_observation_errors(receipt, live_observations, allow_current_run_pending=allow_current_run_pending))
     result = {
         "schema_version": "1.0",
         "generated_at": _utc_now(),
@@ -475,6 +503,27 @@ def _receipt_config_errors(receipt: Any) -> list[str]:
     return errors
 
 
+def _architecture_policy_errors(policy: Any) -> list[str]:
+    if not isinstance(policy, dict):
+        return ["architecture_policy must be an object"]
+    errors = []
+    if policy.get("version") != 1:
+        errors.append("architecture_policy.version must be 1")
+    if policy.get("enforcement_mode") != "block_all":
+        errors.append("architecture_policy.enforcement_mode must be block_all")
+    if not isinstance(policy.get("governed_roots"), list) or not policy["governed_roots"]:
+        errors.append("architecture_policy.governed_roots must be a non-empty list")
+    if not isinstance(policy.get("runtime_relevance"), dict):
+        errors.append("architecture_policy.runtime_relevance must be an object")
+    if not isinstance(policy.get("vague_names"), dict):
+        errors.append("architecture_policy.vague_names must be an object")
+    if not isinstance(policy.get("modules"), dict) or not policy["modules"]:
+        errors.append("architecture_policy.modules must be a non-empty object")
+    if not isinstance(policy.get("exceptions", []), list):
+        errors.append("architecture_policy.exceptions must be a list")
+    return errors
+
+
 def _command_list_errors(value: Any, label: str, *, allow_empty: bool) -> list[str]:
     if not isinstance(value, list):
         return [f"{label} must be a list of commands"]
@@ -542,14 +591,243 @@ def _standard_hash_errors(config: dict[str, Any], target_repo: Path) -> list[str
     return []
 
 
-def _self_modified_config_errors(config_path: Path, target_repo: Path, changed: list[str]) -> list[str]:
+def _self_modified_config_errors(
+    config_path: Path,
+    target_repo: Path,
+    changed: list[str],
+    base_sha: str,
+    head_config: dict[str, Any],
+) -> list[str]:
     try:
         relative = config_path.resolve().relative_to(target_repo.resolve()).as_posix()
     except ValueError:
         relative = config_path.as_posix()
-    if relative in {path.replace("\\", "/") for path in changed}:
-        return ["supportability config changed in this PR; merge config separately before enforcing it against code changes"]
+    if relative not in {path.replace("\\", "/") for path in changed}:
+        return []
+    base_config, errors = _base_supportability_config(target_repo, base_sha, relative, config_path.suffix)
+    if errors:
+        return errors
+    if base_config is None:
+        return []
+    architecture_errors = _architecture_policy_weakening_errors(base_config, head_config)
+    if architecture_errors:
+        return architecture_errors
+    return ["supportability config changed in this PR; merge config separately before enforcing it against code changes"]
+
+
+def _architecture_governance_change_errors(
+    target_repo: Path,
+    changed: list[str],
+    base_sha: str,
+    config_path: Path,
+) -> list[str]:
+    changed_set = {path.replace("\\", "/") for path in changed}
+    errors: list[str] = []
+    checker_paths = {
+        "governance_eval/architecture_gate.py",
+        "schemas/v1/architecture_gate_result.schema.json",
+        "schemas/v1/supportability_config.schema.json",
+    }
+    touched_checkers = sorted(changed_set & checker_paths)
+    if touched_checkers:
+        errors.append(
+            "architecture checker files changed; protected baseline judge or human-only approval is required: "
+            + ", ".join(touched_checkers)
+        )
+    workflow_path = ".github/workflows/supportability-gate.yml"
+    if workflow_path in changed_set:
+        base_text = _git_show_text(target_repo, base_sha, workflow_path)
+        head_text = (target_repo / workflow_path).read_text(encoding="utf-8") if (target_repo / workflow_path).exists() else ""
+        if base_text is not None and _architecture_command_lines(base_text) != _architecture_command_lines(head_text):
+            errors.append("architecture gate workflow command changed; protected human-only approval is required")
+    return errors
+
+
+def _git_show_text(target_repo: Path, base_sha: str, relative_path: str) -> str | None:
+    if not SHA1_RE.fullmatch(base_sha):
+        return None
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(target_repo), "show", f"{base_sha}:{relative_path}"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        )
+        return completed.stdout
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
+def _architecture_command_lines(workflow_text: str) -> list[str]:
+    return [
+        line.strip()
+        for line in workflow_text.splitlines()
+        if "python -m governance_eval architecture-gate" in line
+    ]
+
+
+def _architecture_policy_weakening_errors(base_config: dict[str, Any], head_config: dict[str, Any]) -> list[str]:
+    base_policy = base_config.get("architecture_policy")
+    head_policy = head_config.get("architecture_policy")
+    if not isinstance(base_policy, dict):
+        return []
+    if not isinstance(head_policy, dict):
+        return ["architecture_policy deleted; protected human-only approval is required"]
+    errors: list[str] = []
+    if head_policy.get("enforcement_mode") != "block_all":
+        errors.append("architecture_policy.enforcement_mode changed away from block_all")
+    errors.extend(_removed_or_narrowed_roots(base_policy, head_policy))
+    errors.extend(_runtime_relevance_weakening_errors(base_policy, head_policy))
+    errors.extend(_vague_name_weakening_errors(base_policy, head_policy))
+    errors.extend(_module_policy_weakening_errors(base_policy, head_policy))
+    errors.extend(_exception_weakening_errors(base_policy, head_policy))
+    return errors
+
+
+def _removed_or_narrowed_roots(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
+    base_roots = {_norm_policy_path(root.get("path")): root for root in base_policy.get("governed_roots", []) if isinstance(root, dict)}
+    head_roots = {_norm_policy_path(root.get("path")): root for root in head_policy.get("governed_roots", []) if isinstance(root, dict)}
+    errors = []
+    for path, base_root in sorted(base_roots.items()):
+        head_root = head_roots.get(path)
+        if head_root is None:
+            errors.append(f"architecture_policy.governed_roots removed: {path}")
+            continue
+        for key in ("kind", "owner", "purpose"):
+            if head_root.get(key) != base_root.get(key):
+                errors.append(f"architecture_policy.governed_roots narrowed or changed for {path}: {key}")
+    return errors
+
+
+def _runtime_relevance_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
+    base = base_policy.get("runtime_relevance") if isinstance(base_policy.get("runtime_relevance"), dict) else {}
+    head = head_policy.get("runtime_relevance") if isinstance(head_policy.get("runtime_relevance"), dict) else {}
+    errors = []
+    base_prod = set(base.get("production_globs") or [])
+    head_prod = set(head.get("production_globs") or [])
+    if not base_prod.issubset(head_prod):
+        errors.append("architecture_policy.runtime_relevance.production_globs narrowed")
+    base_non_runtime = set(base.get("non_runtime_globs") or [])
+    head_non_runtime = set(head.get("non_runtime_globs") or [])
+    if not head_non_runtime.issubset(base_non_runtime):
+        errors.append("architecture_policy.runtime_relevance.non_runtime_globs broadened")
+    return errors
+
+
+def _vague_name_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
+    base = base_policy.get("vague_names") if isinstance(base_policy.get("vague_names"), dict) else {}
+    head = head_policy.get("vague_names") if isinstance(head_policy.get("vague_names"), dict) else {}
+    base_forbidden = set(base.get("forbidden") or [])
+    head_forbidden = set(head.get("forbidden") or [])
+    if not base_forbidden.issubset(head_forbidden):
+        return ["architecture_policy.vague_names.forbidden narrowed"]
     return []
+
+
+def _module_policy_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    base_modules = base_policy.get("modules") if isinstance(base_policy.get("modules"), dict) else {}
+    head_modules = head_policy.get("modules") if isinstance(head_policy.get("modules"), dict) else {}
+    for module_id, base_module in sorted(base_modules.items()):
+        head_module = head_modules.get(module_id)
+        if not isinstance(base_module, dict) or not isinstance(head_module, dict):
+            errors.append(f"architecture_policy.modules.{module_id} removed")
+            continue
+        base_allowed = set(base_module.get("allowed_dependencies") or [])
+        head_allowed = set(head_module.get("allowed_dependencies") or [])
+        if not head_allowed.issubset(base_allowed):
+            errors.append(f"architecture_policy.modules.{module_id}.allowed_dependencies broadened")
+        base_forbidden = set(base_module.get("forbidden_dependencies") or [])
+        head_forbidden = set(head_module.get("forbidden_dependencies") or [])
+        if not base_forbidden.issubset(head_forbidden):
+            errors.append(f"architecture_policy.modules.{module_id}.forbidden_dependencies narrowed")
+        errors.extend(_limit_weakening_errors(module_id, base_module, head_module))
+    return errors
+
+
+def _limit_weakening_errors(module_id: str, base_module: dict[str, Any], head_module: dict[str, Any]) -> list[str]:
+    errors = []
+    base_limits = base_module.get("limits") if isinstance(base_module.get("limits"), dict) else {}
+    head_limits = head_module.get("limits") if isinstance(head_module.get("limits"), dict) else {}
+    for key in (
+        "max_file_lines",
+        "max_function_lines",
+        "max_class_lines",
+        "max_functions_per_file",
+        "max_classes_per_file",
+    ):
+        base_value = base_limits.get(key)
+        head_value = head_limits.get(key)
+        if isinstance(base_value, int) and isinstance(head_value, int) and head_value > base_value:
+            errors.append(f"architecture_policy.modules.{module_id}.limits.{key} increased")
+    return errors
+
+
+def _exception_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
+    base_exceptions = {_exception_identity(item): item for item in base_policy.get("exceptions", []) if isinstance(item, dict)}
+    errors = []
+    for item in head_policy.get("exceptions", []):
+        if not isinstance(item, dict):
+            continue
+        identity = _exception_identity(item)
+        base_item = base_exceptions.get(identity)
+        if base_item is None:
+            errors.append("architecture_policy.exceptions added or broadened")
+            continue
+        if str(item.get("expires_on") or "") > str(base_item.get("expires_on") or ""):
+            errors.append("architecture_policy.exceptions extended")
+    return errors
+
+
+def _exception_identity(item: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        item.get("rule"),
+        _norm_policy_path(item.get("path")),
+        item.get("source_module", ""),
+        item.get("target_module", ""),
+        item.get("symbol_name", ""),
+        item.get("detail", ""),
+        item.get("fingerprint", ""),
+    )
+
+
+def _norm_policy_path(value: Any) -> str:
+    return str(value or "").replace("\\", "/").strip("/")
+
+
+def _base_supportability_config(
+    target_repo: Path,
+    base_sha: str,
+    relative_config_path: str,
+    suffix: str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    if not SHA1_RE.fullmatch(base_sha):
+        return {}, ["supportability config changed in this PR; base config cannot be verified"]
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(target_repo), "show", f"{base_sha}:{relative_config_path}"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        )
+        return _parse_supportability_config_text(completed.stdout, suffix), []
+    except subprocess.CalledProcessError as exc:
+        message = (exc.stderr or "") + (exc.stdout or "")
+        if "exists on disk, but not in" in message or "does not exist in" in message or "Path" in message:
+            return None, []
+        return {}, [f"supportability config changed in this PR; trusted base config could not be loaded: {exc}"]
+    except (subprocess.TimeoutExpired, SupportabilityError) as exc:
+        return {}, [f"supportability config changed in this PR; trusted base config could not be loaded: {exc}"]
+
+
+def _is_initial_architecture_policy_adoption(base_config: dict[str, Any], head_config: dict[str, Any]) -> bool:
+    if "architecture_policy" in base_config or "architecture_policy" not in head_config:
+        return False
+    base_without_architecture = {key: value for key, value in base_config.items() if key != "architecture_policy"}
+    head_without_architecture = {key: value for key, value in head_config.items() if key != "architecture_policy"}
+    return base_without_architecture == head_without_architecture
 
 
 def _build_coverage_plan(config: dict[str, Any], changed: list[str], high_risk: list[str]) -> dict[str, Any]:
@@ -1090,12 +1368,14 @@ def _receipt_input_errors(
     artifact_name: str,
     artifact_id: str,
     artifact_digest: str,
+    architecture_result: dict[str, Any],
 ) -> list[str]:
     errors = []
     if gate_result.get("owner_status") != STATUS_GREEN:
         errors.append("supportability gate is not GREEN")
     if copilot_result.get("owner_status") != STATUS_GREEN:
         errors.append("Copilot review gate is not GREEN")
+    errors.extend(_architecture_receipt_input_errors(architecture_result))
     if not artifact_name:
         errors.append("artifact name is missing")
     if not artifact_id:
@@ -1106,6 +1386,24 @@ def _receipt_input_errors(
         errors.append("artifact digest is missing")
     elif not DIGEST_RE.fullmatch(artifact_digest):
         errors.append("artifact digest must be sha256:<hex>")
+    return errors
+
+
+def _architecture_receipt_input_errors(architecture_result: dict[str, Any]) -> list[str]:
+    errors = []
+    expected = {
+        "owner_status": STATUS_GREEN,
+        "gate_implementation": "PASS",
+        "repo_architecture_supportability": "PASS",
+        "architecture_behavior_proof": "PASS",
+        "enforcement_mode": "block_all",
+    }
+    for key, value in expected.items():
+        if architecture_result.get(key) != value:
+            errors.append(f"architecture {key} must be {value}")
+    for key in ("violations", "new_violations", "expired_exceptions", "errors"):
+        if architecture_result.get(key):
+            errors.append(f"architecture {key} must be empty")
     return errors
 
 
@@ -1161,11 +1459,22 @@ def _receipt_sha_errors(receipt: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _live_observation_errors(receipt: dict[str, Any], observations: dict[str, Any]) -> list[str]:
+def _live_observation_errors(
+    receipt: dict[str, Any],
+    observations: dict[str, Any],
+    *,
+    allow_current_run_pending: bool = False,
+) -> list[str]:
     errors = [f"live proof failed: {error}" for error in observations.get("__load_errors", [])]
     errors.extend(_live_ls_remote_errors(observations))
     errors.extend(_live_pr_errors(receipt, observations.get("pr") or {}))
-    errors.extend(_live_run_errors(receipt, observations.get("run") or {}))
+    errors.extend(
+        _live_run_errors(
+            receipt,
+            observations.get("run") or {},
+            allow_current_run_pending=allow_current_run_pending,
+        )
+    )
     errors.extend(_live_artifact_errors(receipt, observations.get("artifact") or {}))
     merged_sha = receipt.get("merged_sha")
     if not observations.get("fresh_clone_head_log"):
@@ -1199,17 +1508,29 @@ def _live_pr_errors(receipt: dict[str, Any], pr: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _live_run_errors(receipt: dict[str, Any], run: dict[str, Any]) -> list[str]:
+def _live_run_errors(
+    receipt: dict[str, Any],
+    run: dict[str, Any],
+    *,
+    allow_current_run_pending: bool = False,
+) -> list[str]:
     if not run:
         return ["GitHub workflow run proof is missing"]
     errors = []
     if run.get("headSha") != receipt.get("head_sha"):
         errors.append("workflow run headSha does not match receipt head_sha")
+    if allow_current_run_pending and _is_current_workflow_run(receipt):
+        return errors
     if run.get("status") != "completed":
         errors.append("workflow run status must be completed")
     if run.get("conclusion") != "success":
         errors.append("workflow run conclusion must be success")
     return errors
+
+
+def _is_current_workflow_run(receipt: dict[str, Any]) -> bool:
+    workflow = receipt.get("workflow") if isinstance(receipt.get("workflow"), dict) else {}
+    return bool(os.environ.get("GITHUB_RUN_ID") and str(workflow.get("run_id") or "") == os.environ["GITHUB_RUN_ID"])
 
 
 def _live_artifact_errors(receipt: dict[str, Any], artifact: dict[str, Any]) -> list[str]:
@@ -1237,6 +1558,7 @@ def _receipt_markdown(receipt: dict[str, Any]) -> str:
     artifact = receipt["artifact"]
     workflow = receipt["workflow"]
     copilot = receipt["copilot_review"]
+    architecture = receipt.get("architecture", {})
     return "\n".join(
         [
             "# Supportability Delivery Receipt",
@@ -1246,6 +1568,10 @@ def _receipt_markdown(receipt: dict[str, Any]) -> str:
             f"Main SHA: {receipt.get('merged_sha') or 'not merged'}",
             f"Checks: {receipt['supportability_gate']['owner_status']}",
             f"Copilot review: {copilot['owner_status']}",
+            f"Architecture gate: {architecture.get('owner_status', '')}",
+            f"Gate implementation: {architecture.get('gate_implementation', '')}",
+            f"Repo architecture supportability: {architecture.get('repo_architecture_supportability', '')}",
+            f"Architecture behavior proof: {architecture.get('architecture_behavior_proof', '')}",
             f"Artifact: {artifact.get('name', '')} {artifact.get('id', '')} {artifact.get('digest', '')}",
             f"Workflow: {workflow.get('run_url', '')}",
             "",
@@ -1319,9 +1645,27 @@ def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int) -> t
     items: list[Any] = []
     while index < len(lines) and lines[index][0] == indent and lines[index][1].startswith("- "):
         value = lines[index][1][2:].strip()
-        items.append(_parse_yaml_scalar(value))
-        index += 1
+        if value == "":
+            if index + 1 >= len(lines) or lines[index + 1][0] <= indent:
+                raise SupportabilityError("YAML list item is missing a nested block")
+            child, index = _parse_yaml_block(lines, index + 1, lines[index + 1][0])
+            items.append(child)
+        elif _looks_like_yaml_mapping_item(value):
+            key, scalar = _split_yaml_key_value(value)
+            item = {key: _parse_yaml_scalar(scalar)}
+            index += 1
+            if index < len(lines) and lines[index][0] > indent:
+                child, index = _parse_yaml_mapping(lines, index, lines[index][0])
+                item.update(child)
+            items.append(item)
+        else:
+            items.append(_parse_yaml_scalar(value))
+            index += 1
     return items, index
+
+
+def _looks_like_yaml_mapping_item(value: str) -> bool:
+    return ":" in value and not value.startswith(("'", '"'))
 
 
 def _split_yaml_key_value(text: str) -> tuple[str, str]:
@@ -1383,6 +1727,7 @@ def _add_receipt_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser = subparsers.add_parser("delivery-receipt", help="generate supportability delivery receipt")
     parser.add_argument("--gate-result", type=Path, required=True)
     parser.add_argument("--copilot-result", type=Path, required=True)
+    parser.add_argument("--architecture-result", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/supportability"))
     parser.add_argument("--repository-url", default="")
     parser.add_argument("--pr-url", default="")
@@ -1399,6 +1744,7 @@ def _add_verify_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     parser = subparsers.add_parser("verify-receipt", help="verify supportability receipt against GitHub")
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--skip-live", action="store_true")
+    parser.add_argument("--allow-current-run-pending", action="store_true")
 
 
 def _cli_config(args: argparse.Namespace) -> int:
@@ -1441,9 +1787,11 @@ def _cli_copilot(args: argparse.Namespace) -> int:
 def _cli_receipt(args: argparse.Namespace) -> int:
     gate = json.loads(args.gate_result.read_text(encoding="utf-8"))
     copilot = json.loads(args.copilot_result.read_text(encoding="utf-8"))
+    architecture = json.loads(args.architecture_result.read_text(encoding="utf-8")) if args.architecture_result else None
     receipt = generate_delivery_receipt(
         gate,
         copilot,
+        architecture_result=architecture,
         output_dir=args.output_dir,
         repository_url=args.repository_url,
         pr_url=args.pr_url,
@@ -1462,7 +1810,11 @@ def _cli_receipt(args: argparse.Namespace) -> int:
 def _cli_verify_receipt(args: argparse.Namespace) -> int:
     receipt = json.loads(args.receipt.read_text(encoding="utf-8"))
     observations = None if args.skip_live else load_live_receipt_observations(receipt)
-    result = verify_delivery_receipt(receipt, live_observations=observations)
+    result = verify_delivery_receipt(
+        receipt,
+        live_observations=observations,
+        allow_current_run_pending=args.allow_current_run_pending,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["owner_status"] == STATUS_GREEN else 1
 

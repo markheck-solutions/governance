@@ -14,6 +14,7 @@
     "gate_coverage",
     "supportability_gate",
     "copilot_review",
+    "architecture",
     "remote_audit",
     "errors"
   ],
@@ -33,6 +34,7 @@
     "gate_coverage": {"type": "object"},
     "supportability_gate": {"type": "object"},
     "copilot_review": {"type": "object"},
+    "architecture": {"type": "object"},
     "remote_audit": {"type": "object"},
     "errors": {"type": "array", "items": {"type": "string"}}
   },

@@ -19,6 +19,7 @@ SCHEMA_FILES = {
     "review_quorum": "review_quorum.schema.json",
     "supportability_config": "supportability_config.schema.json",
     "supportability_gate_result": "supportability_gate_result.schema.json",
+    "architecture_gate_result": "architecture_gate_result.schema.json",
     "copilot_review_gate_result": "copilot_review_gate_result.schema.json",
     "delivery_receipt": "delivery_receipt.schema.json",
 }

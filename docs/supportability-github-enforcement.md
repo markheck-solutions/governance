@@ -57,19 +57,78 @@ ai_review:
 receipt:
   artifact_name: supportability-delivery-receipt
   retention_days: 90
+
+architecture_policy:
+  version: 1
+  enforcement_mode: block_all
+  governed_roots:
+    - path: governance_eval
+      kind: production_python
+      owner: governance
+      purpose: executable governance evaluator
+  runtime_relevance:
+    production_globs:
+      - "**/*.py"
+      - "**/*.sql"
+    non_runtime_globs:
+      - "docs/**"
+      - "schemas/**"
+      - "artifacts/**"
+      - "**/*.md"
+      - "**/*.json"
+  vague_names:
+    forbidden:
+      - utils
+      - helpers
+      - common
+      - misc
+      - stuff
+      - shared
+  modules:
+    governance_eval:
+      path: governance_eval
+      owner: governance
+      purpose: evaluator runtime and CLI implementation
+      classification: application
+      domain: governance-evaluation
+      allowed_dependencies: []
+      forbidden_dependencies:
+        - tests
+      test_strategy: unittest coverage through tests/
+      limits:
+        max_file_lines: 700
+        max_function_lines: 120
+        max_class_lines: 240
+        max_functions_per_file: 45
+        max_classes_per_file: 12
+  exceptions: []
 ```
 
 If a repo contains SQL files and `sql_supportability` is `auto`, the gate returns RED until explicit SQL validation commands are configured.
 
-Config changes are protected. A PR that changes `.github/governance/supportability.yml` returns RED. Bootstrap the first config as a separate owner-approved PR, then require the supportability checks for later code changes.
+Config changes are protected. A PR that weakens `.github/governance/supportability.yml` returns RED. Weakening includes changing away from `block_all`, removing governed roots, narrowing runtime production globs, broadening non-runtime globs, narrowing vague-name controls, broadening allowed dependencies, narrowing forbidden dependencies, increasing size limits, or adding/extending exceptions.
 
 The `receipt` block is validated as the target repo's declared contract. Reusable workflow inputs/defaults enforce the actual artifact names and 90-day retention during upload.
+
+The `architecture_policy` block is the repo-specific module/package boundary registry. The reusable workflow directly invokes `python -m governance_eval architecture-gate`; `required_gates.architecture` may add repo-specific checks, but it cannot replace the approved checker.
+
+Architecture enforcement is hard-stop only:
+
+- `block_all` is the only CI-valid mode.
+- `report_only` and `block_new` are rejected by schema/config validation.
+- `architecture_behavior_proof` is `PASS` only when approved positive, negative, and theater fixtures run and pass.
+- Exceptions document debt only. An applied exception does not convert architecture supportability to GREEN.
+
+Architecture evidence is written as both `architecture-gate-result.json` and `architecture-gate-result.md`.
 
 ## Caller Workflow
 
 Target repos should pin the governance reusable workflow to an exact commit SHA, not to floating `main`.
 
-The governance repo also includes `.github/workflows/supportability-enforcement.yml` as its own caller. This proves the same reusable workflow wiring GitHub will enforce in opted-in target repos.
+The governance repo also includes `.github/workflows/supportability-enforcement.yml` as its own caller. Governance PRs run two judges:
+
+- Baseline protected judge from `main`, using the base SHA evaluator. This must block merge.
+- Candidate judge from the PR head. This reports candidate behavior but cannot be the only authority.
 
 ```yaml
 name: Governed PR
@@ -115,10 +174,12 @@ jobs:
 The target repo ruleset should require:
 
 - Pull requests before merge to `main`.
-- Status check `Supportability Gate`.
-- Status check `Delivery Receipt`.
-- Stale check dismissal after new commits.
-- No bypass except explicit owner emergency.
+- Status check `Baseline Protected Supportability Gate`.
+- Status check `Baseline Protected Delivery Receipt`.
+- Branches up to date before merge.
+- Conversation resolution.
+- Auto-merge disabled until strict hard-stop checks are proven.
+- No bypass for AI or bot actors.
 
 Copilot review is required input to the receipt, not the only merge authority.
 
@@ -130,6 +191,9 @@ The workflows enforce objective proof:
 - Required commands are not marked non-blocking.
 - Configured command strings do not contain known scope-narrowing or threshold-weakening markers.
 - Changed files and deterministic high-risk production files receive gate coverage.
+- The approved architecture checker runs directly and emits JSON plus Markdown evidence.
+- Workflow GREEN requires architecture owner status GREEN, gate implementation PASS, repo architecture supportability PASS, behavior proof PASS, no violations, no new violations, no expired exceptions, and no errors.
+- Architecture policy covers runtime/production-relevant files with registered module ownership, allowed dependencies, forbidden dependencies, strict fingerprinted exceptions, and deterministic Python size/import checks.
 - The adopted standard file exists and matches the pinned hash.
 - Copilot or an allowed AI reviewer reviewed the latest head SHA.
 - Unresolved `P0`, `P1`, or `P2` AI review evidence blocks GREEN.

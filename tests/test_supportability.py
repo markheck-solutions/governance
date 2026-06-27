@@ -43,6 +43,24 @@ class SupportabilityConfigTests(unittest.TestCase):
         self.assertTrue(any("required_gates.tests" in error for error in errors))
         self.assertTrue(any("required_gates.lint" in error for error in errors))
 
+    def test_config_validation_rejects_soft_architecture_modes(self) -> None:
+        for mode in ("report_only", "block_new"):
+            with self.subTest(mode=mode):
+                config = _valid_config(self.root)
+                config["architecture_policy"]["enforcement_mode"] = mode
+
+                errors = validate_supportability_config(config)
+
+                self.assertTrue(any("architecture_policy.enforcement_mode" in error for error in errors))
+
+    def test_config_validation_rejects_deleted_architecture_policy(self) -> None:
+        config = _valid_config(self.root)
+        config.pop("architecture_policy")
+
+        errors = validate_supportability_config(config)
+
+        self.assertTrue(any("architecture_policy" in error for error in errors))
+
     def test_config_schema_validation_is_independent_of_current_working_directory(self) -> None:
         config = _valid_config(self.root)
 
@@ -301,6 +319,146 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertTrue(any("supportability config changed" in error for error in result["errors"]))
             self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
+    def test_gate_blocks_initial_architecture_policy_adoption_mixed_with_config_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            config = load_supportability_config(repo / ".github/governance/supportability.yml")
+            base_config = dict(config)
+            base_config.pop("architecture_policy")
+
+            with mock.patch("governance_eval.supportability._base_supportability_config", return_value=(base_config, [])):
+                result = run_supportability_gate(
+                    repo / ".github/governance/supportability.yml",
+                    repo,
+                    "a" * 40,
+                    "b" * 40,
+                    changed_files=[".github/governance/supportability.yml"],
+                    command_runner=_passing_runner,
+                )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("supportability config changed" in error for error in result["errors"]))
+
+    def test_gate_blocks_architecture_size_limit_increase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = load_supportability_config(repo / ".github/governance/supportability.yml")
+            head_config = json.loads(json.dumps(base_config))
+            head_config["architecture_policy"]["modules"]["src"]["limits"]["max_file_lines"] += 1
+            (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
+
+            result = _run_config_change_with_base(repo, base_config)
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("max_file_lines increased" in error for error in result["errors"]))
+
+    def test_gate_blocks_removed_governed_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = load_supportability_config(repo / ".github/governance/supportability.yml")
+            head_config = json.loads(json.dumps(base_config))
+            head_config["architecture_policy"]["governed_roots"] = [
+                root for root in head_config["architecture_policy"]["governed_roots"] if root["path"] != "docs"
+            ]
+            (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
+
+            result = _run_config_change_with_base(repo, base_config)
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("governed_roots removed" in error for error in result["errors"]))
+
+    def test_gate_blocks_broadened_non_runtime_globs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = load_supportability_config(repo / ".github/governance/supportability.yml")
+            head_config = json.loads(json.dumps(base_config))
+            head_config["architecture_policy"]["runtime_relevance"]["non_runtime_globs"].append("src/**")
+            (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
+
+            result = _run_config_change_with_base(repo, base_config)
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("non_runtime_globs broadened" in error for error in result["errors"]))
+
+    def test_gate_blocks_dependency_policy_weakening(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = load_supportability_config(repo / ".github/governance/supportability.yml")
+            head_config = json.loads(json.dumps(base_config))
+            head_config["architecture_policy"]["modules"]["src"]["allowed_dependencies"].append("tests")
+            head_config["architecture_policy"]["modules"]["src"]["forbidden_dependencies"] = []
+            (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
+
+            result = _run_config_change_with_base(repo, base_config)
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("allowed_dependencies broadened" in error for error in result["errors"]))
+            self.assertTrue(any("forbidden_dependencies narrowed" in error for error in result["errors"]))
+
+    def test_gate_blocks_added_architecture_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = load_supportability_config(repo / ".github/governance/supportability.yml")
+            head_config = json.loads(json.dumps(base_config))
+            head_config["architecture_policy"]["exceptions"].append(
+                {
+                    "rule": "vague_folder_name",
+                    "path": "src/utils/file.py",
+                    "source_module": "",
+                    "target_module": "",
+                    "symbol_name": "utils",
+                    "detail": "forbidden vague folder name: utils",
+                    "fingerprint": "a" * 64,
+                    "owner": "test",
+                    "reason": "hide utils",
+                    "expires_on": "2099-12-31",
+                }
+            )
+            (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
+
+            result = _run_config_change_with_base(repo, base_config)
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("exceptions added" in error for error in result["errors"]))
+
+    def test_gate_blocks_architecture_checker_file_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=["governance_eval/architecture_gate.py"],
+                command_runner=_passing_runner,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("architecture checker files changed" in error for error in result["errors"]))
+            self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
+
+    def test_gate_blocks_architecture_workflow_command_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            workflow_path = repo / ".github/workflows/supportability-gate.yml"
+            workflow_path.parent.mkdir(parents=True, exist_ok=True)
+            workflow_path.write_text("run: echo ok\n", encoding="utf-8")
+            base_workflow = "run: python -m governance_eval architecture-gate \\\n"
+
+            with mock.patch("governance_eval.supportability._git_show_text", return_value=base_workflow):
+                result = run_supportability_gate(
+                    repo / ".github/governance/supportability.yml",
+                    repo,
+                    "a" * 40,
+                    "b" * 40,
+                    changed_files=[".github/workflows/supportability-gate.yml"],
+                    command_runner=_passing_runner,
+                )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("architecture gate workflow command changed" in error for error in result["errors"]))
+
     def test_dot_slash_scope_is_repo_wide(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
@@ -440,12 +598,53 @@ class CopilotReviewGateTests(unittest.TestCase):
 
 
 class DeliveryReceiptTests(unittest.TestCase):
+    def test_receipt_rejects_architecture_status_mismatch(self) -> None:
+        architecture = _architecture_result()
+        architecture["repo_architecture_supportability"] = "FAIL"
+
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            architecture_result=architecture,
+            repository_url="https://github.com/example/repo.git",
+            pr_url="https://github.com/example/repo/pull/7",
+            run_id="123",
+            workflow_run_url="https://github.com/example/repo/actions/runs/123",
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertTrue(any("repo_architecture_supportability" in error for error in receipt["errors"]))
+
+    def test_receipt_rejects_architecture_violations_even_if_owner_green(self) -> None:
+        architecture = _architecture_result()
+        architecture["violations"] = [{"rule_id": "vague_folder_name"}]
+
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            architecture_result=architecture,
+            repository_url="https://github.com/example/repo.git",
+            pr_url="https://github.com/example/repo/pull/7",
+            run_id="123",
+            workflow_run_url="https://github.com/example/repo/actions/runs/123",
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertTrue(any("architecture violations must be empty" in error for error in receipt["errors"]))
+
     def test_receipt_verifier_rejects_open_pr_claimed_merged_and_bad_artifact(self) -> None:
         gate = _gate_result()
         copilot = _copilot_result()
         receipt = generate_delivery_receipt(
             gate,
             copilot,
+            architecture_result=_architecture_result(),
             repository_url="https://github.com/example/repo.git",
             pr_url="https://github.com/example/repo/pull/7",
             run_id="123",
@@ -489,6 +688,7 @@ class DeliveryReceiptTests(unittest.TestCase):
         receipt = generate_delivery_receipt(
             gate,
             copilot,
+            architecture_result=_architecture_result(),
             repository_url="https://github.com/example/repo.git",
             pr_url="https://github.com/example/repo/pull/7",
             run_id="123",
@@ -513,6 +713,44 @@ class DeliveryReceiptTests(unittest.TestCase):
         }
 
         result = verify_delivery_receipt(receipt, live_observations=observations)
+
+        self.assertEqual(result["owner_status"], STATUS_GREEN)
+
+    def test_receipt_verifier_allows_current_run_pending_conclusion(self) -> None:
+        gate = _gate_result()
+        digest = f"sha256:{'a' * 64}"
+        receipt = generate_delivery_receipt(
+            gate,
+            _copilot_result(),
+            architecture_result=_architecture_result(),
+            repository_url="https://github.com/example/repo.git",
+            pr_url="https://github.com/example/repo/pull/7",
+            run_id="123",
+            workflow_run_url="https://github.com/example/repo/actions/runs/123",
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=digest,
+        )
+        observations = {
+            "ls_remote_main_sha": "9" * 40,
+            "fresh_clone_head_log": ["9999999 (HEAD -> main) later commit"],
+            "fresh_clone_contains_merged_sha": None,
+            "pr": {
+                "state": "OPEN",
+                "baseRefOid": gate["base_sha"],
+                "headRefOid": gate["head_sha"],
+                "mergeCommit": None,
+            },
+            "run": {"status": "in_progress", "conclusion": "", "headSha": gate["head_sha"]},
+            "artifact": {"id": 456, "name": "supportability-delivery-receipt", "digest": digest, "expired": False},
+        }
+
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "123"}):
+            result = verify_delivery_receipt(
+                receipt,
+                live_observations=observations,
+                allow_current_run_pending=True,
+            )
 
         self.assertEqual(result["owner_status"], STATUS_GREEN)
 
@@ -610,6 +848,7 @@ class DeliveryReceiptTests(unittest.TestCase):
         receipt = generate_delivery_receipt(
             _gate_result(),
             _copilot_result(),
+            architecture_result=_architecture_result(),
             artifact_name="supportability-gate-evidence",
             artifact_id="456",
             artifact_digest=f"sha256:{'a' * 64}",
@@ -788,9 +1027,11 @@ class DeliveryReceiptTests(unittest.TestCase):
             root = Path(tmp)
             gate_path = root / "gate.json"
             copilot_path = root / "copilot.json"
+            architecture_path = root / "architecture.json"
             out = root / "out"
             gate_path.write_text(json.dumps(_gate_result()), encoding="utf-8")
             copilot_path.write_text(json.dumps(_copilot_result()), encoding="utf-8")
+            architecture_path.write_text(json.dumps(_architecture_result()), encoding="utf-8")
 
             with contextlib.redirect_stdout(io.StringIO()):
                 rc = supportability_module.main(
@@ -800,6 +1041,8 @@ class DeliveryReceiptTests(unittest.TestCase):
                         str(gate_path),
                         "--copilot-result",
                         str(copilot_path),
+                        "--architecture-result",
+                        str(architecture_path),
                         "--output-dir",
                         str(out),
                         "--artifact-id",
@@ -862,6 +1105,7 @@ def _valid_config(root: Path) -> dict:
             "reviewer_login_patterns": ["*copilot*", "chatgpt-codex-connector*"],
         },
         "receipt": {"artifact_name": "supportability-delivery-receipt", "retention_days": 90},
+        "architecture_policy": _architecture_policy(),
     }
 
 
@@ -902,13 +1146,144 @@ ai_review:
 receipt:
   artifact_name: supportability-delivery-receipt
   retention_days: 90
+architecture_policy:
+  version: 1
+  enforcement_mode: block_all
+  governed_roots:
+    - path: src
+      kind: production_python
+      owner: test
+      purpose: production source
+    - path: tests
+      kind: test_python
+      owner: test
+      purpose: tests
+    - path: docs
+      kind: docs
+      owner: test
+      purpose: docs
+  runtime_relevance:
+    production_globs:
+      - "**/*.py"
+      - "**/*.sql"
+    non_runtime_globs:
+      - "docs/**"
+      - "**/*.md"
+  vague_names:
+    forbidden:
+      - utils
+      - helpers
+      - common
+      - misc
+      - stuff
+      - shared
+  modules:
+    src:
+      path: src
+      owner: test
+      purpose: production source
+      classification: application
+      domain: synthetic
+      allowed_dependencies: []
+      forbidden_dependencies:
+        - tests
+      test_strategy: unittest
+      limits:
+        max_file_lines: 500
+        max_function_lines: 100
+        max_class_lines: 200
+        max_functions_per_file: 50
+        max_classes_per_file: 20
+    tests:
+      path: tests
+      owner: test
+      purpose: tests
+      classification: test
+      domain: synthetic
+      allowed_dependencies:
+        - src
+      forbidden_dependencies: []
+      test_strategy: unittest
+      limits:
+        max_file_lines: 500
+        max_function_lines: 100
+        max_class_lines: 200
+        max_functions_per_file: 50
+        max_classes_per_file: 20
+  exceptions: []
 """
+
+
+def _architecture_policy() -> dict:
+    return {
+        "version": 1,
+        "enforcement_mode": "block_all",
+        "governed_roots": [
+            {"path": "src", "kind": "production_python", "owner": "test", "purpose": "production source"},
+            {"path": "tests", "kind": "test_python", "owner": "test", "purpose": "tests"},
+            {"path": "docs", "kind": "docs", "owner": "test", "purpose": "docs"},
+        ],
+        "runtime_relevance": {
+            "production_globs": ["**/*.py", "**/*.sql"],
+            "non_runtime_globs": ["docs/**", "**/*.md"],
+        },
+        "vague_names": {"forbidden": ["utils", "helpers", "common", "misc", "stuff", "shared"]},
+        "modules": {
+            "src": {
+                "path": "src",
+                "owner": "test",
+                "purpose": "production source",
+                "classification": "application",
+                "domain": "synthetic",
+                "allowed_dependencies": [],
+                "forbidden_dependencies": ["tests"],
+                "test_strategy": "unittest",
+                "limits": {
+                    "max_file_lines": 500,
+                    "max_function_lines": 100,
+                    "max_class_lines": 200,
+                    "max_functions_per_file": 50,
+                    "max_classes_per_file": 20,
+                },
+            },
+            "tests": {
+                "path": "tests",
+                "owner": "test",
+                "purpose": "tests",
+                "classification": "test",
+                "domain": "synthetic",
+                "allowed_dependencies": ["src"],
+                "forbidden_dependencies": [],
+                "test_strategy": "unittest",
+                "limits": {
+                    "max_file_lines": 500,
+                    "max_function_lines": 100,
+                    "max_class_lines": 200,
+                    "max_functions_per_file": 50,
+                    "max_classes_per_file": 20,
+                },
+            },
+        },
+        "exceptions": [],
+    }
 
 
 def _rewrite_gate_command(repo: Path, gate: str, commands: object) -> None:
     config = load_supportability_config(repo / ".github/governance/supportability.yml")
     config["required_gates"][gate] = commands
     (repo / ".github/governance/supportability.yml").write_text(json.dumps(config), encoding="utf-8")
+
+
+def _run_config_change_with_base(repo: Path, base_config: dict) -> dict:
+    with mock.patch("governance_eval.supportability._base_supportability_config", return_value=(base_config, [])):
+        return run_supportability_gate(
+            repo / ".github/governance/supportability.yml",
+            repo,
+            "a" * 40,
+            "b" * 40,
+            changed_files=[".github/governance/supportability.yml"],
+            command_runner=_passing_runner,
+        )
 
 
 def _passing_runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -965,6 +1340,21 @@ def _copilot_result() -> dict:
     return {
         "owner_status": STATUS_GREEN,
         "review_status": {"latest_head_reviewed": True},
+        "errors": [],
+    }
+
+
+def _architecture_result() -> dict:
+    return {
+        "owner_status": STATUS_GREEN,
+        "gate_implementation": "PASS",
+        "repo_architecture_supportability": "PASS",
+        "architecture_behavior_proof": "PASS",
+        "enforcement_mode": "block_all",
+        "violations": [],
+        "new_violations": [],
+        "existing_violations": [],
+        "expired_exceptions": [],
         "errors": [],
     }
 
