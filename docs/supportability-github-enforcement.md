@@ -86,8 +86,6 @@ jobs:
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
       governance-ref: <governance-commit-sha>
-      supportability-artifact-id: ${{ needs.supportability.outputs['artifact-id'] }}
-      supportability-artifact-digest: ${{ needs.supportability.outputs['artifact-digest'] }}
 
   delivery-receipt:
     needs: supportability
@@ -101,6 +99,8 @@ jobs:
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
       governance-ref: <governance-commit-sha>
+      supportability-artifact-id: ${{ needs.supportability.outputs['artifact-id'] }}
+      supportability-artifact-digest: ${{ needs.supportability.outputs['artifact-digest'] }}
 ```
 
 ## Required Repository Rules

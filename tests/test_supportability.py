@@ -386,7 +386,7 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(stale["owner_status"], STATUS_RED)
             self.assertTrue(any("missing or stale" in error for error in stale["errors"]))
 
-    def test_copilot_review_gate_rejects_unresolved_p0_p2_thread(self) -> None:
+    def test_copilot_review_gate_rejects_unresolved_p1_thread(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "f" * 40
