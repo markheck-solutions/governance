@@ -369,6 +369,50 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(result["owner_status"], STATUS_GREEN)
 
+    def test_receipt_uses_live_observation_ls_remote_key(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            artifact_name="supportability-delivery-receipt",
+        )
+
+        self.assertIn("ls_remote_main_sha", receipt["remote_audit"])
+        self.assertNotIn("git_ls_remote_main_sha", receipt["remote_audit"])
+
+    def test_receipt_verifier_rejects_missing_ls_remote_proof(self) -> None:
+        gate = _gate_result()
+        copilot = _copilot_result()
+        digest = f"sha256:{'a' * 64}"
+        receipt = generate_delivery_receipt(
+            gate,
+            copilot,
+            repository_url="https://github.com/example/repo.git",
+            pr_url="https://github.com/example/repo/pull/7",
+            run_id="123",
+            workflow_run_url="https://github.com/example/repo/actions/runs/123",
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=digest,
+        )
+        observations = {
+            "ls_remote_main_sha": "",
+            "fresh_clone_head_log": ["9999999 (HEAD -> main) later commit"],
+            "fresh_clone_contains_merged_sha": None,
+            "pr": {
+                "state": "OPEN",
+                "baseRefOid": gate["base_sha"],
+                "headRefOid": gate["head_sha"],
+                "mergeCommit": None,
+            },
+            "run": {"status": "completed", "conclusion": "success", "headSha": gate["head_sha"]},
+            "artifact": {"id": 456, "name": "supportability-delivery-receipt", "digest": digest, "expired": False},
+        }
+
+        result = verify_delivery_receipt(receipt, live_observations=observations)
+
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any("ls-remote" in error for error in result["errors"]))
+
     def test_receipt_verifier_rejects_merged_sha_missing_from_main_history(self) -> None:
         gate = _gate_result()
         copilot = _copilot_result()

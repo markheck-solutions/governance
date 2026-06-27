@@ -258,7 +258,7 @@ def generate_delivery_receipt(
             "errors": copilot_result.get("errors", []),
         },
         "remote_audit": {
-            "git_ls_remote_main_sha": "",
+            "ls_remote_main_sha": "",
             "fresh_clone_head_log": [],
             "pr_state": "",
             "workflow_run_conclusion": "",
@@ -1074,6 +1074,7 @@ def _receipt_sha_errors(receipt: dict[str, Any]) -> list[str]:
 
 def _live_observation_errors(receipt: dict[str, Any], observations: dict[str, Any]) -> list[str]:
     errors = [f"live proof failed: {error}" for error in observations.get("__load_errors", [])]
+    errors.extend(_live_ls_remote_errors(observations))
     errors.extend(_live_pr_errors(receipt, observations.get("pr") or {}))
     errors.extend(_live_run_errors(receipt, observations.get("run") or {}))
     errors.extend(_live_artifact_errors(receipt, observations.get("artifact") or {}))
@@ -1083,6 +1084,13 @@ def _live_observation_errors(receipt: dict[str, Any], observations: dict[str, An
     if merged_sha and observations.get("fresh_clone_contains_merged_sha") is not True:
         errors.append("fresh clone main history does not contain receipt merged_sha")
     return errors
+
+
+def _live_ls_remote_errors(observations: dict[str, Any]) -> list[str]:
+    main_sha = str(observations.get("ls_remote_main_sha") or "")
+    if not SHA1_RE.fullmatch(main_sha):
+        return ["git ls-remote main SHA proof is missing or invalid"]
+    return []
 
 
 def _live_pr_errors(receipt: dict[str, Any], pr: dict[str, Any]) -> list[str]:
