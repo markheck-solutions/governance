@@ -43,8 +43,13 @@ def validate(instance: Any, schema: dict[str, Any], path: str = "$") -> None:
         if max_length is not None and len(instance) > max_length:
             raise SchemaValidationError(f"{path}: length above {max_length}")
         pattern = schema.get("pattern")
-        if pattern is not None and not re.fullmatch(pattern, instance):
-            raise SchemaValidationError(f"{path}: does not match pattern {pattern!r}")
+        if pattern is not None:
+            try:
+                compiled = re.compile(pattern)
+            except (re.error, TypeError) as exc:
+                raise SchemaValidationError(f"{path}: invalid pattern {pattern!r}: {exc}") from exc
+            if not compiled.fullmatch(instance):
+                raise SchemaValidationError(f"{path}: does not match pattern {pattern!r}")
 
     if isinstance(instance, (int, float)) and not isinstance(instance, bool):
         minimum = schema.get("minimum")
