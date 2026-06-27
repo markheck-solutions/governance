@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -642,6 +644,53 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["owner_status"], STATUS_RED)
         self.assertTrue(any("repository_url is required" in error for error in receipt["errors"]))
         self.assertTrue(any("pull_request_url is required" in error for error in receipt["errors"]))
+
+    def test_receipt_verifier_rejects_missing_artifact_identity(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            artifact_name="supportability-gate-evidence",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+        receipt["artifact"]["id"] = ""
+        receipt["artifact"]["digest"] = ""
+
+        result = verify_delivery_receipt(receipt)
+
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any("artifact.id is required" in error for error in result["errors"]))
+        self.assertTrue(any("artifact.digest is required" in error for error in result["errors"]))
+
+    def test_delivery_receipt_cli_defaults_to_supportability_evidence_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate_path = root / "gate.json"
+            copilot_path = root / "copilot.json"
+            out = root / "out"
+            gate_path.write_text(json.dumps(_gate_result()), encoding="utf-8")
+            copilot_path.write_text(json.dumps(_copilot_result()), encoding="utf-8")
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = supportability_module.main(
+                    [
+                        "delivery-receipt",
+                        "--gate-result",
+                        str(gate_path),
+                        "--copilot-result",
+                        str(copilot_path),
+                        "--output-dir",
+                        str(out),
+                        "--artifact-id",
+                        "456",
+                        "--artifact-digest",
+                        f"sha256:{'a' * 64}",
+                    ]
+                )
+
+            receipt = json.loads((out / "supportability-delivery-receipt.json").read_text(encoding="utf-8"))
+            self.assertEqual(rc, 0)
+            self.assertEqual(receipt["artifact"]["name"], "supportability-gate-evidence")
 
 
 def _synthetic_repo(path: Path, root: Path) -> Path:

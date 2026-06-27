@@ -1103,7 +1103,15 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
     artifact = receipt.get("artifact") if isinstance(receipt.get("artifact"), dict) else {}
     if not artifact.get("name"):
         errors.append("artifact.name is required")
-    if artifact.get("digest") and not DIGEST_RE.fullmatch(str(artifact["digest"])):
+    artifact_id = str(artifact.get("id") or "")
+    if not artifact_id:
+        errors.append("artifact.id is required")
+    elif not artifact_id.isdigit():
+        errors.append("artifact.id must be numeric")
+    artifact_digest = str(artifact.get("digest") or "")
+    if not artifact_digest:
+        errors.append("artifact.digest is required")
+    elif not DIGEST_RE.fullmatch(artifact_digest):
         errors.append("artifact.digest must be sha256:<hex>")
     return errors
 
@@ -1344,7 +1352,7 @@ def _add_receipt_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--run-id", default="")
     parser.add_argument("--workflow-run-url", default="")
     parser.add_argument("--job-name", default="Delivery Receipt")
-    parser.add_argument("--artifact-name", default="supportability-delivery-receipt")
+    parser.add_argument("--artifact-name", default="supportability-gate-evidence")
     parser.add_argument("--artifact-id", default="")
     parser.add_argument("--artifact-digest", default="")
     parser.add_argument("--merged-sha", default="")
