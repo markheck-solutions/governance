@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from governance_eval.hashing import sha256_file, sha256_json
+from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
 
@@ -110,7 +111,7 @@ def load_supportability_config(path: Path) -> dict[str, Any]:
 def validate_supportability_config(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     try:
-        validate_named("supportability_config", config)
+        validate_named("supportability_config", config, root=_schema_root())
     except SchemaValidationError as exc:
         errors.append(f"supportability config schema invalid: {exc}")
     errors.extend(_standard_errors(config.get("standard")))
@@ -240,6 +241,10 @@ def generate_delivery_receipt(
     resolved_repository_url = repository_url or str(gate_result.get("repository_url") or "")
     resolved_pr_url = pr_url or str(gate_result.get("pull_request_url") or "")
     errors = _receipt_input_errors(gate_result, copilot_result, artifact_name, artifact_id, artifact_digest)
+    resolved_merged_sha = merged_sha
+    if merged_sha and not SHA1_RE.fullmatch(merged_sha):
+        errors.append("merged_sha must be empty or a 40-character lowercase Git SHA")
+        resolved_merged_sha = ""
     if not resolved_repository_url:
         errors.append("repository_url is required for a GREEN delivery receipt")
     if not resolved_pr_url:
@@ -253,7 +258,7 @@ def generate_delivery_receipt(
         "pull_request_url": resolved_pr_url,
         "base_sha": gate_result.get("base_sha", ""),
         "head_sha": gate_result.get("head_sha", ""),
-        "merged_sha": merged_sha,
+        "merged_sha": resolved_merged_sha,
         "workflow": {
             "run_id": run_id,
             "run_url": workflow_run_url,
@@ -1109,7 +1114,7 @@ def _receipt_document_errors(receipt: dict[str, Any]) -> list[str]:
 
 def _receipt_schema_errors(receipt: dict[str, Any]) -> list[str]:
     try:
-        validate_named("delivery_receipt", receipt)
+        validate_named("delivery_receipt", receipt, root=_schema_root())
     except SchemaValidationError as exc:
         return [f"delivery receipt schema invalid: {exc}"]
     return []
@@ -1454,11 +1459,15 @@ def _cli_verify_receipt(args: argparse.Namespace) -> int:
 
 def _validate_if_schema_exists(name: str, payload: dict[str, Any]) -> None:
     try:
-        validate_named(name, payload)
+        validate_named(name, payload, root=_schema_root())
     except KeyError:
         return
     except SchemaValidationError:
         raise
+
+
+def _schema_root() -> Path:
+    return repo_root(Path(__file__).resolve())
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

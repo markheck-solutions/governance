@@ -43,6 +43,15 @@ class SupportabilityConfigTests(unittest.TestCase):
         self.assertTrue(any("required_gates.tests" in error for error in errors))
         self.assertTrue(any("required_gates.lint" in error for error in errors))
 
+    def test_config_schema_validation_is_independent_of_current_working_directory(self) -> None:
+        config = _valid_config(self.root)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.chdir(tmp):
+                errors = validate_supportability_config(config)
+
+        self.assertEqual(errors, [])
+
     def test_yaml_config_contract_loads_without_third_party_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
@@ -555,6 +564,35 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(result["owner_status"], STATUS_RED)
         self.assertTrue(any("merged_sha" in error for error in result["errors"]))
+
+    def test_receipt_generation_rejects_invalid_merged_sha_without_schema_crash(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            artifact_name="supportability-gate-evidence",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+            merged_sha="not-a-sha",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertEqual(receipt["merged_sha"], "")
+        self.assertTrue(any("merged_sha must be empty" in error for error in receipt["errors"]))
+
+    def test_receipt_schema_validation_is_independent_of_current_working_directory(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            artifact_name="supportability-gate-evidence",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.chdir(tmp):
+                result = verify_delivery_receipt(receipt)
+
+        self.assertEqual(result["owner_status"], STATUS_GREEN)
 
     def test_receipt_verifier_rejects_merged_sha_missing_from_main_history(self) -> None:
         gate = _gate_result()
