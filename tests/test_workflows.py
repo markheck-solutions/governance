@@ -48,6 +48,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("copilot-review-gate", workflows["supportability-gate.yml"])
         self.assertIn("pull-requests: read", workflows["supportability-gate.yml"])
         self.assertIn("artifact-digest", workflows["supportability-gate.yml"])
+        self.assertIn("artifact-digest: ${{ steps.upload.outputs.digest }}", workflows["supportability-gate.yml"])
+        self.assertNotIn("steps.upload.outputs.artifact-digest", workflows["supportability-gate.yml"])
         self.assertIn("Fail closed on RED supportability evidence", workflows["supportability-gate.yml"])
         self.assertIn("workflow_call:", workflows["delivery-receipt.yml"])
         self.assertIn("Delivery Receipt", workflows["delivery-receipt.yml"])
@@ -55,6 +57,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("delivery-receipt", workflows["delivery-receipt.yml"])
         self.assertIn("verify-receipt", workflows["delivery-receipt.yml"])
         self.assertIn("artifact-digest", workflows["delivery-receipt.yml"])
+        self.assertIn("artifact-digest: ${{ steps.upload.outputs.digest }}", workflows["delivery-receipt.yml"])
+        self.assertNotIn("steps.upload.outputs.artifact-digest", workflows["delivery-receipt.yml"])
         self.assertIn("Fail closed on RED delivery receipt", workflows["delivery-receipt.yml"])
 
 

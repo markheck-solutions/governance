@@ -56,7 +56,7 @@ jobs:
     outputs:
       owner-status: ${{ steps.summary.outputs.owner_status }}
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
-      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact-digest: ${{ steps.upload.outputs.digest }}
     env:
       TARGET_REPOSITORY: ${{ inputs.target-repository }}
       TARGET_REPOSITORY_URL: ${{ inputs.target-repository-url }}
@@ -252,7 +252,7 @@ jobs:
             echo "| Source evidence artifact digest | \`${{ steps.supportability_artifact.outputs.digest }}\` |"
             echo "| Artifact name | \`${RECEIPT_ARTIFACT_NAME}\` |"
             echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
-            echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
+            echo "| Artifact digest | \`${{ steps.upload.outputs.digest }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Fail closed on RED delivery receipt
         if: always() && steps.summary.outputs.owner_status != 'GREEN'
