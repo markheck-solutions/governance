@@ -481,7 +481,11 @@ def _changed_files_or_empty(
         return changed_files
     if not _diff_sha_inputs_are_valid(base_sha, head_sha):
         return []
-    return _git_changed_files(target_repo, base_sha, head_sha)
+    try:
+        return _git_changed_files(target_repo, base_sha, head_sha)
+    except SupportabilityError as exc:
+        errors.append(str(exc))
+        return []
 
 
 def _diff_sha_inputs_are_valid(base_sha: str, head_sha: str) -> bool:
@@ -781,15 +785,25 @@ def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[s
 
 
 def _git_changed_files(target_repo: Path, base_sha: str, head_sha: str) -> list[str]:
-    completed = subprocess.run(
-        ["git", "diff", "--name-only", base_sha, head_sha],
-        cwd=target_repo,
-        check=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "diff", "--name-only", base_sha, head_sha],
+            cwd=target_repo,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SupportabilityError("git diff changed-file discovery timed out after 60 seconds") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        message = "git diff changed-file discovery failed"
+        if detail:
+            message = f"{message}: {detail}"
+        raise SupportabilityError(message) from exc
     return [line.strip().replace("\\", "/") for line in completed.stdout.splitlines() if line.strip()]
 
 

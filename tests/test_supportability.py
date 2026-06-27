@@ -173,6 +173,30 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("base_sha" in error for error in result["errors"]))
 
+    def test_changed_file_discovery_failure_returns_structured_red(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                command_runner=_passing_runner,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("git diff changed-file discovery failed" in error for error in result["errors"]))
+
+    def test_changed_file_discovery_timeout_raises_supportability_error(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            cmd = args[0] if args else "git diff"
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=60)
+
+        with mock.patch("governance_eval.supportability.subprocess.run", side_effect=fake_run):
+            with self.assertRaises(SupportabilityError):
+                supportability_module._git_changed_files(Path("."), "a" * 40, "b" * 40)
+
     def test_changed_file_discovery_ignores_unrelated_hash_config_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)

@@ -120,6 +120,7 @@ jobs:
       - name: Read supportability artifact metadata
         id: supportability_artifact
         if: always()
+        continue-on-error: true
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
