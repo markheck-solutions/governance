@@ -7,7 +7,7 @@ required_gates:
   lint:
     - python -m compileall -q .
   format_check:
-    - git diff --check
+    - python -c "import os, subprocess, sys; sys.exit(subprocess.run(['git', 'diff', '--check', os.environ['TARGET_BASE_SHA'], os.environ['TARGET_HEAD_SHA']]).returncode)"
   typecheck:
     - python -m compileall -q .
   complexity:

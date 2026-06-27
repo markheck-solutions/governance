@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from governance_eval.paths import repo_root
 from governance_eval.supportability import (
     STATUS_GREEN,
     STATUS_RED,
+    SupportabilityError,
     evaluate_copilot_review_gate,
     generate_delivery_receipt,
     load_supportability_config,
@@ -45,6 +47,14 @@ class SupportabilityConfigTests(unittest.TestCase):
 
             self.assertEqual(validate_supportability_config(config), [])
             self.assertEqual(config["receipt"]["retention_days"], 90)
+
+    def test_yaml_parser_fails_closed_on_missing_nested_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "supportability.yml"
+            config_path.write_text("standard:\n  name:\n", encoding="utf-8")
+
+            with self.assertRaises(SupportabilityError):
+                load_supportability_config(config_path)
 
 
 class SupportabilityGateTests(unittest.TestCase):
@@ -118,6 +128,31 @@ class SupportabilityGateTests(unittest.TestCase):
 
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("non-blocking command" in error for error in result["errors"]))
+
+    def test_gate_normalizes_string_command_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            _rewrite_gate_command(repo, "lint", "python -c pass")
+            seen: list[str] = []
+            env_seen: list[tuple[str | None, str | None]] = []
+
+            def runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+                seen.append(command)
+                env_seen.append((os.environ.get("TARGET_BASE_SHA"), os.environ.get("TARGET_HEAD_SHA")))
+                return _passing_runner(command, cwd)
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=["src/app.py"],
+                command_runner=runner,
+            )
+
+            self.assertEqual(result["commands"][0]["command"], "python -c pass")
+            self.assertNotIn("p", seen[:1])
+            self.assertIn(("a" * 40, "b" * 40), env_seen)
 
     def test_sql_like_repo_without_explicit_sql_gate_returns_red(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,6 +279,19 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertTrue(any("expired" in error for error in result["errors"]))
         self.assertTrue(any("digest" in error for error in result["errors"]))
 
+    def test_receipt_verifier_rejects_schema_invalid_receipt(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            artifact_name="supportability-delivery-receipt",
+        )
+        receipt.pop("artifact")
+
+        result = verify_delivery_receipt(receipt)
+
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any("delivery receipt schema invalid" in error for error in result["errors"]))
+
 
 def _synthetic_repo(path: Path, root: Path) -> Path:
     (path / ".github/governance").mkdir(parents=True)
@@ -336,7 +384,7 @@ receipt:
 """
 
 
-def _rewrite_gate_command(repo: Path, gate: str, commands: list[str]) -> None:
+def _rewrite_gate_command(repo: Path, gate: str, commands: object) -> None:
     config = load_supportability_config(repo / ".github/governance/supportability.yml")
     config["required_gates"][gate] = commands
     (repo / ".github/governance/supportability.yml").write_text(json.dumps(config), encoding="utf-8")

@@ -138,11 +138,13 @@ def run_supportability_gate(
     errors.extend(coverage_plan["errors"])
     sql_commands, sql_errors = _sql_gate_commands(config, target_repo, changed, high_risk)
     errors.extend(sql_errors)
-    command_results = _run_configured_commands(
+    command_results = _run_commands_with_revision_env(
         config,
         target_repo,
         sql_commands,
         command_runner or _run_shell_command,
+        base_sha,
+        head_sha,
     )
     errors.extend(_command_result_errors(command_results))
     result = {
@@ -606,11 +608,45 @@ def _run_configured_commands(
     gates = config.get("required_gates") if isinstance(config.get("required_gates"), dict) else {}
     results: list[dict[str, Any]] = []
     for gate in REQUIRED_COMMAND_GATES + OPTIONAL_COMMAND_GATES:
-        commands = gates.get(gate) or []
+        commands = _normalized_command_list(gates.get(gate))
         optional = gate in OPTIONAL_COMMAND_GATES and not commands
         results.extend(_run_gate_commands(gate, commands, target_repo, runner, optional=optional))
     results.extend(_run_gate_commands("sql_supportability", sql_commands, target_repo, runner, optional=not sql_commands))
     return results
+
+
+def _run_commands_with_revision_env(
+    config: dict[str, Any],
+    target_repo: Path,
+    sql_commands: list[str],
+    runner: Callable[[str, Path], subprocess.CompletedProcess[str]],
+    base_sha: str,
+    head_sha: str,
+) -> list[dict[str, Any]]:
+    old_base = os.environ.get("TARGET_BASE_SHA")
+    old_head = os.environ.get("TARGET_HEAD_SHA")
+    os.environ["TARGET_BASE_SHA"] = base_sha
+    os.environ["TARGET_HEAD_SHA"] = head_sha
+    try:
+        return _run_configured_commands(config, target_repo, sql_commands, runner)
+    finally:
+        _restore_env("TARGET_BASE_SHA", old_base)
+        _restore_env("TARGET_HEAD_SHA", old_head)
+
+
+def _normalized_command_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def _restore_env(key: str, value: str | None) -> None:
+    if value is None:
+        os.environ.pop(key, None)
+    else:
+        os.environ[key] = value
 
 
 def _run_gate_commands(
@@ -922,18 +958,41 @@ def _receipt_input_errors(
 
 
 def _receipt_document_errors(receipt: dict[str, Any]) -> list[str]:
+    errors = _receipt_schema_errors(receipt)
+    try:
+        errors.extend(_receipt_identity_errors(receipt))
+    except AttributeError:
+        errors.append("delivery receipt must be an object")
+    return errors
+
+
+def _receipt_schema_errors(receipt: dict[str, Any]) -> list[str]:
+    try:
+        validate_named("delivery_receipt", receipt)
+    except SchemaValidationError as exc:
+        return [f"delivery receipt schema invalid: {exc}"]
+    return []
+
+
+def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
     errors = []
     if receipt.get("owner_status") not in {STATUS_GREEN, "YELLOW", STATUS_RED}:
         errors.append("owner_status must be GREEN, YELLOW, or RED")
-    for key in ("base_sha", "head_sha"):
-        if not SHA1_RE.fullmatch(str(receipt.get(key) or "")):
-            errors.append(f"{key} must be a 40-character lowercase Git SHA")
+    errors.extend(_receipt_sha_errors(receipt))
     artifact = receipt.get("artifact") if isinstance(receipt.get("artifact"), dict) else {}
     if not artifact.get("name"):
         errors.append("artifact.name is required")
     if artifact.get("digest") and not DIGEST_RE.fullmatch(str(artifact["digest"])):
         errors.append("artifact.digest must be sha256:<hex>")
     return errors
+
+
+def _receipt_sha_errors(receipt: dict[str, Any]) -> list[str]:
+    return [
+        f"{key} must be a 40-character lowercase Git SHA"
+        for key in ("base_sha", "head_sha")
+        if not SHA1_RE.fullmatch(str(receipt.get(key) or ""))
+    ]
 
 
 def _live_observation_errors(receipt: dict[str, Any], observations: dict[str, Any]) -> list[str]:
@@ -1073,6 +1132,8 @@ def _parse_yaml_mapping(lines: list[tuple[int, str]], index: int, indent: int) -
     while index < len(lines) and lines[index][0] == indent and not lines[index][1].startswith("- "):
         key, value = _split_yaml_key_value(lines[index][1])
         if value == "":
+            if index + 1 >= len(lines) or lines[index + 1][0] <= indent:
+                raise SupportabilityError(f"YAML key {key!r} is missing a nested block")
             child, index = _parse_yaml_block(lines, index + 1, lines[index + 1][0])
             data[key] = child
         else:
