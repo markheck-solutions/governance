@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -1492,6 +1493,16 @@ def _gh_api_json(path: str) -> dict[str, Any]:
     return _gh_json(["api", path])
 
 
+def _gh_api_bytes(path: str) -> bytes:
+    completed = subprocess.run(
+        ["gh", "api", path],
+        check=True,
+        capture_output=True,
+        timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+    )
+    return completed.stdout
+
+
 def _gh_graphql(owner: str, name: str, pr_number: int, query: str, cursor: str) -> dict[str, Any]:
     args = [
         "api",
@@ -1551,7 +1562,15 @@ def _live_run(repo: str, run_id: str) -> dict[str, Any]:
 
 
 def _live_artifact(repo: str, artifact_id: str) -> dict[str, Any]:
-    return _gh_api_json(f"repos/{repo}/actions/artifacts/{artifact_id}")
+    artifact = _gh_api_json(f"repos/{repo}/actions/artifacts/{artifact_id}")
+    if not artifact.get("digest"):
+        artifact["digest"] = _download_artifact_digest(repo, artifact_id)
+    return artifact
+
+
+def _download_artifact_digest(repo: str, artifact_id: str) -> str:
+    archive = _gh_api_bytes(f"repos/{repo}/actions/artifacts/{artifact_id}/zip")
+    return f"sha256:{hashlib.sha256(archive).hexdigest()}"
 
 
 def _ls_remote_main(repository_url: str) -> str:

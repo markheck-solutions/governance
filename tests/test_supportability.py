@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -572,6 +573,19 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(result["owner_status"], STATUS_RED)
         self.assertTrue(any("main history" in error for error in result["errors"]))
+
+    def test_live_artifact_populates_missing_digest_from_zip_archive(self) -> None:
+        archive = b"supportability evidence archive"
+        expected_digest = f"sha256:{hashlib.sha256(archive).hexdigest()}"
+
+        with mock.patch("governance_eval.supportability._gh_api_json") as api_json:
+            with mock.patch("governance_eval.supportability._gh_api_bytes", return_value=archive) as api_bytes:
+                api_json.return_value = {"id": 456, "name": "supportability-gate-evidence", "expired": False}
+
+                artifact = supportability_module._live_artifact("example/repo", "456")
+
+        self.assertEqual(artifact["digest"], expected_digest)
+        api_bytes.assert_called_once_with("repos/example/repo/actions/artifacts/456/zip")
 
     def test_fresh_clone_log_uses_full_history_fetch(self) -> None:
         calls: list[list[str]] = []

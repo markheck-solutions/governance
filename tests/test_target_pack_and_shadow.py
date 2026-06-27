@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -340,9 +341,15 @@ class TargetPackAndShadowTests(unittest.TestCase):
                     None,
                     "CANDIDATE_DYNAMIC",
                     self.root,
-                )
+            )
             if hasattr(os, "symlink"):
-                symlink = self.root / "target_packs" / "synthetic_clean" / "v1" / "pack-link-test.json"
+                symlink = (
+                    self.root
+                    / "target_packs"
+                    / "synthetic_clean"
+                    / "v1"
+                    / f"pack-link-test-{uuid.uuid4().hex}.json"
+                )
                 try:
                     try:
                         os.symlink(outside, symlink)
@@ -351,8 +358,11 @@ class TargetPackAndShadowTests(unittest.TestCase):
                     with self.assertRaises(SchemaValidationError):
                         load_target_pack(symlink, root=self.root, require_governance_owned=True)
                 finally:
-                    if symlink.exists() or symlink.is_symlink():
-                        symlink.unlink()
+                    try:
+                        if symlink.exists() or symlink.is_symlink():
+                            symlink.unlink()
+                    except FileNotFoundError:
+                        pass
 
     def test_business_review_policy_produces_ask_business(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
