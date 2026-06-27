@@ -15,11 +15,21 @@ from governance_eval.delivery_readiness import main as delivery_readiness_main
 from governance_eval.delivery_readiness import validate_review_quorum_document
 from governance_eval.lock import write_spaghetti_lock
 from governance_eval.paths import repo_root
+from governance_eval.supportability import main as supportability_main
 from governance_eval.target_eval import evaluate_target
 from governance_eval.target_pack import validate_target_request
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in {
+        "supportability-config",
+        "supportability-gate",
+        "copilot-review-gate",
+        "delivery-receipt",
+        "verify-receipt",
+    }:
+        return supportability_main(argv)
     parser = argparse.ArgumentParser(prog="governance-eval")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

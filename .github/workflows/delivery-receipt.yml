@@ -1,0 +1,255 @@
+name: Delivery Receipt
+
+on:
+  workflow_call:
+    inputs:
+      target-repository:
+        required: true
+        type: string
+      target-repository-url:
+        required: true
+        type: string
+      target-base-sha:
+        required: true
+        type: string
+      target-head-sha:
+        required: true
+        type: string
+      target-pr-number:
+        required: true
+        type: string
+      target-pr-url:
+        required: true
+        type: string
+      governance-ref:
+        required: true
+        type: string
+      supportability-artifact-name:
+        required: false
+        type: string
+        default: supportability-gate-evidence
+      receipt-artifact-name:
+        required: false
+        type: string
+        default: supportability-delivery-receipt
+    outputs:
+      owner-status:
+        description: GREEN when the receipt and remote audit pass.
+        value: ${{ jobs.receipt.outputs.owner-status }}
+      artifact-id:
+        description: Uploaded delivery receipt artifact ID.
+        value: ${{ jobs.receipt.outputs.artifact-id }}
+      artifact-digest:
+        description: Uploaded delivery receipt artifact digest.
+        value: ${{ jobs.receipt.outputs.artifact-digest }}
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  receipt:
+    name: Delivery Receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      owner-status: ${{ steps.summary.outputs.owner_status }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+    env:
+      TARGET_REPOSITORY: ${{ inputs.target-repository }}
+      TARGET_REPOSITORY_URL: ${{ inputs.target-repository-url }}
+      TARGET_BASE_SHA: ${{ inputs.target-base-sha }}
+      TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
+      TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
+      TARGET_PR_URL: ${{ inputs.target-pr-url }}
+      GOVERNANCE_REF: ${{ inputs.governance-ref }}
+      SUPPORTABILITY_ARTIFACT_NAME: ${{ inputs.supportability-artifact-name }}
+      RECEIPT_ARTIFACT_NAME: ${{ inputs.receipt-artifact-name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout governance evaluator
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: markheck-solutions/governance
+          ref: ${{ inputs.governance-ref }}
+          path: governance
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate workflow inputs
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+
+          sha_re = re.compile(r"^[0-9a-f]{40}$")
+          artifact_re = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+          if not sha_re.fullmatch(os.environ["TARGET_BASE_SHA"]):
+              print("Invalid target base SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["TARGET_HEAD_SHA"]):
+              print("Invalid target head SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["GOVERNANCE_REF"]):
+              print("Governance ref must be an exact commit SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not re.fullmatch(r"[1-9][0-9]{0,9}", os.environ["TARGET_PR_NUMBER"]):
+              print("Invalid target PR number", file=sys.stderr)
+              raise SystemExit(64)
+          for key in ("SUPPORTABILITY_ARTIFACT_NAME", "RECEIPT_ARTIFACT_NAME"):
+              if not artifact_re.fullmatch(os.environ[key]):
+                  print(f"Invalid artifact name in {key}", file=sys.stderr)
+                  raise SystemExit(64)
+          PY
+      - name: Download supportability gate evidence
+        id: download
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p evidence
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$TARGET_REPOSITORY" \
+            --name "$SUPPORTABILITY_ARTIFACT_NAME" \
+            --dir evidence
+      - name: Read supportability artifact metadata
+        id: supportability_artifact
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ["TARGET_REPOSITORY"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+          artifact_name = os.environ["SUPPORTABILITY_ARTIFACT_NAME"]
+          payload = json.loads(subprocess.check_output(
+              ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts"],
+              text=True,
+          ))
+          artifact = next((item for item in payload.get("artifacts", []) if item.get("name") == artifact_name), {})
+          print(f"id={artifact.get('id', '')}")
+          print(f"digest={artifact.get('digest', '')}")
+          print(f"expired={artifact.get('expired', '')}")
+          PY
+      - name: Fill missing evidence with RED placeholders
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p evidence artifacts/supportability
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          gate = Path("evidence/supportability-gate-result.json")
+          copilot = Path("evidence/copilot-review-gate-result.json")
+          if not gate.exists():
+              gate.write_text(json.dumps({
+                  "owner_status": "RED",
+                  "repository_url": os.environ["TARGET_REPOSITORY_URL"],
+                  "pull_request_url": os.environ["TARGET_PR_URL"],
+                  "base_sha": os.environ["TARGET_BASE_SHA"],
+                  "head_sha": os.environ["TARGET_HEAD_SHA"],
+                  "changed_files": [],
+                  "high_risk_files": [],
+                  "coverage": {},
+                  "errors": ["supportability gate evidence artifact missing"],
+              }), encoding="utf-8")
+          if not copilot.exists():
+              copilot.write_text(json.dumps({
+                  "owner_status": "RED",
+                  "review_status": {},
+                  "errors": ["Copilot review evidence artifact missing"],
+              }), encoding="utf-8")
+          PY
+      - name: Generate delivery receipt
+        id: receipt
+        continue-on-error: true
+        shell: bash
+        run: |
+          cd governance
+          python -m governance_eval delivery-receipt \
+            --gate-result ../evidence/supportability-gate-result.json \
+            --copilot-result ../evidence/copilot-review-gate-result.json \
+            --output-dir ../artifacts/supportability \
+            --repository-url "$TARGET_REPOSITORY_URL" \
+            --pr-url "$TARGET_PR_URL" \
+            --run-id "$GITHUB_RUN_ID" \
+            --workflow-run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --job-name "Delivery Receipt" \
+            --artifact-name "$SUPPORTABILITY_ARTIFACT_NAME" \
+            --artifact-id "${{ steps.supportability_artifact.outputs.id }}" \
+            --artifact-digest "${{ steps.supportability_artifact.outputs.digest }}"
+      - name: Verify delivery receipt against GitHub
+        id: verify
+        continue-on-error: true
+        shell: bash
+        run: |
+          cd governance
+          python -m governance_eval verify-receipt \
+            --receipt ../artifacts/supportability/supportability-delivery-receipt.json \
+            > ../artifacts/supportability/supportability-receipt-verification.json
+      - name: Read delivery summary
+        id: summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          receipt_path = Path("artifacts/supportability/supportability-delivery-receipt.json")
+          verify_path = Path("artifacts/supportability/supportability-receipt-verification.json")
+          receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.exists() else {"owner_status": "RED", "errors": ["delivery receipt missing"]}
+          verification = json.loads(verify_path.read_text(encoding="utf-8")) if verify_path.exists() else {"owner_status": "RED", "errors": ["receipt verification missing"]}
+          owner_status = "GREEN" if receipt.get("owner_status") == "GREEN" and verification.get("owner_status") == "GREEN" else "RED"
+          print(f"owner_status={owner_status}")
+          print(f"receipt_status={receipt.get('owner_status', 'RED')}")
+          print(f"verification_status={verification.get('owner_status', 'RED')}")
+          print(f"receipt_errors={'; '.join((receipt.get('errors') or [])[:5])}")
+          print(f"verification_errors={'; '.join((verification.get('errors') or [])[:5])}")
+          PY
+      - name: Upload delivery receipt
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ${{ env.RECEIPT_ARTIFACT_NAME }}
+          path: artifacts/supportability/*
+          retention-days: 90
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Delivery Receipt"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Commit SHA | \`${TARGET_HEAD_SHA}\` |"
+            echo "| Owner status | \`${{ steps.summary.outputs.owner_status }}\` |"
+            echo "| Receipt generation | \`${{ steps.summary.outputs.receipt_status }}\` |"
+            echo "| Remote audit | \`${{ steps.summary.outputs.verification_status }}\` |"
+            echo "| Receipt errors | \`${{ steps.summary.outputs.receipt_errors }}\` |"
+            echo "| Remote audit errors | \`${{ steps.summary.outputs.verification_errors }}\` |"
+            echo "| Source evidence artifact | \`${SUPPORTABILITY_ARTIFACT_NAME}\` |"
+            echo "| Source evidence artifact ID | \`${{ steps.supportability_artifact.outputs.id }}\` |"
+            echo "| Source evidence artifact digest | \`${{ steps.supportability_artifact.outputs.digest }}\` |"
+            echo "| Artifact name | \`${RECEIPT_ARTIFACT_NAME}\` |"
+            echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
+            echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail closed on RED delivery receipt
+        if: always() && steps.summary.outputs.owner_status != 'GREEN'
+        shell: bash
+        run: |
+          echo "Delivery receipt is RED"
+          exit 1

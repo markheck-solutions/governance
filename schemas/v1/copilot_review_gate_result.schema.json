@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "owner_status",
+    "head_sha",
+    "reviewer_login_patterns",
+    "review_status",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "owner_status": {"type": "string", "enum": ["GREEN", "RED"]},
+    "repository": {"type": "string"},
+    "pull_request_number": {"type": ["integer", "null"]},
+    "head_sha": {"type": "string", "minLength": 40},
+    "reviewer_login_patterns": {"type": "array", "items": {"type": "string"}},
+    "review_status": {"type": "object"},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

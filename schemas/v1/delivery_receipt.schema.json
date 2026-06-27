@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "owner_status",
+    "repository_url",
+    "pull_request_url",
+    "base_sha",
+    "head_sha",
+    "workflow",
+    "artifact",
+    "changed_files",
+    "gate_coverage",
+    "supportability_gate",
+    "copilot_review",
+    "remote_audit",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "owner_status": {"type": "string", "enum": ["GREEN", "YELLOW", "RED"]},
+    "repository_url": {"type": "string"},
+    "pull_request_url": {"type": "string"},
+    "base_sha": {"type": "string", "minLength": 40},
+    "head_sha": {"type": "string", "minLength": 40},
+    "merged_sha": {"type": "string"},
+    "workflow": {"type": "object"},
+    "artifact": {"type": "object"},
+    "changed_files": {"type": "array", "items": {"type": "string"}},
+    "high_risk_files": {"type": "array", "items": {"type": "string"}},
+    "gate_coverage": {"type": "object"},
+    "supportability_gate": {"type": "object"},
+    "copilot_review": {"type": "object"},
+    "remote_audit": {"type": "object"},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

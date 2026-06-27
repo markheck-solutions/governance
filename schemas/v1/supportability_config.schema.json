@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "required": ["standard", "required_gates", "coverage", "ai_review", "receipt"],
+  "properties": {
+    "standard": {
+      "type": "object",
+      "required": ["name", "source", "hash"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "hash": {"type": "string", "minLength": 64}
+      }
+    },
+    "required_gates": {
+      "type": "object",
+      "required": [
+        "lint",
+        "format_check",
+        "typecheck",
+        "complexity",
+        "architecture",
+        "tests",
+        "compile_or_build",
+        "sql_supportability"
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "changed_files",
+        "high_risk_files",
+        "forbid_gate_scope_narrowing",
+        "forbid_threshold_weakening"
+      ]
+    },
+    "ai_review": {
+      "type": "object",
+      "required": [
+        "copilot_required",
+        "latest_head_required",
+        "unresolved_p0_p1_p2_blocks",
+        "reviewer_login_patterns"
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "required": ["artifact_name", "retention_days"]
+    }
+  },
+  "additionalProperties": false
+}
