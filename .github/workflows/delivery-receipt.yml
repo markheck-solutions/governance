@@ -28,6 +28,14 @@ on:
         required: false
         type: string
         default: supportability-gate-evidence
+      supportability-artifact-id:
+        required: false
+        type: string
+        default: ""
+      supportability-artifact-digest:
+        required: false
+        type: string
+        default: ""
       receipt-artifact-name:
         required: false
         type: string
@@ -66,6 +74,8 @@ jobs:
       TARGET_PR_URL: ${{ inputs.target-pr-url }}
       GOVERNANCE_REF: ${{ inputs.governance-ref }}
       SUPPORTABILITY_ARTIFACT_NAME: ${{ inputs.supportability-artifact-name }}
+      SUPPORTABILITY_ARTIFACT_ID: ${{ inputs.supportability-artifact-id }}
+      SUPPORTABILITY_ARTIFACT_DIGEST: ${{ inputs.supportability-artifact-digest }}
       RECEIPT_ARTIFACT_NAME: ${{ inputs.receipt-artifact-name }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -106,6 +116,14 @@ jobs:
               if not artifact_re.fullmatch(os.environ[key]):
                   print(f"Invalid artifact name in {key}", file=sys.stderr)
                   raise SystemExit(64)
+          artifact_id = os.environ["SUPPORTABILITY_ARTIFACT_ID"]
+          if artifact_id and not re.fullmatch(r"[1-9][0-9]{0,19}", artifact_id):
+              print("Invalid supportability artifact ID", file=sys.stderr)
+              raise SystemExit(64)
+          artifact_digest = os.environ["SUPPORTABILITY_ARTIFACT_DIGEST"]
+          if artifact_digest and not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact_digest):
+              print("Invalid supportability artifact digest", file=sys.stderr)
+              raise SystemExit(64)
           PY
       - name: Download supportability gate evidence
         id: download
@@ -117,29 +135,15 @@ jobs:
             --repo "$TARGET_REPOSITORY" \
             --name "$SUPPORTABILITY_ARTIFACT_NAME" \
             --dir evidence
-      - name: Read supportability artifact metadata
+      - name: Record supportability artifact metadata
         id: supportability_artifact
         if: always()
-        continue-on-error: true
         shell: bash
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          import os
-          import subprocess
-
-          repo = os.environ["TARGET_REPOSITORY"]
-          run_id = os.environ["GITHUB_RUN_ID"]
-          artifact_name = os.environ["SUPPORTABILITY_ARTIFACT_NAME"]
-          payload = json.loads(subprocess.check_output(
-              ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts"],
-              text=True,
-          ))
-          artifact = next((item for item in payload.get("artifacts", []) if item.get("name") == artifact_name), {})
-          print(f"id={artifact.get('id', '')}")
-          print(f"digest={artifact.get('digest', '')}")
-          print(f"expired={artifact.get('expired', '')}")
-          PY
+          {
+            echo "id=${SUPPORTABILITY_ARTIFACT_ID}"
+            echo "digest=${SUPPORTABILITY_ARTIFACT_DIGEST}"
+          } >> "$GITHUB_OUTPUT"
       - name: Fill missing evidence with RED placeholders
         if: always()
         shell: bash

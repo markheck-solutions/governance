@@ -56,6 +56,8 @@ If a repo contains SQL files and `sql_supportability` is `auto`, the gate return
 
 Config changes are protected. A PR that changes `.github/governance/supportability.yml` returns RED. Bootstrap the first config as a separate owner-approved PR, then require the supportability checks for later code changes.
 
+The `receipt` block is validated as the target repo's declared contract. Reusable workflow inputs/defaults enforce the actual artifact names and 90-day retention during upload.
+
 ## Caller Workflow
 
 Target repos should pin the governance reusable workflow to an exact commit SHA, not to floating `main`.
@@ -84,6 +86,8 @@ jobs:
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
       governance-ref: <governance-commit-sha>
+      supportability-artifact-id: ${{ needs.supportability.outputs.artifact-id }}
+      supportability-artifact-digest: ${{ needs.supportability.outputs.artifact-digest }}
 
   delivery-receipt:
     needs: supportability

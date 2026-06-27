@@ -157,16 +157,14 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("non-blocking command" in error for error in result["errors"]))
 
-    def test_gate_normalizes_string_command_before_execution(self) -> None:
+    def test_gate_rejects_string_command_without_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             _rewrite_gate_command(repo, "lint", "python -c pass")
             seen: list[str] = []
-            env_seen: list[tuple[str | None, str | None]] = []
 
             def runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
                 seen.append(command)
-                env_seen.append((os.environ.get("TARGET_BASE_SHA"), os.environ.get("TARGET_HEAD_SHA")))
                 return _passing_runner(command, cwd)
 
             result = run_supportability_gate(
@@ -180,9 +178,8 @@ class SupportabilityGateTests(unittest.TestCase):
 
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("required_gates.lint" in error for error in result["errors"]))
-            self.assertEqual(result["commands"][0]["command"], "python -c pass")
-            self.assertEqual(seen[0], "python -c pass")
-            self.assertIn(("a" * 40, "b" * 40), env_seen)
+            self.assertEqual(seen, [])
+            self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
     def test_invalid_sha_returns_red_without_git_diff_exception(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

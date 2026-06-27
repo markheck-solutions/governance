@@ -152,6 +152,8 @@ def run_supportability_gate(
         command_results = _skipped_command_results(
             "revision inputs invalid or changed-file discovery failed; commands not executed without verifiable diff"
         )
+    if not command_results and errors:
+        command_results = _skipped_command_results("preflight supportability checks failed; commands not executed")
     if not command_results:
         command_results = _run_commands_with_revision_env(
             config,
@@ -452,6 +454,7 @@ def _ai_review_errors(ai_review: Any) -> list[str]:
 def _receipt_config_errors(receipt: Any) -> list[str]:
     if not isinstance(receipt, dict):
         return ["receipt must be an object"]
+    # This validates the repo contract. Reusable workflow inputs/defaults enforce the actual upload names.
     errors = []
     if not isinstance(receipt.get("artifact_name"), str) or not receipt["artifact_name"].strip():
         errors.append("receipt.artifact_name must be a non-empty string")
