@@ -522,7 +522,7 @@ def _self_modified_config_errors(config_path: Path, target_repo: Path, changed: 
     except ValueError:
         relative = config_path.as_posix()
     if relative in {path.replace("\\", "/") for path in changed}:
-        return ["supportability config changed in this PR; use trusted base config or merge config separately"]
+        return ["supportability config changed in this PR; merge config separately before enforcing it against code changes"]
     return []
 
 

@@ -49,6 +49,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("Validate supportability config\n        continue-on-error: true", workflows["supportability-gate.yml"])
         self.assertIn("supportability-gate", workflows["supportability-gate.yml"])
         self.assertIn("copilot-review-gate", workflows["supportability-gate.yml"])
+        self.assertIn('replace("\\r", " ").replace("\\n", " ")', workflows["supportability-gate.yml"])
         self.assertIn("pull-requests: read", workflows["supportability-gate.yml"])
         self.assertIn("artifact-digest", workflows["supportability-gate.yml"])
         self.assertIn("artifact-digest: ${{ steps.upload.outputs.artifact-digest }}", workflows["supportability-gate.yml"])
@@ -63,6 +64,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("workflow_call:", workflows["delivery-receipt.yml"])
         self.assertIn("Delivery Receipt", workflows["delivery-receipt.yml"])
         self.assertIn("gh run download", workflows["delivery-receipt.yml"])
+        self.assertIn('replace("\\r", " ").replace("\\n", " ")', workflows["delivery-receipt.yml"])
         self.assertIn("Read supportability artifact metadata\n        id: supportability_artifact\n        if: always()\n        continue-on-error: true", workflows["delivery-receipt.yml"])
         self.assertIn("delivery-receipt", workflows["delivery-receipt.yml"])
         self.assertIn("verify-receipt", workflows["delivery-receipt.yml"])
@@ -70,6 +72,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("artifact-digest: ${{ steps.upload.outputs.artifact-digest }}", workflows["delivery-receipt.yml"])
         self.assertNotIn("steps.upload.outputs.digest", workflows["delivery-receipt.yml"])
         self.assertIn("Fail closed on RED delivery receipt", workflows["delivery-receipt.yml"])
+        docs = (self.root / "docs/supportability-github-enforcement.md").read_text(encoding="utf-8")
+        self.assertNotIn("trusted base config", docs)
 
 
 if __name__ == "__main__":

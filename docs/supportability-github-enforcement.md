@@ -54,7 +54,7 @@ receipt:
 
 If a repo contains SQL files and `sql_supportability` is `auto`, the gate returns RED until explicit SQL validation commands are configured.
 
-Config changes are protected. A PR that changes `.github/governance/supportability.yml` returns RED unless the target repo is using a trusted base config outside the changed head. Bootstrap the first config as a separate owner-approved PR, then require the supportability checks for later code changes.
+Config changes are protected. A PR that changes `.github/governance/supportability.yml` returns RED. Bootstrap the first config as a separate owner-approved PR, then require the supportability checks for later code changes.
 
 ## Caller Workflow
 

@@ -166,12 +166,15 @@ jobs:
           gate = json.loads(gate_path.read_text(encoding="utf-8")) if gate_path.exists() else {"owner_status": "RED", "errors": ["supportability gate result missing"], "changed_files": []}
           copilot = json.loads(copilot_path.read_text(encoding="utf-8")) if copilot_path.exists() else {"owner_status": "RED", "errors": ["Copilot review gate result missing"]}
           owner_status = "GREEN" if gate.get("owner_status") == "GREEN" and copilot.get("owner_status") == "GREEN" else "RED"
-          print(f"owner_status={owner_status}")
-          print(f"gate_status={gate.get('owner_status', 'RED')}")
-          print(f"copilot_status={copilot.get('owner_status', 'RED')}")
-          print(f"changed_count={len(gate.get('changed_files') or [])}")
-          print(f"gate_errors={'; '.join((gate.get('errors') or [])[:5])}")
-          print(f"copilot_errors={'; '.join((copilot.get('errors') or [])[:5])}")
+          def emit(name, value):
+              text = str(value).replace("\r", " ").replace("\n", " ")
+              print(f"{name}={text}")
+          emit("owner_status", owner_status)
+          emit("gate_status", gate.get("owner_status", "RED"))
+          emit("copilot_status", copilot.get("owner_status", "RED"))
+          emit("changed_count", len(gate.get("changed_files") or []))
+          emit("gate_errors", "; ".join((gate.get("errors") or [])[:5]))
+          emit("copilot_errors", "; ".join((copilot.get("errors") or [])[:5]))
           PY
       - name: Upload supportability evidence
         id: upload

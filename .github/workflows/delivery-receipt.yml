@@ -219,11 +219,14 @@ jobs:
           receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.exists() else {"owner_status": "RED", "errors": ["delivery receipt missing"]}
           verification = json.loads(verify_path.read_text(encoding="utf-8")) if verify_path.exists() else {"owner_status": "RED", "errors": ["receipt verification missing"]}
           owner_status = "GREEN" if receipt.get("owner_status") == "GREEN" and verification.get("owner_status") == "GREEN" else "RED"
-          print(f"owner_status={owner_status}")
-          print(f"receipt_status={receipt.get('owner_status', 'RED')}")
-          print(f"verification_status={verification.get('owner_status', 'RED')}")
-          print(f"receipt_errors={'; '.join((receipt.get('errors') or [])[:5])}")
-          print(f"verification_errors={'; '.join((verification.get('errors') or [])[:5])}")
+          def emit(name, value):
+              text = str(value).replace("\r", " ").replace("\n", " ")
+              print(f"{name}={text}")
+          emit("owner_status", owner_status)
+          emit("receipt_status", receipt.get("owner_status", "RED"))
+          emit("verification_status", verification.get("owner_status", "RED"))
+          emit("receipt_errors", "; ".join((receipt.get("errors") or [])[:5]))
+          emit("verification_errors", "; ".join((verification.get("errors") or [])[:5]))
           PY
       - name: Upload delivery receipt
         id: upload
