@@ -61,6 +61,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("uses: ./.github/workflows/supportability-gate.yml", workflows["supportability-enforcement.yml"])
         self.assertIn("uses: ./.github/workflows/delivery-receipt.yml", workflows["supportability-enforcement.yml"])
         self.assertIn("governance-ref: ${{ github.event.pull_request.head.sha }}", workflows["supportability-enforcement.yml"])
+        self.assertIn("needs.supportability.outputs['artifact-id']", workflows["supportability-enforcement.yml"])
+        self.assertIn("needs.supportability.outputs['artifact-digest']", workflows["supportability-enforcement.yml"])
         self.assertIn("if: ${{ always() && github.event.pull_request.base.ref == 'main' }}", workflows["supportability-enforcement.yml"])
         self.assertIn("workflow_call:", workflows["delivery-receipt.yml"])
         self.assertIn("Delivery Receipt", workflows["delivery-receipt.yml"])
