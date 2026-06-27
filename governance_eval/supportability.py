@@ -815,11 +815,21 @@ def _high_risk_files(target_repo: Path, changed: list[str]) -> list[str]:
 
 def _production_files(target_repo: Path) -> list[str]:
     files: list[str] = []
-    for path in target_repo.rglob("*"):
-        if _skip_path(path, target_repo):
-            continue
-        if path.is_file() and path.suffix in PRODUCTION_SUFFIXES:
+    for path in _iter_repo_files(target_repo):
+        if path.suffix in PRODUCTION_SUFFIXES:
             files.append(path.relative_to(target_repo).as_posix())
+    return files
+
+
+def _iter_repo_files(target_repo: Path) -> list[Path]:
+    files: list[Path] = []
+    for current, dirnames, filenames in os.walk(target_repo):
+        dirnames[:] = sorted(dirname for dirname in dirnames if dirname not in SKIPPED_DIRS)
+        current_path = Path(current)
+        for filename in sorted(filenames):
+            path = current_path / filename
+            if not _skip_path(path, target_repo):
+                files.append(path)
     return files
 
 
@@ -843,7 +853,7 @@ def _sql_files(paths: list[str]) -> list[str]:
 
 
 def _repo_has_sql(target_repo: Path) -> bool:
-    return any(path.suffix.lower() == ".sql" and not _skip_path(path, target_repo) for path in target_repo.rglob("*.sql"))
+    return any(path.suffix.lower() == ".sql" for path in _iter_repo_files(target_repo))
 
 
 def _unique_paths(paths: list[str]) -> list[str]:

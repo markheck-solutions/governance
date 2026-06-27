@@ -289,6 +289,24 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertTrue(any("explicit SQL gate command missing" in error for error in result["errors"]))
             self.assertNotIn("sql_supportability", result["coverage"]["changed_files"]["sql/report.sql"])
 
+    def test_repo_file_discovery_prunes_skipped_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            (repo / "node_modules/pkg").mkdir(parents=True)
+            (repo / "node_modules/pkg/ignored.py").write_text("x = 1\n", encoding="utf-8")
+            (repo / "node_modules/pkg/ignored.sql").write_text("select 1;\n", encoding="utf-8")
+
+            files = supportability_module._production_files(repo)
+
+            self.assertIn("src/app.py", files)
+            self.assertNotIn("node_modules/pkg/ignored.py", files)
+            self.assertFalse(supportability_module._repo_has_sql(repo))
+
+            (repo / "sql").mkdir()
+            (repo / "sql/report.sql").write_text("select 1;\n", encoding="utf-8")
+
+            self.assertTrue(supportability_module._repo_has_sql(repo))
+
 
 class CopilotReviewGateTests(unittest.TestCase):
     def setUp(self) -> None:
