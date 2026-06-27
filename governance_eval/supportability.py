@@ -30,6 +30,7 @@ OPTIONAL_COMMAND_GATES = ("package_audit",)
 ALL_COMMAND_GATES = REQUIRED_COMMAND_GATES + OPTIONAL_COMMAND_GATES + ("sql_supportability",)
 STATUS_GREEN = "GREEN"
 STATUS_RED = "RED"
+GIT_NETWORK_TIMEOUT_SECONDS = 60
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -1493,13 +1494,18 @@ def _ls_remote_main(repository_url: str) -> str:
         encoding="utf-8",
         errors="replace",
         capture_output=True,
+        timeout=GIT_NETWORK_TIMEOUT_SECONDS,
     )
     return completed.stdout.split()[0] if completed.stdout.split() else ""
 
 
 def _fresh_clone_log(repository_url: str) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="supportability-receipt-") as tmp:
-        subprocess.run(["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", repository_url, tmp], check=True)
+        subprocess.run(
+            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", repository_url, tmp],
+            check=True,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        )
         completed = subprocess.run(
             ["git", "log", "--oneline", "--decorate", "-n", "10"],
             cwd=tmp,
@@ -1508,13 +1514,18 @@ def _fresh_clone_log(repository_url: str) -> list[str]:
             encoding="utf-8",
             errors="replace",
             capture_output=True,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
         )
     return [line for line in completed.stdout.splitlines() if line]
 
 
 def _fresh_clone_contains_commit(repository_url: str, commit_sha: str) -> bool:
     with tempfile.TemporaryDirectory(prefix="supportability-receipt-") as tmp:
-        subprocess.run(["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", repository_url, tmp], check=True)
+        subprocess.run(
+            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", repository_url, tmp],
+            check=True,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        )
         completed = subprocess.run(
             ["git", "merge-base", "--is-ancestor", commit_sha, "origin/main"],
             cwd=tmp,
@@ -1522,5 +1533,9 @@ def _fresh_clone_contains_commit(repository_url: str, commit_sha: str) -> bool:
             encoding="utf-8",
             errors="replace",
             capture_output=True,
+            timeout=GIT_NETWORK_TIMEOUT_SECONDS,
         )
+    if completed.returncode not in {0, 1}:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise SupportabilityError(f"git merge-base failed with exit {completed.returncode}: {detail}")
     return completed.returncode == 0

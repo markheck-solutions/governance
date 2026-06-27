@@ -495,9 +495,11 @@ class DeliveryReceiptTests(unittest.TestCase):
 
     def test_fresh_clone_log_uses_full_history_fetch(self) -> None:
         calls: list[list[str]] = []
+        timeouts: list[object] = []
 
         def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             calls.append(args)
+            timeouts.append(kwargs.get("timeout"))
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="abc1234 (HEAD -> main) ok\n", stderr="")
 
         with mock.patch("governance_eval.supportability.subprocess.run", side_effect=fake_run):
@@ -506,6 +508,22 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(log, ["abc1234 (HEAD -> main) ok"])
         self.assertNotIn("--depth", calls[0])
         self.assertIn("--filter=blob:none", calls[0])
+        self.assertEqual(timeouts, [supportability_module.GIT_NETWORK_TIMEOUT_SECONDS] * 2)
+
+    def test_fresh_clone_contains_commit_raises_on_git_error(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            if "merge-base" in args:
+                return subprocess.CompletedProcess(args=args, returncode=128, stdout="", stderr="bad object")
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+        with mock.patch("governance_eval.supportability.subprocess.run", side_effect=fake_run):
+            with self.assertRaises(SupportabilityError):
+                supportability_module._fresh_clone_contains_commit("https://github.com/example/repo.git", "3" * 40)
+
+        self.assertIn("merge-base", calls[1])
 
     def test_receipt_verifier_rejects_schema_invalid_receipt(self) -> None:
         receipt = generate_delivery_receipt(
