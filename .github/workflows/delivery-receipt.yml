@@ -121,7 +121,7 @@ jobs:
               print("Invalid supportability artifact ID", file=sys.stderr)
               raise SystemExit(64)
           artifact_digest = os.environ["SUPPORTABILITY_ARTIFACT_DIGEST"]
-          if artifact_digest and not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact_digest):
+          if artifact_digest and not re.fullmatch(r"(sha256:)?[0-9a-f]{64}", artifact_digest):
               print("Invalid supportability artifact digest", file=sys.stderr)
               raise SystemExit(64)
           PY
@@ -140,9 +140,13 @@ jobs:
         if: always()
         shell: bash
         run: |
+          digest="${SUPPORTABILITY_ARTIFACT_DIGEST}"
+          if [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+            digest="sha256:${digest}"
+          fi
           {
             echo "id=${SUPPORTABILITY_ARTIFACT_ID}"
-            echo "digest=${SUPPORTABILITY_ARTIFACT_DIGEST}"
+            echo "digest=${digest}"
           } >> "$GITHUB_OUTPUT"
       - name: Fill missing evidence with RED placeholders
         if: always()

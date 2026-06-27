@@ -75,6 +75,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("id: supportability_artifact", workflows["delivery-receipt.yml"])
         self.assertIn("SUPPORTABILITY_ARTIFACT_ID", workflows["delivery-receipt.yml"])
         self.assertIn("SUPPORTABILITY_ARTIFACT_DIGEST", workflows["delivery-receipt.yml"])
+        self.assertIn('digest="sha256:${digest}"', workflows["delivery-receipt.yml"])
         self.assertIn("if: always()", workflows["delivery-receipt.yml"])
         self.assertNotIn("actions/runs/{run_id}/artifacts", workflows["delivery-receipt.yml"])
         self.assertIn("delivery-receipt", workflows["delivery-receipt.yml"])
