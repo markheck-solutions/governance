@@ -1,0 +1,85 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "owner_status",
+    "repository_url",
+    "pull_request_url",
+    "base_sha",
+    "head_sha",
+    "workflow",
+    "artifact",
+    "changed_files",
+    "gate_coverage",
+    "supportability_gate",
+    "copilot_review",
+    "architecture",
+    "required_judges",
+    "bootstrap",
+    "remote_audit",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "owner_status": {"type": "string", "enum": ["GREEN", "YELLOW", "RED"]},
+    "repository_url": {"type": "string"},
+    "pull_request_url": {"type": "string"},
+    "base_sha": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
+    "head_sha": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
+    "merged_sha": {"type": "string", "pattern": "^$|^[0-9a-f]{40}$"},
+    "workflow": {
+      "type": "object",
+      "required": ["run_id", "run_url", "job_name", "result"]
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["name", "id", "digest"]
+    },
+    "changed_files": {"type": "array", "items": {"type": "string"}},
+    "high_risk_files": {"type": "array", "items": {"type": "string"}},
+    "gate_coverage": {"type": "object"},
+    "supportability_gate": {
+      "type": "object",
+      "required": ["owner_status", "errors"]
+    },
+    "copilot_review": {
+      "type": "object",
+      "required": ["owner_status", "review_status", "errors"]
+    },
+    "architecture": {
+      "type": "object",
+      "required": [
+        "owner_status",
+        "gate_implementation",
+        "repo_architecture_supportability",
+        "architecture_behavior_proof",
+        "enforcement_mode",
+        "violation_count",
+        "new_violation_count",
+        "existing_violation_count",
+        "known_debt_applied_count",
+        "expired_known_debt_count",
+        "errors"
+      ]
+    },
+    "required_judges": {
+      "type": "object",
+      "required": [
+        "protected_baseline_judge_ran",
+        "candidate_judge_ran",
+        "baseline_receipt_produced",
+        "candidate_receipt_produced",
+        "governance_weakening_detected"
+      ]
+    },
+    "bootstrap": {
+      "type": "object",
+      "required": ["gate_result", "reason", "human_decision_required", "governance_pass"]
+    },
+    "remote_audit": {"type": "object"},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

@@ -139,7 +139,7 @@
       "python -m ruff check --select C901 src/inca_sorter tests scripts"
     ],
     "governed_roots": ["src", "scripts", "tests"],
-    "allowed_exceptions": ["existing validation workflow path filters outside candidate governance scope"]
+    "known_debt": ["existing validation workflow path filters outside candidate governance scope"]
   },
   "target_specific_exclusions": [
     {

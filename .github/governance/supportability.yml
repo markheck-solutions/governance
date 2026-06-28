@@ -1,0 +1,279 @@
+standard:
+  name: supportability-standard
+  source: docs/reference/supportability-standard.md
+  hash: "a3808f788f1dcb8c004112bfe64bc92c718a676e4c97e5f81e67a2ef42e73ac9"
+
+required_gates:
+  lint:
+    - python -m compileall -q .
+  format_check:
+    - python -c "import os, subprocess, sys; sys.exit(subprocess.run(['git', 'diff', '--check', os.environ['TARGET_BASE_SHA'], os.environ['TARGET_HEAD_SHA']]).returncode)"
+  typecheck:
+    - python -m compileall -q .
+  complexity:
+    - python -m compileall -q .
+  architecture:
+    - python -m unittest discover -s tests -p test_*.py
+  tests:
+    - python -m unittest discover -s tests -p test_*.py
+  compile_or_build:
+    - python -m compileall -q .
+  package_audit: []
+  sql_supportability: auto
+
+coverage:
+  changed_files: required
+  high_risk_files: required
+  forbid_gate_scope_narrowing: true
+  forbid_threshold_weakening: true
+
+ai_review:
+  copilot_required: true
+  latest_head_required: true
+  unresolved_p0_p1_p2_blocks: true
+  reviewer_login_patterns:
+    - "*copilot*"
+    - "chatgpt-codex-connector*"
+
+receipt:
+  artifact_name: supportability-delivery-receipt
+  retention_days: 90
+
+architecture_policy:
+  version: 1
+  enforcement_mode: block_all
+  governed_roots:
+    - path: governance_eval
+      kind: production_python
+      owner: governance
+      purpose: executable governance evaluator
+    - path: tests
+      kind: test_python
+      owner: governance
+      purpose: deterministic evaluator tests
+    - path: schemas
+      kind: schema_artifact
+      owner: governance
+      purpose: JSON schema contracts
+    - path: .github/workflows
+      kind: ci_config
+      owner: governance
+      purpose: GitHub enforcement workflows
+    - path: docs
+      kind: docs
+      owner: governance
+      purpose: governance documentation
+    - path: artifacts
+      kind: generated_artifact
+      owner: governance
+      purpose: generated benchmark and receipt evidence
+    - path: cases
+      kind: schema_artifact
+      owner: governance
+      purpose: deterministic benchmark case definitions
+    - path: fixtures
+      kind: generated_artifact
+      owner: governance
+      purpose: synthetic and historical benchmark fixtures
+    - path: target_packs
+      kind: generated_artifact
+      owner: governance
+      purpose: target-pack fixtures and reproducers
+    - path: targets
+      kind: schema_artifact
+      owner: governance
+      purpose: pinned target repository metadata and locks
+    - path: pyproject.toml
+      kind: ci_config
+      owner: governance
+      purpose: Python package and test configuration
+  runtime_relevance:
+    production_globs:
+      - "**/*.py"
+      - "**/*.ps1"
+      - "**/*.js"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.sql"
+      - "pyproject.toml"
+      - "package.json"
+    non_runtime_globs:
+      - "docs/**"
+      - "schemas/**"
+      - "artifacts/**"
+      - "cases/**"
+      - "fixtures/**"
+      - "target_packs/**"
+      - "targets/**"
+      - "**/*.md"
+      - "**/*.json"
+  vague_names:
+    forbidden:
+      - utils
+      - helpers
+      - common
+      - misc
+      - stuff
+      - shared
+  modules:
+    governance_eval:
+      path: governance_eval
+      owner: governance
+      purpose: evaluator runtime and CLI implementation
+      classification: application
+      domain: governance-evaluation
+      allowed_dependencies:
+        - schemas
+      forbidden_dependencies:
+        - tests
+        - artifacts
+      test_strategy: unittest coverage through tests/
+      limits:
+        max_file_lines: 2500
+        max_function_lines: 250
+        max_class_lines: 800
+        max_functions_per_file: 150
+        max_classes_per_file: 30
+    tests:
+      path: tests
+      owner: governance
+      purpose: deterministic positive and negative controls
+      classification: test
+      domain: governance-evaluation
+      allowed_dependencies:
+        - governance_eval
+        - schemas
+      forbidden_dependencies:
+        - artifacts
+      test_strategy: self-testing via unittest discovery
+      limits:
+        max_file_lines: 2500
+        max_function_lines: 250
+        max_class_lines: 800
+        max_functions_per_file: 150
+        max_classes_per_file: 30
+    schemas:
+      path: schemas
+      owner: governance
+      purpose: machine-readable artifact contracts
+      classification: schema
+      domain: governance-contracts
+      allowed_dependencies: []
+      forbidden_dependencies:
+        - governance_eval
+        - tests
+      test_strategy: schema loading and validation tests
+      limits:
+        max_file_lines: 500
+        max_function_lines: 0
+        max_class_lines: 0
+        max_functions_per_file: 0
+        max_classes_per_file: 0
+    workflows:
+      path: .github/workflows
+      owner: governance
+      purpose: GitHub enforcement workflows
+      classification: ci
+      domain: github-enforcement
+      allowed_dependencies:
+        - governance_eval
+      forbidden_dependencies:
+        - artifacts
+      test_strategy: workflow text and behavior assertions
+      limits:
+        max_file_lines: 500
+        max_function_lines: 0
+        max_class_lines: 0
+        max_functions_per_file: 0
+        max_classes_per_file: 0
+    cases:
+      path: cases
+      owner: governance
+      purpose: deterministic benchmark case definitions
+      classification: schema
+      domain: governance-contracts
+      allowed_dependencies: []
+      forbidden_dependencies:
+        - governance_eval
+        - tests
+        - artifacts
+      test_strategy: schema loading and benchmark validation
+      limits:
+        max_file_lines: 500
+        max_function_lines: 0
+        max_class_lines: 0
+        max_functions_per_file: 0
+        max_classes_per_file: 0
+    fixtures:
+      path: fixtures
+      owner: governance
+      purpose: synthetic and historical benchmark fixtures
+      classification: generated
+      domain: governance-evaluation-fixtures
+      allowed_dependencies: []
+      forbidden_dependencies:
+        - governance_eval
+        - tests
+        - artifacts
+      test_strategy: exercised by benchmark and detector tests
+      limits:
+        max_file_lines: 1000
+        max_function_lines: 0
+        max_class_lines: 0
+        max_functions_per_file: 0
+        max_classes_per_file: 0
+    target_packs:
+      path: target_packs
+      owner: governance
+      purpose: target-pack fixtures and reproducers
+      classification: generated
+      domain: target-pack-validation
+      allowed_dependencies: []
+      forbidden_dependencies:
+        - governance_eval
+        - tests
+        - artifacts
+      test_strategy: target pack schema and evaluator tests
+      limits:
+        max_file_lines: 1000
+        max_function_lines: 0
+        max_class_lines: 0
+        max_functions_per_file: 0
+        max_classes_per_file: 0
+    targets:
+      path: targets
+      owner: governance
+      purpose: pinned target repository metadata and locks
+      classification: schema
+      domain: target-repository-evidence
+      allowed_dependencies: []
+      forbidden_dependencies:
+        - governance_eval
+        - tests
+        - artifacts
+      test_strategy: lock validation tests
+      limits:
+        max_file_lines: 500
+        max_function_lines: 0
+        max_class_lines: 0
+        max_functions_per_file: 0
+        max_classes_per_file: 0
+    pyproject:
+      path: pyproject.toml
+      owner: governance
+      purpose: Python package and test configuration
+      classification: ci
+      domain: python-runtime-configuration
+      allowed_dependencies: []
+      forbidden_dependencies:
+        - governance_eval
+        - tests
+        - artifacts
+      test_strategy: config validation and CI execution
+      limits:
+        max_file_lines: 300
+        max_function_lines: 0
+        max_class_lines: 0
+        max_functions_per_file: 0
+        max_classes_per_file: 0
+  known_debt: []

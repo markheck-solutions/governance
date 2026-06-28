@@ -1,0 +1,261 @@
+name: Supportability Gate
+
+on:
+  workflow_call:
+    inputs:
+      target-repository:
+        required: true
+        type: string
+      target-repository-url:
+        required: true
+        type: string
+      target-base-sha:
+        required: true
+        type: string
+      target-head-sha:
+        required: true
+        type: string
+      target-pr-number:
+        required: true
+        type: string
+      target-pr-url:
+        required: true
+        type: string
+      governance-ref:
+        required: true
+        type: string
+      config-path:
+        required: false
+        type: string
+        default: .github/governance/supportability.yml
+      artifact-name:
+        required: false
+        type: string
+        default: supportability-gate-evidence
+    outputs:
+      owner-status:
+        description: GREEN when the supportability and Copilot gates pass.
+        value: ${{ jobs.supportability.outputs.owner-status }}
+      artifact-id:
+        description: Uploaded supportability evidence artifact ID.
+        value: ${{ jobs.supportability.outputs.artifact-id }}
+      artifact-digest:
+        description: Uploaded supportability evidence artifact digest.
+        value: ${{ jobs.supportability.outputs.artifact-digest }}
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  supportability:
+    name: Supportability Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      owner-status: ${{ steps.summary.outputs.owner_status }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+    env:
+      TARGET_REPOSITORY: ${{ inputs.target-repository }}
+      TARGET_REPOSITORY_URL: ${{ inputs.target-repository-url }}
+      TARGET_BASE_SHA: ${{ inputs.target-base-sha }}
+      TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
+      TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
+      TARGET_PR_URL: ${{ inputs.target-pr-url }}
+      GOVERNANCE_REF: ${{ inputs.governance-ref }}
+      CONFIG_PATH: ${{ inputs.config-path }}
+      ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: ${{ inputs.target-repository }}
+          ref: ${{ inputs.target-head-sha }}
+          fetch-depth: 0
+          path: target
+          persist-credentials: false
+      - name: Checkout governance evaluator
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: markheck-solutions/governance
+          ref: ${{ inputs.governance-ref }}
+          path: governance
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate workflow inputs
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+
+          sha_re = re.compile(r"^[0-9a-f]{40}$")
+          ref_re = re.compile(r"^[0-9a-f]{40}$")
+          artifact_re = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+          config_re = re.compile(r"^[A-Za-z0-9_./-]+\.ya?ml$")
+          if not sha_re.fullmatch(os.environ["TARGET_BASE_SHA"]):
+              print("Invalid target base SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["TARGET_HEAD_SHA"]):
+              print("Invalid target head SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not ref_re.fullmatch(os.environ["GOVERNANCE_REF"]):
+              print("Governance ref must be an exact commit SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not re.fullmatch(r"[1-9][0-9]{0,9}", os.environ["TARGET_PR_NUMBER"]):
+              print("Invalid target PR number", file=sys.stderr)
+              raise SystemExit(64)
+          if not artifact_re.fullmatch(os.environ["ARTIFACT_NAME"]):
+              print("Invalid artifact name", file=sys.stderr)
+              raise SystemExit(64)
+          config_path = os.environ["CONFIG_PATH"]
+          if not config_re.fullmatch(config_path) or ".." in config_path.split("/"):
+              print("Invalid config path", file=sys.stderr)
+              raise SystemExit(64)
+          PY
+      - name: Validate supportability config
+        continue-on-error: true
+        shell: bash
+        run: |
+          cd governance
+          python -m governance_eval supportability-config --config "../target/${CONFIG_PATH}"
+      - name: Run configured supportability gates
+        id: gate
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ""
+        run: |
+          cd governance
+          python -m governance_eval supportability-gate \
+            --config "../target/${CONFIG_PATH}" \
+            --target-repo ../target \
+            --base-sha "$TARGET_BASE_SHA" \
+            --head-sha "$TARGET_HEAD_SHA" \
+            --repository-url "$TARGET_REPOSITORY_URL" \
+            --pr-url "$TARGET_PR_URL" \
+            --output-dir ../target/artifacts/supportability
+      - name: Run approved architecture fitness gate
+        id: architecture
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ""
+        run: |
+          cd governance
+          python -m governance_eval architecture-gate \
+            --config "../target/${CONFIG_PATH}" \
+            --target-repo ../target \
+            --base-sha "$TARGET_BASE_SHA" \
+            --head-sha "$TARGET_HEAD_SHA" \
+            --output-dir ../target/artifacts/supportability
+      - name: Verify Copilot review evidence
+        id: copilot
+        continue-on-error: true
+        shell: bash
+        run: |
+          cd governance
+          python -m governance_eval copilot-review-gate \
+            --config "../target/${CONFIG_PATH}" \
+            --head-sha "$TARGET_HEAD_SHA" \
+            --repo "$TARGET_REPOSITORY" \
+            --pr "$TARGET_PR_NUMBER" \
+            --output-dir ../target/artifacts/supportability
+      - name: Read supportability summary
+        id: summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          gate_path = Path("target/artifacts/supportability/supportability-gate-result.json")
+          architecture_path = Path("target/artifacts/supportability/architecture-gate-result.json")
+          architecture_md_path = Path("target/artifacts/supportability/architecture-gate-result.md")
+          copilot_path = Path("target/artifacts/supportability/copilot-review-gate-result.json")
+          gate = json.loads(gate_path.read_text(encoding="utf-8")) if gate_path.exists() else {"owner_status": "RED", "errors": ["supportability gate result missing"], "changed_files": []}
+          architecture = json.loads(architecture_path.read_text(encoding="utf-8")) if architecture_path.exists() and architecture_md_path.exists() else {"owner_status": "RED", "errors": ["architecture gate evidence missing"]}
+          copilot = json.loads(copilot_path.read_text(encoding="utf-8")) if copilot_path.exists() else {"owner_status": "RED", "errors": ["Copilot review gate result missing"]}
+          architecture_green = (
+              architecture.get("owner_status") == "GREEN"
+              and architecture.get("gate_implementation") == "PASS"
+              and architecture.get("repo_architecture_supportability") == "PASS"
+              and architecture.get("architecture_behavior_proof") == "PASS"
+              and architecture.get("enforcement_mode") == "block_all"
+              and not architecture.get("violations")
+              and not architecture.get("new_violations")
+              and not architecture.get("known_debt_applied")
+              and not architecture.get("expired_known_debt")
+              and not architecture.get("errors")
+          )
+          owner_status = "GREEN" if gate.get("owner_status") == "GREEN" and architecture_green and copilot.get("owner_status") == "GREEN" else "RED"
+          def emit(name, value):
+              text = str(value).replace("\r", " ").replace("\n", " ")
+              print(f"{name}={text}")
+          emit("owner_status", owner_status)
+          emit("gate_status", gate.get("owner_status", "RED"))
+          emit("architecture_status", architecture.get("owner_status", "RED"))
+          emit("architecture_implementation", architecture.get("gate_implementation", "FAIL"))
+          emit("repo_architecture_supportability", architecture.get("repo_architecture_supportability", "FAIL"))
+          emit("architecture_behavior_proof", architecture.get("architecture_behavior_proof", "FAIL"))
+          emit("architecture_violation_count", len(architecture.get("violations") or []))
+          emit("architecture_new_violation_count", len(architecture.get("new_violations") or []))
+          emit("architecture_known_debt_applied_count", len(architecture.get("known_debt_applied") or []))
+          emit("architecture_expired_known_debt_count", len(architecture.get("expired_known_debt") or []))
+          emit("copilot_status", copilot.get("owner_status", "RED"))
+          emit("changed_count", len(gate.get("changed_files") or []))
+          emit("gate_errors", "; ".join((gate.get("errors") or [])[:5]))
+          emit("architecture_errors", "; ".join((architecture.get("errors") or [])[:5]))
+          emit("copilot_errors", "; ".join((copilot.get("errors") or [])[:5]))
+          PY
+      - name: Upload supportability evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: target/artifacts/supportability/*
+          retention-days: 90
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Supportability Gate"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Commit SHA | \`${TARGET_HEAD_SHA}\` |"
+            echo "| Owner status | \`${{ steps.summary.outputs.owner_status }}\` |"
+            echo "| Changed file count | \`${{ steps.summary.outputs.changed_count }}\` |"
+            echo "| Supportability gate | \`${{ steps.summary.outputs.gate_status }}\` |"
+            echo "| Architecture gate | \`${{ steps.summary.outputs.architecture_status }}\` |"
+            echo "| Gate implementation | \`${{ steps.summary.outputs.architecture_implementation }}\` |"
+            echo "| Repo architecture supportability | \`${{ steps.summary.outputs.repo_architecture_supportability }}\` |"
+            echo "| Architecture behavior proof | \`${{ steps.summary.outputs.architecture_behavior_proof }}\` |"
+            echo "| Architecture violations | \`${{ steps.summary.outputs.architecture_violation_count }}\` |"
+            echo "| New architecture violations | \`${{ steps.summary.outputs.architecture_new_violation_count }}\` |"
+            echo "| Architecture known debt applied | \`${{ steps.summary.outputs.architecture_known_debt_applied_count }}\` |"
+            echo "| Expired architecture known debt | \`${{ steps.summary.outputs.architecture_expired_known_debt_count }}\` |"
+            echo "| Copilot review | \`${{ steps.summary.outputs.copilot_status }}\` |"
+            echo "| Gate errors | \`${{ steps.summary.outputs.gate_errors }}\` |"
+            echo "| Architecture errors | \`${{ steps.summary.outputs.architecture_errors }}\` |"
+            echo "| Copilot errors | \`${{ steps.summary.outputs.copilot_errors }}\` |"
+            echo "| Artifact name | \`${ARTIFACT_NAME}\` |"
+            echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
+            echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail closed on RED supportability evidence
+        if: always() && steps.summary.outputs.owner_status != 'GREEN'
+        shell: bash
+        run: |
+          echo "Supportability evidence is RED"
+          exit 1

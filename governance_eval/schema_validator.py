@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -38,6 +39,17 @@ def validate(instance: Any, schema: dict[str, Any], path: str = "$") -> None:
         min_length = schema.get("minLength")
         if min_length is not None and len(instance) < min_length:
             raise SchemaValidationError(f"{path}: length below {min_length}")
+        max_length = schema.get("maxLength")
+        if max_length is not None and len(instance) > max_length:
+            raise SchemaValidationError(f"{path}: length above {max_length}")
+        pattern = schema.get("pattern")
+        if pattern is not None:
+            try:
+                compiled = re.compile(pattern)
+            except (re.error, TypeError) as exc:
+                raise SchemaValidationError(f"{path}: invalid pattern {pattern!r}: {exc}") from exc
+            if not compiled.search(instance):
+                raise SchemaValidationError(f"{path}: does not match pattern {pattern!r}")
 
     if isinstance(instance, (int, float)) and not isinstance(instance, bool):
         minimum = schema.get("minimum")

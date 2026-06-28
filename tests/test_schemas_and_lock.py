@@ -9,7 +9,7 @@ from governance_eval.cases import load_cases
 from governance_eval.lock import read_spaghetti_lock, validate_spaghetti_lock, write_spaghetti_lock
 from governance_eval.models import DetectorEvidence, EvidenceStatus, ReviewFinding
 from governance_eval.paths import repo_root
-from governance_eval.schema_validator import SchemaValidationError
+from governance_eval.schema_validator import SchemaValidationError, validate
 from governance_eval.schemas import validate_named
 
 
@@ -47,6 +47,44 @@ class SchemaAndLockTests(unittest.TestCase):
         del bad_case["expected_decision"]
         with self.assertRaises(SchemaValidationError):
             validate_named("evaluation_case", bad_case, self.root)
+
+    def test_schema_validator_reports_invalid_regex_pattern(self) -> None:
+        with self.assertRaisesRegex(SchemaValidationError, "invalid pattern"):
+            validate("abc", {"type": "string", "pattern": "["}, "$.field")
+
+    def test_schema_validator_pattern_uses_search_semantics(self) -> None:
+        validate("prefix-abc-suffix", {"type": "string", "pattern": "abc"}, "$.field")
+        with self.assertRaisesRegex(SchemaValidationError, "does not match pattern"):
+            validate("prefix-def-suffix", {"type": "string", "pattern": "abc"}, "$.field")
+
+    def test_supportability_result_schemas_reject_malformed_shas(self) -> None:
+        gate_result = {
+            "schema_version": "1.0",
+            "generated_at": "2026-06-27T00:00:00Z",
+            "owner_status": "RED",
+            "base_sha": "not-a-sha",
+            "head_sha": "2" * 40,
+            "standard": {},
+            "changed_files": [],
+            "high_risk_files": [],
+            "coverage": {},
+            "commands": [],
+            "errors": [],
+        }
+        with self.assertRaisesRegex(SchemaValidationError, "base_sha"):
+            validate_named("supportability_gate_result", gate_result, self.root)
+
+        copilot_result = {
+            "schema_version": "1.0",
+            "generated_at": "2026-06-27T00:00:00Z",
+            "owner_status": "RED",
+            "head_sha": "not-a-sha",
+            "reviewer_login_patterns": ["*copilot*"],
+            "review_status": {},
+            "errors": [],
+        }
+        with self.assertRaisesRegex(SchemaValidationError, "head_sha"):
+            validate_named("copilot_review_gate_result", copilot_result, self.root)
 
     def test_spaghetti_lock_contains_full_immutable_shas(self) -> None:
         lock_path = self.root / "targets/spaghetti.lock.toml"

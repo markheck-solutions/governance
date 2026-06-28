@@ -1,0 +1,130 @@
+{
+  "type": "object",
+  "required": ["standard", "required_gates", "coverage", "ai_review", "receipt", "architecture_policy"],
+  "properties": {
+    "standard": {
+      "type": "object",
+      "required": ["name", "source", "hash"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "hash": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "required_gates": {
+      "type": "object",
+      "required": [
+        "lint",
+        "format_check",
+        "typecheck",
+        "complexity",
+        "architecture",
+        "tests",
+        "compile_or_build",
+        "sql_supportability"
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "changed_files",
+        "high_risk_files",
+        "forbid_gate_scope_narrowing",
+        "forbid_threshold_weakening"
+      ]
+    },
+    "ai_review": {
+      "type": "object",
+      "required": [
+        "copilot_required",
+        "latest_head_required",
+        "unresolved_p0_p1_p2_blocks",
+        "reviewer_login_patterns"
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "required": ["artifact_name", "retention_days"]
+    },
+    "architecture_policy": {
+      "type": "object",
+      "required": [
+        "version",
+        "enforcement_mode",
+        "governed_roots",
+        "runtime_relevance",
+        "vague_names",
+        "modules",
+        "known_debt"
+      ],
+      "properties": {
+        "version": {"type": "integer", "enum": [1]},
+        "enforcement_mode": {"type": "string", "enum": ["block_all"]},
+        "governed_roots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "kind", "owner", "purpose"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "kind": {
+                "type": "string",
+                "enum": ["production_python", "test_python", "schema_artifact", "ci_config", "docs", "generated_artifact"]
+              },
+              "owner": {"type": "string", "minLength": 1},
+              "purpose": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "runtime_relevance": {
+          "type": "object",
+          "required": ["production_globs", "non_runtime_globs"],
+          "properties": {
+            "production_globs": {"type": "array", "items": {"type": "string"}},
+            "non_runtime_globs": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "vague_names": {
+          "type": "object",
+          "required": ["forbidden"],
+          "properties": {
+            "forbidden": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "modules": {"type": "object", "minProperties": 1},
+        "known_debt": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "rule",
+              "path",
+              "source_module",
+              "target_module",
+              "symbol_name",
+              "detail",
+              "fingerprint",
+              "owner",
+              "reason",
+              "expires_on"
+            ],
+            "properties": {
+              "rule": {"type": "string", "minLength": 1},
+              "path": {"type": "string", "minLength": 1},
+              "source_module": {"type": "string"},
+              "target_module": {"type": "string"},
+              "symbol_name": {"type": "string"},
+              "detail": {"type": "string"},
+              "fingerprint": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"},
+              "owner": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1},
+              "expires_on": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

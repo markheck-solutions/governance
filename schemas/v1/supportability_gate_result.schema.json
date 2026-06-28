@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "owner_status",
+    "base_sha",
+    "head_sha",
+    "standard",
+    "changed_files",
+    "high_risk_files",
+    "coverage",
+    "commands",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "owner_status": {"type": "string", "enum": ["GREEN", "RED"]},
+    "repository_url": {"type": "string"},
+    "pull_request_url": {"type": "string"},
+    "base_sha": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
+    "head_sha": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
+    "standard": {"type": "object"},
+    "changed_files": {"type": "array", "items": {"type": "string"}},
+    "high_risk_files": {"type": "array", "items": {"type": "string"}},
+    "coverage": {"type": "object"},
+    "commands": {"type": "array", "items": {"type": "object"}},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}
