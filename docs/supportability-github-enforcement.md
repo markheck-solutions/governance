@@ -121,20 +121,9 @@ Architecture enforcement is hard-stop only:
 
 Architecture evidence is written as both `architecture-gate-result.json` and `architecture-gate-result.md`.
 
-## Bootstrap Receipt
+## Protected Baseline State
 
-Current bootstrap state is RED when `main` lacks protected baseline reusable workflows.
-
-Required bootstrap receipt fields:
-
-```text
-Gate result: RED
-Reason: baseline protected workflow missing on main
-Human decision required: YES
-This is not a successful governance pass.
-```
-
-Bootstrap mode is temporary. Once protected baseline workflows exist on `main`, remove bootstrap mode and restore the protected baseline judge.
+Protected baseline reusable workflows now exist on `main`. Missing proof is still RED: missing baseline artifact ID, missing baseline artifact digest, missing baseline evidence, missing candidate evidence, missing receipt verification, or failed receipt verification cannot produce GREEN.
 
 ## Caller Workflow
 
@@ -142,7 +131,7 @@ Target repos should pin the governance reusable workflow to an exact commit SHA,
 
 The governance repo also includes `.github/workflows/supportability-enforcement.yml` as its own caller. Governance PRs run two judges:
 
-- Baseline protected judge from `main`, using the base SHA evaluator. This must block merge.
+- Baseline protected judge from an immutable known-good workflow ref, with `governance-ref` set to the PR base SHA. This must block merge.
 - Candidate judge from the PR head. This reports candidate behavior but cannot be the only authority.
 
 ```yaml
