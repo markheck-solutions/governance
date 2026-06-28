@@ -309,16 +309,6 @@ jobs:
         shell: bash
         run: |
           cd governance
-          if [ -z "${SUPPORTABILITY_ARTIFACT_ID}" ]; then
-            python -m governance_eval bootstrap-receipt \
-              --output-dir ../artifacts/supportability \
-              --repository-url "$TARGET_REPOSITORY_URL" \
-              --pr-url "$TARGET_PR_URL" \
-              --base-sha "$TARGET_BASE_SHA" \
-              --head-sha "$TARGET_HEAD_SHA" \
-              --reason "baseline protected workflow missing on main"
-            exit 0
-          fi
           proof_flags=()
           if [ "${{ steps.judge_artifacts.outputs.baseline_verified }}" = "true" ]; then
             proof_flags+=(--protected-baseline-judge-ran --baseline-receipt-produced)
@@ -371,7 +361,6 @@ jobs:
           emit("owner_status", owner_status)
           emit("receipt_status", receipt.get("owner_status", "RED"))
           emit("verification_status", verification.get("owner_status", "RED"))
-          emit("bootstrap_reason", (receipt.get("bootstrap") or {}).get("reason", ""))
           emit("receipt_errors", "; ".join((receipt.get("errors") or [])[:5]))
           emit("verification_errors", "; ".join((verification.get("errors") or [])[:5]))
           PY
@@ -396,7 +385,6 @@ jobs:
             echo "| Owner status | \`${{ steps.summary.outputs.owner_status }}\` |"
             echo "| Receipt generation | \`${{ steps.summary.outputs.receipt_status }}\` |"
             echo "| Remote audit | \`${{ steps.summary.outputs.verification_status }}\` |"
-            echo "| Bootstrap reason | \`${{ steps.summary.outputs.bootstrap_reason }}\` |"
             echo "| Receipt errors | \`${{ steps.summary.outputs.receipt_errors }}\` |"
             echo "| Remote audit errors | \`${{ steps.summary.outputs.verification_errors }}\` |"
             echo "| Source evidence artifact | \`${SUPPORTABILITY_ARTIFACT_NAME}\` |"

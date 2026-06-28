@@ -23,12 +23,12 @@ jobs:
   baseline-supportability:
     name: Baseline Protected Supportability Gate
     if: ${{ github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@main
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@d58e97019560183c38a0d6509e7aae0da40da356
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
       target-base-sha: ${{ github.event.pull_request.base.sha }}
-      target-head-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
       governance-ref: ${{ github.event.pull_request.base.sha }}
@@ -54,7 +54,7 @@ jobs:
       - baseline-supportability
       - candidate-supportability
     if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
-    uses: ./.github/workflows/delivery-receipt.yml
+    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@d58e97019560183c38a0d6509e7aae0da40da356
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
@@ -64,8 +64,8 @@ jobs:
       target-pr-url: ${{ github.event.pull_request.html_url }}
       governance-ref: ${{ github.event.pull_request.base.sha }}
       supportability-artifact-name: baseline-supportability-gate-evidence
-      supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] }}
-      supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] }}
+      supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] || 'missing-baseline-supportability-artifact-id' }}
+      supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] || 'missing-baseline-supportability-artifact-digest' }}
       candidate-supportability-artifact-name: candidate-supportability-gate-evidence
-      candidate-supportability-artifact-id: ${{ needs['candidate-supportability'].outputs['artifact-id'] }}
-      candidate-supportability-artifact-digest: ${{ needs['candidate-supportability'].outputs['artifact-digest'] }}
+      candidate-supportability-artifact-id: ${{ needs['candidate-supportability'].outputs['artifact-id'] || 'missing-candidate-supportability-artifact-id' }}
+      candidate-supportability-artifact-digest: ${{ needs['candidate-supportability'].outputs['artifact-digest'] || 'missing-candidate-supportability-artifact-digest' }}
