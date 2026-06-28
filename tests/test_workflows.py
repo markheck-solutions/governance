@@ -6,6 +6,22 @@ from pathlib import Path
 from governance_eval.paths import repo_root
 
 
+PROTECTED_GOVERNANCE_REF = "d58e97019560183c38a0d6509e7aae0da40da356"
+
+
+def _legacy_startup_receipt_strings() -> tuple[str, ...]:
+    boot = "boot"
+    strap = "strap"
+    return (
+        boot + strap + "-receipt",
+        "baseline protected workflow missing " + "on main",
+        "Baseline " + boot.capitalize() + strap + " Receipt Required",
+        "Confirm " + boot + strap + " is still required",
+        boot.capitalize() + strap + " reason",
+        "remove " + boot + strap + " mode",
+    )
+
+
 class WorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
@@ -86,22 +102,50 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("pull_request_review:", workflows["supportability-enforcement.yml"])
         self.assertIn("baseline-supportability:", workflows["supportability-enforcement.yml"])
         self.assertIn("candidate-supportability:", workflows["supportability-enforcement.yml"])
-        self.assertIn("Baseline Bootstrap Receipt Required", workflows["supportability-enforcement.yml"])
-        self.assertIn("baseline protected workflow missing on main", workflows["supportability-enforcement.yml"])
-        self.assertIn("remove bootstrap mode and restore protected baseline judge", workflows["supportability-enforcement.yml"])
-        self.assertNotIn("uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@main", workflows["supportability-enforcement.yml"])
+        self.assertIn("Baseline Protected Supportability Gate", workflows["supportability-enforcement.yml"])
+        for blocked_text in _legacy_startup_receipt_strings():
+            for name in ("supportability-enforcement.yml", "delivery-receipt.yml"):
+                self.assertNotIn(blocked_text, workflows[name])
+            self.assertNotIn(blocked_text, Path(__file__).read_text(encoding="utf-8"))
+        self.assertIn(
+            f"uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@{PROTECTED_GOVERNANCE_REF}",
+            workflows["supportability-enforcement.yml"],
+        )
+        self.assertNotIn(
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@main",
+            workflows["supportability-enforcement.yml"],
+        )
+        self.assertIn(
+            f"uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@{PROTECTED_GOVERNANCE_REF}",
+            workflows["supportability-enforcement.yml"],
+        )
         self.assertIn("uses: ./.github/workflows/supportability-gate.yml", workflows["supportability-enforcement.yml"])
-        self.assertIn("uses: ./.github/workflows/delivery-receipt.yml", workflows["supportability-enforcement.yml"])
-        self.assertIn("governance-ref: ${{ github.event.pull_request.head.sha }}", workflows["supportability-enforcement.yml"])
+        self.assertNotIn("uses: ./.github/workflows/delivery-receipt.yml", workflows["supportability-enforcement.yml"])
+        self.assertIn("artifact-name: baseline-supportability-gate-evidence", workflows["supportability-enforcement.yml"])
+        self.assertIn("supportability-artifact-name: baseline-supportability-gate-evidence", workflows["supportability-enforcement.yml"])
         self.assertIn("needs['baseline-supportability'].outputs['artifact-id']", workflows["supportability-enforcement.yml"])
         self.assertIn("needs['baseline-supportability'].outputs['artifact-digest']", workflows["supportability-enforcement.yml"])
         self.assertIn("needs['candidate-supportability'].outputs['artifact-id']", workflows["supportability-enforcement.yml"])
         self.assertIn("needs['candidate-supportability'].outputs['artifact-digest']", workflows["supportability-enforcement.yml"])
+        self.assertIn("missing-baseline-supportability-artifact-id", workflows["supportability-enforcement.yml"])
+        self.assertIn("missing-baseline-supportability-artifact-digest", workflows["supportability-enforcement.yml"])
+        self.assertIn("missing-candidate-supportability-artifact-id", workflows["supportability-enforcement.yml"])
+        self.assertIn("missing-candidate-supportability-artifact-digest", workflows["supportability-enforcement.yml"])
         baseline_block, candidate_block = workflows["supportability-enforcement.yml"].split("  candidate-supportability:", 1)
+        candidate_block, delivery_block = candidate_block.split("  delivery-receipt:", 1)
+        self.assertNotIn("uses: ./.github/workflows/supportability-gate.yml", baseline_block)
+        self.assertIn("target-base-sha: ${{ github.event.pull_request.base.sha }}", baseline_block)
+        self.assertIn("target-head-sha: ${{ github.event.pull_request.head.sha }}", baseline_block)
         self.assertNotIn("governance-ref: ${{ github.event.pull_request.head.sha }}", baseline_block)
+        self.assertIn("governance-ref: ${{ github.event.pull_request.base.sha }}", baseline_block)
+        self.assertIn("uses: ./.github/workflows/supportability-gate.yml", candidate_block)
+        self.assertIn("target-head-sha: ${{ github.event.pull_request.head.sha }}", candidate_block)
         self.assertIn("governance-ref: ${{ github.event.pull_request.head.sha }}", candidate_block)
-        delivery_block = workflows["supportability-enforcement.yml"].split("  delivery-receipt:", 1)[1]
         self.assertIn("supportability-artifact-id", delivery_block)
+        self.assertIn("supportability-artifact-digest", delivery_block)
+        self.assertIn("candidate-supportability-artifact-id", delivery_block)
+        self.assertIn("candidate-supportability-artifact-digest", delivery_block)
+        self.assertIn("governance-ref: ${{ github.event.pull_request.base.sha }}", delivery_block)
         self.assertIn("if: ${{ always() && github.event.pull_request.base.ref == 'main' }}", workflows["supportability-enforcement.yml"])
         self.assertIn("architecture_violation_count", workflows["supportability-gate.yml"])
         self.assertIn("architecture_known_debt_applied_count", workflows["supportability-gate.yml"])
@@ -123,8 +167,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("evidence_present(root)", workflows["delivery-receipt.yml"])
         self.assertIn('str(run.get("id") or "") == os.environ["GITHUB_RUN_ID"]', workflows["delivery-receipt.yml"])
         self.assertIn("archive_digest(archive_path) == expected_digest", workflows["delivery-receipt.yml"])
-        self.assertIn("bootstrap-receipt", workflows["delivery-receipt.yml"])
-        self.assertIn("baseline protected workflow missing on main", workflows["delivery-receipt.yml"])
         self.assertIn("proof_flags=()", workflows["delivery-receipt.yml"])
         self.assertIn("proof_flags+=(--protected-baseline-judge-ran --baseline-receipt-produced)", workflows["delivery-receipt.yml"])
         self.assertIn("proof_flags+=(--candidate-judge-ran --candidate-receipt-produced)", workflows["delivery-receipt.yml"])
