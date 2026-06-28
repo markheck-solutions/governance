@@ -23,7 +23,7 @@ jobs:
   baseline-supportability:
     name: Baseline Protected Supportability Gate
     if: ${{ github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@d58e97019560183c38a0d6509e7aae0da40da356
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@a6ab7d7ddb2418cd8588a33d306162ed59532558
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
@@ -54,7 +54,7 @@ jobs:
       - baseline-supportability
       - candidate-supportability
     if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@d58e97019560183c38a0d6509e7aae0da40da356
+    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@a6ab7d7ddb2418cd8588a33d306162ed59532558
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git

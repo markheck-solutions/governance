@@ -6,7 +6,7 @@ from pathlib import Path
 from governance_eval.paths import repo_root
 
 
-PROTECTED_GOVERNANCE_REF = "d58e97019560183c38a0d6509e7aae0da40da356"
+PROTECTED_GOVERNANCE_REF = "a6ab7d7ddb2418cd8588a33d306162ed59532558"
 
 
 def _legacy_startup_receipt_strings() -> tuple[str, ...]:
