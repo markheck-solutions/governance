@@ -150,12 +150,7 @@ jobs:
           mkdir -p evidence/baseline
           if [ -n "${SUPPORTABILITY_ARTIFACT_ID}" ]; then
             gh api "repos/${TARGET_REPOSITORY}/actions/artifacts/${SUPPORTABILITY_ARTIFACT_ID}/zip" > baseline-artifact.zip
-            python - <<'PY'
-            import zipfile
-            from pathlib import Path
-            with zipfile.ZipFile("baseline-artifact.zip") as archive:
-                archive.extractall(Path("evidence/baseline"))
-            PY
+            python -c 'import zipfile; from pathlib import Path; zipfile.ZipFile("baseline-artifact.zip").extractall(Path("evidence/baseline"))'
           fi
       - name: Download candidate supportability evidence
         id: download_candidate
@@ -165,12 +160,7 @@ jobs:
           mkdir -p evidence/candidate
           if [ -n "${CANDIDATE_SUPPORTABILITY_ARTIFACT_ID}" ]; then
             gh api "repos/${TARGET_REPOSITORY}/actions/artifacts/${CANDIDATE_SUPPORTABILITY_ARTIFACT_ID}/zip" > candidate-artifact.zip
-            python - <<'PY'
-            import zipfile
-            from pathlib import Path
-            with zipfile.ZipFile("candidate-artifact.zip") as archive:
-                archive.extractall(Path("evidence/candidate"))
-            PY
+            python -c 'import zipfile; from pathlib import Path; zipfile.ZipFile("candidate-artifact.zip").extractall(Path("evidence/candidate"))'
           fi
       - name: Record supportability artifact metadata
         id: supportability_artifact
@@ -372,7 +362,8 @@ jobs:
           receipt_path = Path("artifacts/supportability/supportability-delivery-receipt.json")
           verify_path = Path("artifacts/supportability/supportability-receipt-verification.json")
           receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.exists() else {"owner_status": "RED", "errors": ["delivery receipt missing"]}
-          verification = json.loads(verify_path.read_text(encoding="utf-8")) if verify_path.exists() else {"owner_status": "RED", "errors": ["receipt verification missing"]}
+          verify_text = verify_path.read_text(encoding="utf-8").strip() if verify_path.exists() else ""
+          verification = json.loads(verify_text) if verify_text else {"owner_status": "RED", "errors": ["receipt verification missing"]}
           owner_status = "GREEN" if receipt.get("owner_status") == "GREEN" and verification.get("owner_status") == "GREEN" else "RED"
           def emit(name, value):
               text = str(value).replace("\r", " ").replace("\n", " ")
