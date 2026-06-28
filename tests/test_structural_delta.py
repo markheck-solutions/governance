@@ -569,7 +569,7 @@ def _pack() -> dict:
             "required_files": ["pyproject.toml", ".github/workflows"],
             "required_commands": [],
             "governed_roots": ["src", "scripts", "tests"],
-            "allowed_exceptions": [],
+            "known_debt": [],
         },
     }
 

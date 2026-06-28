@@ -36,6 +36,18 @@ on:
         required: false
         type: string
         default: ""
+      candidate-supportability-artifact-id:
+        required: false
+        type: string
+        default: ""
+      candidate-supportability-artifact-name:
+        required: false
+        type: string
+        default: candidate-supportability-gate-evidence
+      candidate-supportability-artifact-digest:
+        required: false
+        type: string
+        default: ""
       receipt-artifact-name:
         required: false
         type: string
@@ -76,6 +88,9 @@ jobs:
       SUPPORTABILITY_ARTIFACT_NAME: ${{ inputs.supportability-artifact-name }}
       SUPPORTABILITY_ARTIFACT_ID: ${{ inputs.supportability-artifact-id }}
       SUPPORTABILITY_ARTIFACT_DIGEST: ${{ inputs.supportability-artifact-digest }}
+      CANDIDATE_SUPPORTABILITY_ARTIFACT_NAME: ${{ inputs.candidate-supportability-artifact-name }}
+      CANDIDATE_SUPPORTABILITY_ARTIFACT_ID: ${{ inputs.candidate-supportability-artifact-id }}
+      CANDIDATE_SUPPORTABILITY_ARTIFACT_DIGEST: ${{ inputs.candidate-supportability-artifact-digest }}
       RECEIPT_ARTIFACT_NAME: ${{ inputs.receipt-artifact-name }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -112,29 +127,51 @@ jobs:
           if not re.fullmatch(r"[1-9][0-9]{0,9}", os.environ["TARGET_PR_NUMBER"]):
               print("Invalid target PR number", file=sys.stderr)
               raise SystemExit(64)
-          for key in ("SUPPORTABILITY_ARTIFACT_NAME", "RECEIPT_ARTIFACT_NAME"):
+          for key in ("SUPPORTABILITY_ARTIFACT_NAME", "CANDIDATE_SUPPORTABILITY_ARTIFACT_NAME", "RECEIPT_ARTIFACT_NAME"):
               if not artifact_re.fullmatch(os.environ[key]):
                   print(f"Invalid artifact name in {key}", file=sys.stderr)
                   raise SystemExit(64)
-          artifact_id = os.environ["SUPPORTABILITY_ARTIFACT_ID"]
-          if artifact_id and not re.fullmatch(r"[1-9][0-9]{0,19}", artifact_id):
-              print("Invalid supportability artifact ID", file=sys.stderr)
-              raise SystemExit(64)
-          artifact_digest = os.environ["SUPPORTABILITY_ARTIFACT_DIGEST"]
-          if artifact_digest and not re.fullmatch(r"(sha256:)?[0-9a-f]{64}", artifact_digest):
-              print("Invalid supportability artifact digest", file=sys.stderr)
-              raise SystemExit(64)
+          for key in ("SUPPORTABILITY_ARTIFACT_ID", "CANDIDATE_SUPPORTABILITY_ARTIFACT_ID"):
+              artifact_id = os.environ[key]
+              if artifact_id and not re.fullmatch(r"[1-9][0-9]{0,19}", artifact_id):
+                  print(f"Invalid artifact ID in {key}", file=sys.stderr)
+                  raise SystemExit(64)
+          for key in ("SUPPORTABILITY_ARTIFACT_DIGEST", "CANDIDATE_SUPPORTABILITY_ARTIFACT_DIGEST"):
+              artifact_digest = os.environ[key]
+              if artifact_digest and not re.fullmatch(r"(sha256:)?[0-9a-f]{64}", artifact_digest):
+                  print(f"Invalid artifact digest in {key}", file=sys.stderr)
+                  raise SystemExit(64)
           PY
       - name: Download supportability gate evidence
         id: download
         continue-on-error: true
         shell: bash
         run: |
-          mkdir -p evidence
-          gh run download "$GITHUB_RUN_ID" \
-            --repo "$TARGET_REPOSITORY" \
-            --name "$SUPPORTABILITY_ARTIFACT_NAME" \
-            --dir evidence
+          mkdir -p evidence/baseline
+          if [ -n "${SUPPORTABILITY_ARTIFACT_ID}" ]; then
+            gh api "repos/${TARGET_REPOSITORY}/actions/artifacts/${SUPPORTABILITY_ARTIFACT_ID}/zip" > baseline-artifact.zip
+            python - <<'PY'
+            import zipfile
+            from pathlib import Path
+            with zipfile.ZipFile("baseline-artifact.zip") as archive:
+                archive.extractall(Path("evidence/baseline"))
+            PY
+          fi
+      - name: Download candidate supportability evidence
+        id: download_candidate
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p evidence/candidate
+          if [ -n "${CANDIDATE_SUPPORTABILITY_ARTIFACT_ID}" ]; then
+            gh api "repos/${TARGET_REPOSITORY}/actions/artifacts/${CANDIDATE_SUPPORTABILITY_ARTIFACT_ID}/zip" > candidate-artifact.zip
+            python - <<'PY'
+            import zipfile
+            from pathlib import Path
+            with zipfile.ZipFile("candidate-artifact.zip") as archive:
+                archive.extractall(Path("evidence/candidate"))
+            PY
+          fi
       - name: Record supportability artifact metadata
         id: supportability_artifact
         if: always()
@@ -148,23 +185,101 @@ jobs:
             echo "id=${SUPPORTABILITY_ARTIFACT_ID}"
             echo "digest=${digest}"
           } >> "$GITHUB_OUTPUT"
+      - name: Verify downloaded judge artifacts
+        id: judge_artifacts
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          def normalize(value):
+              if value and not value.startswith("sha256:"):
+                  return f"sha256:{value}"
+              return value
+
+          def evidence_present(root):
+              required = {
+                  "supportability-gate-result.json",
+                  "copilot-review-gate-result.json",
+                  "architecture-gate-result.json",
+              }
+              found = {path.name for path in root.rglob("*.json")}
+              return required.issubset(found)
+
+          def archive_digest(path):
+              if not path.exists():
+                  return ""
+              return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+          def verified(root, archive_path, artifact_id, expected_name, expected_digest):
+              expected_digest = normalize(expected_digest)
+              if not artifact_id or not expected_name or not expected_digest or not evidence_present(root):
+                  return False, ""
+              result = subprocess.run(
+                  ["gh", "api", f"repos/{os.environ['TARGET_REPOSITORY']}/actions/artifacts/{artifact_id}"],
+                  check=True,
+                  text=True,
+                  capture_output=True,
+              )
+              payload = json.loads(result.stdout)
+              actual_digest = normalize(str(payload.get("digest") or ""))
+              run = payload.get("workflow_run") if isinstance(payload.get("workflow_run"), dict) else {}
+              ok = (
+                  str(payload.get("id") or "") == artifact_id
+                  and payload.get("name") == expected_name
+                  and str(run.get("id") or "") == os.environ["GITHUB_RUN_ID"]
+                  and actual_digest == expected_digest
+                  and archive_digest(archive_path) == expected_digest
+              )
+              return ok, actual_digest
+
+          try:
+              baseline_verified, baseline_actual = verified(
+                  Path("evidence/baseline"),
+                  Path("baseline-artifact.zip"),
+                  os.environ["SUPPORTABILITY_ARTIFACT_ID"],
+                  os.environ["SUPPORTABILITY_ARTIFACT_NAME"],
+                  os.environ["SUPPORTABILITY_ARTIFACT_DIGEST"],
+              )
+          except Exception:
+              baseline_verified, baseline_actual = False, ""
+          try:
+              candidate_verified, candidate_actual = verified(
+                  Path("evidence/candidate"),
+                  Path("candidate-artifact.zip"),
+                  os.environ["CANDIDATE_SUPPORTABILITY_ARTIFACT_ID"],
+                  os.environ["CANDIDATE_SUPPORTABILITY_ARTIFACT_NAME"],
+                  os.environ["CANDIDATE_SUPPORTABILITY_ARTIFACT_DIGEST"],
+              )
+          except Exception:
+              candidate_verified, candidate_actual = False, ""
+          print(f"baseline_verified={str(baseline_verified).lower()}")
+          print(f"candidate_verified={str(candidate_verified).lower()}")
+          print(f"baseline_actual_digest={baseline_actual}")
+          print(f"candidate_actual_digest={candidate_actual}")
+          PY
       - name: Fill missing evidence with RED placeholders
         if: always()
         shell: bash
         run: |
-          mkdir -p evidence artifacts/supportability
+          mkdir -p evidence/baseline evidence/candidate artifacts/supportability
           python - <<'PY'
           import json
           import os
           from pathlib import Path
           import shutil
 
-          gate = Path("evidence/supportability-gate-result.json")
-          copilot = Path("evidence/copilot-review-gate-result.json")
-          architecture = Path("evidence/architecture-gate-result.json")
-          gate_candidates = sorted(Path("evidence").rglob("supportability-gate-result.json"))
-          copilot_candidates = sorted(Path("evidence").rglob("copilot-review-gate-result.json"))
-          architecture_candidates = sorted(Path("evidence").rglob("architecture-gate-result.json"))
+          gate = Path("evidence/baseline/supportability-gate-result.json")
+          copilot = Path("evidence/baseline/copilot-review-gate-result.json")
+          architecture = Path("evidence/baseline/architecture-gate-result.json")
+          gate_candidates = sorted(Path("evidence/baseline").rglob("supportability-gate-result.json"))
+          copilot_candidates = sorted(Path("evidence/baseline").rglob("copilot-review-gate-result.json"))
+          architecture_candidates = sorted(Path("evidence/baseline").rglob("architecture-gate-result.json"))
           if not gate.exists() and gate_candidates:
               shutil.copyfile(gate_candidates[0], gate)
           if not copilot.exists() and copilot_candidates:
@@ -204,10 +319,27 @@ jobs:
         shell: bash
         run: |
           cd governance
+          if [ -z "${SUPPORTABILITY_ARTIFACT_ID}" ]; then
+            python -m governance_eval bootstrap-receipt \
+              --output-dir ../artifacts/supportability \
+              --repository-url "$TARGET_REPOSITORY_URL" \
+              --pr-url "$TARGET_PR_URL" \
+              --base-sha "$TARGET_BASE_SHA" \
+              --head-sha "$TARGET_HEAD_SHA" \
+              --reason "baseline protected workflow missing on main"
+            exit 0
+          fi
+          proof_flags=()
+          if [ "${{ steps.judge_artifacts.outputs.baseline_verified }}" = "true" ]; then
+            proof_flags+=(--protected-baseline-judge-ran --baseline-receipt-produced)
+          fi
+          if [ "${{ steps.judge_artifacts.outputs.candidate_verified }}" = "true" ]; then
+            proof_flags+=(--candidate-judge-ran --candidate-receipt-produced)
+          fi
           python -m governance_eval delivery-receipt \
-            --gate-result ../evidence/supportability-gate-result.json \
-            --copilot-result ../evidence/copilot-review-gate-result.json \
-            --architecture-result ../evidence/architecture-gate-result.json \
+            --gate-result ../evidence/baseline/supportability-gate-result.json \
+            --copilot-result ../evidence/baseline/copilot-review-gate-result.json \
+            --architecture-result ../evidence/baseline/architecture-gate-result.json \
             --output-dir ../artifacts/supportability \
             --repository-url "$TARGET_REPOSITORY_URL" \
             --pr-url "$TARGET_PR_URL" \
@@ -216,7 +348,8 @@ jobs:
             --job-name "Delivery Receipt" \
             --artifact-name "$SUPPORTABILITY_ARTIFACT_NAME" \
             --artifact-id "${{ steps.supportability_artifact.outputs.id }}" \
-            --artifact-digest "${{ steps.supportability_artifact.outputs.digest }}"
+            --artifact-digest "${{ steps.judge_artifacts.outputs.baseline_actual_digest }}" \
+            "${proof_flags[@]}"
       - name: Verify delivery receipt against GitHub
         id: verify
         continue-on-error: true
@@ -247,6 +380,7 @@ jobs:
           emit("owner_status", owner_status)
           emit("receipt_status", receipt.get("owner_status", "RED"))
           emit("verification_status", verification.get("owner_status", "RED"))
+          emit("bootstrap_reason", (receipt.get("bootstrap") or {}).get("reason", ""))
           emit("receipt_errors", "; ".join((receipt.get("errors") or [])[:5]))
           emit("verification_errors", "; ".join((verification.get("errors") or [])[:5]))
           PY
@@ -271,11 +405,14 @@ jobs:
             echo "| Owner status | \`${{ steps.summary.outputs.owner_status }}\` |"
             echo "| Receipt generation | \`${{ steps.summary.outputs.receipt_status }}\` |"
             echo "| Remote audit | \`${{ steps.summary.outputs.verification_status }}\` |"
+            echo "| Bootstrap reason | \`${{ steps.summary.outputs.bootstrap_reason }}\` |"
             echo "| Receipt errors | \`${{ steps.summary.outputs.receipt_errors }}\` |"
             echo "| Remote audit errors | \`${{ steps.summary.outputs.verification_errors }}\` |"
             echo "| Source evidence artifact | \`${SUPPORTABILITY_ARTIFACT_NAME}\` |"
             echo "| Source evidence artifact ID | \`${{ steps.supportability_artifact.outputs.id }}\` |"
             echo "| Source evidence artifact digest | \`${{ steps.supportability_artifact.outputs.digest }}\` |"
+            echo "| Candidate evidence artifact ID | \`${CANDIDATE_SUPPORTABILITY_ARTIFACT_ID}\` |"
+            echo "| Candidate evidence artifact digest | \`${CANDIDATE_SUPPORTABILITY_ARTIFACT_DIGEST}\` |"
             echo "| Artifact name | \`${RECEIPT_ARTIFACT_NAME}\` |"
             echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
             echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"

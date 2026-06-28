@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
         "supportability-gate",
         "copilot-review-gate",
         "delivery-receipt",
+        "bootstrap-receipt",
         "verify-receipt",
     }:
         return supportability_main(argv)

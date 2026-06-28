@@ -84,12 +84,12 @@ class ArchitectureGateTests(unittest.TestCase):
             self.assertEqual(result["gate_implementation"], "FAIL")
             self.assertTrue(any("architecture_policy" in error for error in result["errors"]))
 
-    def test_structured_exception_records_debt_but_remains_red(self) -> None:
+    def test_structured_known_debt_records_debt_but_remains_red(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
             (repo / "src/shared").mkdir()
             (repo / "src/shared/model.py").write_text("x = 1\n", encoding="utf-8")
-            _add_exception(
+            _add_known_debt(
                 repo,
                 {
                     "rule_id": "vague_folder_name",
@@ -111,15 +111,15 @@ class ArchitectureGateTests(unittest.TestCase):
 
             self.assertEqual(code, EXIT_BLOCKED)
             self.assertEqual(result["owner_status"], "RED")
-            self.assertEqual(len(result["exceptions_applied"]), 1)
+            self.assertEqual(len(result["known_debt_applied"]), 1)
             self.assertTrue(result["violations"])
 
-    def test_path_only_exception_is_rejected(self) -> None:
+    def test_path_only_known_debt_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
             config_path = repo / ".github/governance/supportability.yml"
             config = load_supportability_config(config_path)
-            config["architecture_policy"]["exceptions"].append(
+            config["architecture_policy"]["known_debt"].append(
                 {
                     "rule": "vague_folder_name",
                     "path": "src/shared",
@@ -135,12 +135,12 @@ class ArchitectureGateTests(unittest.TestCase):
             self.assertEqual(code, EXIT_CONFIG)
             self.assertTrue(any("fingerprint" in error for error in result["errors"]))
 
-    def test_expired_exception_fails(self) -> None:
+    def test_expired_known_debt_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
             (repo / "src/shared").mkdir()
             (repo / "src/shared/model.py").write_text("x = 1\n", encoding="utf-8")
-            _add_exception(
+            _add_known_debt(
                 repo,
                 {
                     "rule_id": "vague_folder_name",
@@ -161,8 +161,8 @@ class ArchitectureGateTests(unittest.TestCase):
                 changed_files=["src/shared/model.py"],
             )
 
-            self.assertEqual(code, EXIT_CONFIG)
-            self.assertTrue(result["expired_exceptions"])
+            self.assertEqual(code, EXIT_BLOCKED)
+            self.assertTrue(result["expired_known_debt"])
 
     def test_unregistered_top_level_and_runtime_file_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,11 +351,11 @@ def _repo(path: Path, root: Path, *, mode: str) -> Path:
     return path
 
 
-def _add_exception(repo: Path, violation: dict, *, expires_on: str = "2099-12-31") -> None:
+def _add_known_debt(repo: Path, violation: dict, *, expires_on: str = "2099-12-31") -> None:
     config_path = repo / ".github/governance/supportability.yml"
     config = load_supportability_config(config_path)
     fingerprint = _fingerprint(violation)
-    config["architecture_policy"]["exceptions"].append(
+    config["architecture_policy"]["known_debt"].append(
         {
             "rule": violation["rule_id"],
             "path": violation["path"],
@@ -365,7 +365,7 @@ def _add_exception(repo: Path, violation: dict, *, expires_on: str = "2099-12-31
             "detail": violation["detail"],
             "fingerprint": fingerprint,
             "owner": "test",
-            "reason": "test exception with explicit owner and expiry",
+            "reason": "test known_debt with explicit owner and expiry",
             "expires_on": expires_on,
         }
     )
@@ -475,7 +475,7 @@ architecture_policy:
         max_class_lines: 20
         max_functions_per_file: 10
         max_classes_per_file: 5
-  exceptions: []
+  known_debt: []
 """
 
 

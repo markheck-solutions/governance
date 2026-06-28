@@ -192,7 +192,8 @@ jobs:
               and architecture.get("enforcement_mode") == "block_all"
               and not architecture.get("violations")
               and not architecture.get("new_violations")
-              and not architecture.get("expired_exceptions")
+              and not architecture.get("known_debt_applied")
+              and not architecture.get("expired_known_debt")
               and not architecture.get("errors")
           )
           owner_status = "GREEN" if gate.get("owner_status") == "GREEN" and architecture_green and copilot.get("owner_status") == "GREEN" else "RED"
@@ -207,7 +208,8 @@ jobs:
           emit("architecture_behavior_proof", architecture.get("architecture_behavior_proof", "FAIL"))
           emit("architecture_violation_count", len(architecture.get("violations") or []))
           emit("architecture_new_violation_count", len(architecture.get("new_violations") or []))
-          emit("architecture_expired_exception_count", len(architecture.get("expired_exceptions") or []))
+          emit("architecture_known_debt_applied_count", len(architecture.get("known_debt_applied") or []))
+          emit("architecture_expired_known_debt_count", len(architecture.get("expired_known_debt") or []))
           emit("copilot_status", copilot.get("owner_status", "RED"))
           emit("changed_count", len(gate.get("changed_files") or []))
           emit("gate_errors", "; ".join((gate.get("errors") or [])[:5]))
@@ -241,7 +243,8 @@ jobs:
             echo "| Architecture behavior proof | \`${{ steps.summary.outputs.architecture_behavior_proof }}\` |"
             echo "| Architecture violations | \`${{ steps.summary.outputs.architecture_violation_count }}\` |"
             echo "| New architecture violations | \`${{ steps.summary.outputs.architecture_new_violation_count }}\` |"
-            echo "| Expired architecture exceptions | \`${{ steps.summary.outputs.architecture_expired_exception_count }}\` |"
+            echo "| Architecture known debt applied | \`${{ steps.summary.outputs.architecture_known_debt_applied_count }}\` |"
+            echo "| Expired architecture known debt | \`${{ steps.summary.outputs.architecture_expired_known_debt_count }}\` |"
             echo "| Copilot review | \`${{ steps.summary.outputs.copilot_status }}\` |"
             echo "| Gate errors | \`${{ steps.summary.outputs.gate_errors }}\` |"
             echo "| Architecture errors | \`${{ steps.summary.outputs.architecture_errors }}\` |"

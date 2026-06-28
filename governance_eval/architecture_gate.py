@@ -35,7 +35,7 @@ PASS = "PASS"
 FAIL = "FAIL"
 SCHEMA_VERSION = "1.0"
 ENFORCEMENT_MODES = {"block_all"}
-EXCEPTION_MATCH_KEYS = (
+KNOWN_DEBT_MATCH_KEYS = (
     "rule",
     "path",
     "source_module",
@@ -44,6 +44,7 @@ EXCEPTION_MATCH_KEYS = (
     "detail",
     "fingerprint",
 )
+LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 ROOT_KINDS = {
     "production_python",
     "test_python",
@@ -160,24 +161,24 @@ def run_architecture_gate(
     target_repo = target_repo.resolve()
     head_files = _worktree_files(target_repo)
     changed = _changed_files(target_repo, base_sha, head_sha, changed_files)
-    exceptions, exception_errors, expired = _exceptions(policy)
-    if exception_errors or expired:
+    known_debt, debt_errors, expired_debt = _known_debt(policy)
+    if debt_errors:
         result = _failure_result(
             base_sha=base_sha,
             head_sha=head_sha,
             mode=mode,
-            errors=exception_errors + [f"expired architecture exception: {item['rule']} {item['path']}" for item in expired],
+            errors=debt_errors,
             gate_implementation=FAIL,
-            expired_exceptions=expired,
         )
         return _finalize_result(result, EXIT_CONFIG, output_dir)
 
     head_scan = _scan_files(policy, head_files, changed)
-    head_violations, applied = _apply_exceptions(head_scan["violations"], exceptions)
     if base_violations is None:
         base_violations = []
-    fingerprinted_head = [_fingerprinted(item) for item in head_violations]
+    fingerprinted_head = [_fingerprinted(item) for item in head_scan["violations"]]
     fingerprinted_base = [_fingerprinted(item) for item in (base_violations or [])]
+    debt_records = _record_known_debt(fingerprinted_head, known_debt)
+    debt_errors = [f"expired known_debt remains RED: {item['rule']} {item['path']}" for item in expired_debt]
     base_by_fingerprint = {item["fingerprint"]: item for item in fingerprinted_base}
     head_by_fingerprint = {item["fingerprint"]: item for item in fingerprinted_head}
     new = [item for fp, item in sorted(head_by_fingerprint.items()) if fp not in base_by_fingerprint]
@@ -187,14 +188,15 @@ def run_architecture_gate(
     behavior = _architecture_behavior_fixtures()
     behavior_proof = PASS if behavior["status"] == PASS else FAIL
     errors = list(behavior["errors"])
+    errors.extend(debt_errors)
     blocking = _blocking_violations(mode, fingerprinted_head, new)
     status = (
         STATUS_GREEN
         if not blocking
         and repo_status == PASS
         and behavior_proof == PASS
-        and not applied
-        and not expired
+        and not debt_records
+        and not expired_debt
         and not errors
         else STATUS_RED
     )
@@ -213,8 +215,8 @@ def run_architecture_gate(
         "new_violations": new,
         "existing_violations": existing,
         "resolved_violations": resolved,
-        "exceptions_applied": applied,
-        "expired_exceptions": [],
+        "known_debt_applied": debt_records,
+        "expired_known_debt": expired_debt,
         "behavior_fixtures": behavior["fixtures"],
         "rule_results": _rule_results(fingerprinted_head, head_scan["rules_checked"]),
         "errors": errors,
@@ -258,7 +260,7 @@ def _architecture_policy_errors(policy: Any) -> list[str]:
     errors.extend(_runtime_relevance_errors(policy.get("runtime_relevance")))
     errors.extend(_vague_name_errors(policy.get("vague_names")))
     errors.extend(_module_registry_errors(policy.get("modules")))
-    errors.extend(_exception_shape_errors(policy.get("exceptions", [])))
+    errors.extend(_known_debt_shape_errors(policy))
     return errors
 
 
@@ -326,26 +328,29 @@ def _module_registry_errors(value: Any) -> list[str]:
     return errors
 
 
-def _exception_shape_errors(value: Any) -> list[str]:
+def _known_debt_shape_errors(policy: dict[str, Any]) -> list[str]:
+    if LEGACY_POLICY_DEBT_FIELD in policy:
+        return ["legacy architecture debt field is not supported; use architecture_policy.known_debt"]
+    value = policy.get("known_debt", [])
     if not isinstance(value, list):
-        return ["architecture_policy.exceptions must be a list"]
+        return ["architecture_policy.known_debt must be a list"]
     errors: list[str] = []
     for index, item in enumerate(value):
         if not isinstance(item, dict):
-            errors.append(f"architecture_policy.exceptions[{index}] must be an object")
+            errors.append(f"architecture_policy.known_debt[{index}] must be an object")
             continue
         for key in ("rule", "path", "owner", "reason", "expires_on"):
             if not isinstance(item.get(key), str) or not item[key].strip():
-                errors.append(f"architecture_policy.exceptions[{index}].{key} must be a non-empty string")
+                errors.append(f"architecture_policy.known_debt[{index}].{key} must be a non-empty string")
         for key in ("source_module", "target_module", "symbol_name", "detail"):
             if not isinstance(item.get(key), str):
-                errors.append(f"architecture_policy.exceptions[{index}].{key} must be a string")
+                errors.append(f"architecture_policy.known_debt[{index}].{key} must be a string")
         if not isinstance(item.get("fingerprint"), str) or not re_full_sha256(item.get("fingerprint")):
-            errors.append(f"architecture_policy.exceptions[{index}].fingerprint must be a 64-character SHA-256")
+            errors.append(f"architecture_policy.known_debt[{index}].fingerprint must be a 64-character SHA-256")
         try:
             date.fromisoformat(str(item.get("expires_on", "")))
         except ValueError:
-            errors.append(f"architecture_policy.exceptions[{index}].expires_on must be YYYY-MM-DD")
+            errors.append(f"architecture_policy.known_debt[{index}].expires_on must be YYYY-MM-DD")
     return errors
 
 
@@ -363,14 +368,14 @@ def _policy_mode(policy: Any) -> str:
     return "block_all"
 
 
-def _exceptions(policy: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
-    errors = _exception_shape_errors(policy.get("exceptions", []))
+def _known_debt(policy: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+    errors = _known_debt_shape_errors(policy)
     if errors:
         return [], errors, []
     today = date.today()
     expired: list[dict[str, Any]] = []
     active: list[dict[str, Any]] = []
-    for item in policy.get("exceptions", []):
+    for item in policy.get("known_debt", []):
         if date.fromisoformat(item["expires_on"]) < today:
             expired.append(item)
         else:
@@ -578,7 +583,7 @@ def _python_file_violations(
                     module_id,
                     imported["target"],
                     imported["import_string"],
-                    "dynamic import requires explicit exception",
+                    "dynamic import target must be statically governed",
                 )
             )
             continue
@@ -833,21 +838,24 @@ def _canonical_cycle(cycle: list[str]) -> tuple[str, ...]:
     return min(rotations)
 
 
-def _apply_exceptions(
+def _record_known_debt(
     violations: list[dict[str, Any]],
-    exceptions: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    applied: list[dict[str, Any]] = []
+    known_debt: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    unmatched = list(known_debt)
     for violation in violations:
-        match = _matching_exception(violation, exceptions)
+        match = _matching_known_debt(violation, unmatched)
         if match:
-            applied.append({**match, "fingerprint": _fingerprint(violation)})
-    return violations, applied
+            records.append({**match, "fingerprint": _fingerprint(violation), "matches_violation": True})
+            unmatched.remove(match)
+    records.extend({**item, "matches_violation": False} for item in unmatched)
+    return records
 
 
-def _matching_exception(violation: dict[str, Any], exceptions: list[dict[str, Any]]) -> dict[str, Any] | None:
-    fingerprint = _fingerprint(violation)
-    for item in exceptions:
+def _matching_known_debt(violation: dict[str, Any], known_debt: list[dict[str, Any]]) -> dict[str, Any] | None:
+    fingerprint = str(violation.get("fingerprint") or _fingerprint(violation))
+    for item in known_debt:
         if (
             item["rule"] == violation.get("rule_id")
             and _norm(item["path"]) == _norm(str(violation.get("path", "")))
@@ -913,31 +921,31 @@ def _architecture_behavior_fixtures() -> dict[str, Any]:
     )
 
     if negative["violations"]:
-        exception_violation = negative["violations"][0]
-        strict_exception = {
-            "rule": exception_violation["rule_id"],
-            "path": exception_violation["path"],
-            "source_module": exception_violation["source_module"],
-            "target_module": exception_violation["target_module"],
-            "symbol_name": exception_violation["symbol_name"],
-            "detail": exception_violation["detail"],
-            "fingerprint": _fingerprint(exception_violation),
+        debt_violation = negative["violations"][0]
+        strict_debt = {
+            "rule": debt_violation["rule_id"],
+            "path": debt_violation["path"],
+            "source_module": debt_violation["source_module"],
+            "target_module": debt_violation["target_module"],
+            "symbol_name": debt_violation["symbol_name"],
+            "detail": debt_violation["detail"],
+            "fingerprint": _fingerprint(debt_violation),
             "owner": "fixture",
-            "reason": "fixture proves exceptions do not suppress violations",
+            "reason": "fixture proves known_debt does not suppress violations",
             "expires_on": "2099-12-31",
         }
-        remaining, applied = _apply_exceptions([exception_violation], [strict_exception])
-        exception_passed = bool(remaining) and bool(applied)
-        observed = [f"remaining={len(remaining)}", f"applied={len(applied)}"]
+        debt_records = _record_known_debt([_fingerprinted(debt_violation)], [strict_debt])
+        debt_passed = bool(debt_records) and bool(negative["violations"])
+        observed = [f"violations={len(negative['violations'])}", f"known_debt={len(debt_records)}"]
     else:
-        exception_passed = False
-        observed = ["no violation available for exception fixture"]
+        debt_passed = False
+        observed = ["no violation available for known_debt fixture"]
     _record_fixture(
         fixtures,
         errors,
-        "theater_exception_does_not_green_violation",
-        exception_passed,
-        ["violation_remains", "exception_applied"],
+        "theater_known_debt_does_not_green_violation",
+        debt_passed,
+        ["violation_remains", "known_debt_recorded"],
         observed,
     )
 
@@ -1007,7 +1015,7 @@ def _fixture_policy() -> dict[str, Any]:
                 },
             },
         },
-        "exceptions": [],
+        "known_debt": [],
     }
 
 
@@ -1060,7 +1068,7 @@ def _failure_result(
     mode: str,
     errors: list[str],
     gate_implementation: str,
-    expired_exceptions: list[dict[str, Any]] | None = None,
+    expired_known_debt: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1077,8 +1085,8 @@ def _failure_result(
         "new_violations": [],
         "existing_violations": [],
         "resolved_violations": [],
-        "exceptions_applied": [],
-        "expired_exceptions": expired_exceptions or [],
+        "known_debt_applied": [],
+        "expired_known_debt": expired_known_debt or [],
         "behavior_fixtures": [],
         "rule_results": {},
         "errors": errors,
@@ -1116,9 +1124,9 @@ def _markdown(result: dict[str, Any]) -> str:
         lines.extend(["", "## Errors", ""])
         for error in result["errors"]:
             lines.append(f"- {error}")
-    if result.get("exceptions_applied"):
-        lines.extend(["", "## Exceptions Applied", ""])
-        for item in result["exceptions_applied"][:50]:
+    if result.get("known_debt_applied"):
+        lines.extend(["", "## Known Debt", ""])
+        for item in result["known_debt_applied"][:50]:
             lines.append(f"- {item.get('rule')} {item.get('path')} {item.get('fingerprint')}")
     if result.get("behavior_fixtures"):
         lines.extend(["", "## Behavior Fixtures", ""])

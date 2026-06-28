@@ -21,17 +21,33 @@ permissions:
 
 jobs:
   baseline-supportability:
-    name: Baseline Protected Supportability Gate
+    name: Baseline Bootstrap Receipt Required
     if: ${{ github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@main
-    with:
-      target-repository: ${{ github.repository }}
-      target-repository-url: https://github.com/${{ github.repository }}.git
-      target-base-sha: ${{ github.event.pull_request.base.sha }}
-      target-head-sha: ${{ github.event.pull_request.head.sha }}
-      target-pr-number: ${{ github.event.pull_request.number }}
-      target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: ${{ github.event.pull_request.base.sha }}
+    runs-on: ubuntu-latest
+    outputs:
+      owner-status: ${{ steps.bootstrap.outputs.owner_status }}
+      artifact-id: ${{ steps.bootstrap.outputs.artifact_id }}
+      artifact-digest: ${{ steps.bootstrap.outputs.artifact_digest }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Confirm bootstrap is still required
+        id: bootstrap
+        shell: bash
+        run: |
+          {
+            echo "owner_status=RED"
+            echo "artifact_id="
+            echo "artifact_digest="
+          } >> "$GITHUB_OUTPUT"
+          if gh workflow view '.github/workflows/supportability-gate.yml' --repo "${GITHUB_REPOSITORY}" --ref main --yaml >/tmp/baseline-workflow.yml 2>/tmp/baseline-workflow.err; then
+            echo "Baseline protected workflow exists on main; remove bootstrap mode and restore protected baseline judge."
+            exit 1
+          fi
+          echo "Gate result: RED"
+          echo "Reason: baseline protected workflow missing on main"
+          echo "Human decision required: YES"
+          echo "This is not a successful governance pass."
 
   candidate-supportability:
     name: Candidate Supportability Gate
@@ -45,6 +61,7 @@ jobs:
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
       governance-ref: ${{ github.event.pull_request.head.sha }}
+      artifact-name: candidate-supportability-gate-evidence
 
   delivery-receipt:
     name: Baseline Protected Delivery Receipt
@@ -52,7 +69,7 @@ jobs:
       - baseline-supportability
       - candidate-supportability
     if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@main
+    uses: ./.github/workflows/delivery-receipt.yml
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
@@ -63,3 +80,6 @@ jobs:
       governance-ref: ${{ github.event.pull_request.base.sha }}
       supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] }}
       supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] }}
+      candidate-supportability-artifact-name: candidate-supportability-gate-evidence
+      candidate-supportability-artifact-id: ${{ needs['candidate-supportability'].outputs['artifact-id'] }}
+      candidate-supportability-artifact-digest: ${{ needs['candidate-supportability'].outputs['artifact-digest'] }}

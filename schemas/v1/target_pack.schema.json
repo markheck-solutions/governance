@@ -126,7 +126,7 @@
         "required_files": { "type": "array", "items": { "type": "string" } },
         "required_commands": { "type": "array", "items": { "type": "string" } },
         "governed_roots": { "type": "array", "items": { "type": "string" } },
-        "allowed_exceptions": { "type": "array", "items": { "type": "string" } }
+        "known_debt": { "type": "array", "items": { "type": "string" } }
       }
     },
     "target_specific_exclusions": {

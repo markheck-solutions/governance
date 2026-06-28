@@ -65,7 +65,7 @@ HTML/report output
 packaged-runtime behavior
 ```
 
-For a refactor, the current approved release is usually the behavior oracle unless the task explicitly changes behavior.
+For a refactor, the current approved release is usually the behavior oracle. Explicit owner-scoped behavior changes need separate proof.
 
 ### Historical failure cases
 
@@ -255,7 +255,7 @@ unresolved reproduced defect
 malformed or missing evidence
 ```
 
-AI architectural opinions remain advisory unless converted into a reproducer or deterministic rule.
+AI architectural opinions remain advisory until converted into a reproducer or deterministic rule.
 
 ### Stage 4: Automated repair
 
@@ -318,7 +318,7 @@ Every blocking governance rule must have:
 Add one small rule to the skill:
 
 ```markdown
-Do not claim or enforce governed completion unless the repository's
+Do not claim or enforce governed completion before the repository's
 governance benchmark passes. Invoke the executable governance engine;
 do not substitute narrative review for benchmark evidence.
 ```
@@ -494,7 +494,7 @@ Build an offline governance benchmark that:
 8. Adds a non-blocking GitHub shadow workflow.
 9. Proves the benchmark itself with automated tests.
 
-Completion is FAIL unless every reproduced defect and negative control
+Completion is FAIL until every reproduced defect and negative control
 is blocked and every clean control passes.
 ```
 

@@ -25,6 +25,13 @@ from governance_eval.supportability import (
     validate_supportability_config,
     verify_delivery_receipt,
 )
+from governance_eval.schemas import validate_named
+from governance_eval.schema_validator import SchemaValidationError
+
+
+LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
+LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
+LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
 
 
 class SupportabilityConfigTests(unittest.TestCase):
@@ -60,6 +67,16 @@ class SupportabilityConfigTests(unittest.TestCase):
         errors = validate_supportability_config(config)
 
         self.assertTrue(any("architecture_policy" in error for error in errors))
+
+    def test_config_schema_rejects_legacy_debt_field(self) -> None:
+        config = _valid_config(self.root)
+        config["architecture_policy"][LEGACY_POLICY_DEBT_FIELD] = []
+
+        errors = validate_supportability_config(config)
+
+        self.assertTrue(any("legacy architecture debt field" in error for error in errors))
+        with self.assertRaises(SchemaValidationError):
+            validate_named("supportability_config", config, self.root)
 
     def test_config_schema_validation_is_independent_of_current_working_directory(self) -> None:
         config = _valid_config(self.root)
@@ -395,12 +412,12 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertTrue(any("allowed_dependencies broadened" in error for error in result["errors"]))
             self.assertTrue(any("forbidden_dependencies narrowed" in error for error in result["errors"]))
 
-    def test_gate_blocks_added_architecture_exception(self) -> None:
+    def test_gate_blocks_added_architecture_known_debt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             base_config = load_supportability_config(repo / ".github/governance/supportability.yml")
             head_config = json.loads(json.dumps(base_config))
-            head_config["architecture_policy"]["exceptions"].append(
+            head_config["architecture_policy"]["known_debt"].append(
                 {
                     "rule": "vague_folder_name",
                     "path": "src/utils/file.py",
@@ -419,7 +436,7 @@ class SupportabilityGateTests(unittest.TestCase):
             result = _run_config_change_with_base(repo, base_config)
 
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("exceptions added" in error for error in result["errors"]))
+            self.assertTrue(any("known_debt added" in error for error in result["errors"]))
 
     def test_gate_blocks_architecture_checker_file_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -598,6 +615,106 @@ class CopilotReviewGateTests(unittest.TestCase):
 
 
 class DeliveryReceiptTests(unittest.TestCase):
+    def test_known_debt_does_not_make_green(self) -> None:
+        architecture = _architecture_result()
+        architecture["known_debt_applied"] = [
+            {
+                "rule": "python_import_cycle",
+                "path": "src/app.py",
+                "fingerprint": "a" * 64,
+                "owner": "test",
+                "reason": "known debt remains blocking",
+                "expires_on": "2099-12-31",
+            }
+        ]
+
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            architecture_result=architecture,
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertTrue(any("known_debt" in error for error in receipt["errors"]))
+
+    def test_legacy_debt_result_fields_do_not_make_green(self) -> None:
+        architecture = _architecture_result()
+        architecture[LEGACY_APPLIED_DEBT_FIELD] = [{"rule": "python_import_cycle"}]
+        architecture[LEGACY_EXPIRED_DEBT_FIELD] = [{"rule": "python_import_cycle"}]
+
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            architecture_result=architecture,
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertTrue(any(LEGACY_APPLIED_DEBT_FIELD in error for error in receipt["errors"]))
+        self.assertTrue(any(LEGACY_EXPIRED_DEBT_FIELD in error for error in receipt["errors"]))
+
+    def test_approval_and_allowance_metadata_do_not_make_green(self) -> None:
+        for field in (
+            "human_approval",
+            "codeowner_approval",
+            "CODEOWNER_approval",
+            "protected_baseline_debt_file",
+            "baseline_debt_file",
+            "waiver",
+            "allowlist",
+            "approval",
+        ):
+            with self.subTest(field=field):
+                architecture = _architecture_result()
+                architecture[field] = {"by": "owner"}
+
+                receipt = generate_delivery_receipt(
+                    _gate_result(),
+                    _copilot_result(),
+                    architecture_result=architecture,
+                    artifact_name="supportability-delivery-receipt",
+                    artifact_id="456",
+                    artifact_digest=f"sha256:{'a' * 64}",
+                )
+
+                self.assertEqual(receipt["owner_status"], STATUS_RED)
+                self.assertTrue(any(field in error for error in receipt["errors"]))
+
+    def test_missing_required_judge_proof_does_not_make_green(self) -> None:
+        gate = _gate_result()
+        gate["required_judges"]["candidate_receipt_produced"] = False
+
+        receipt = generate_delivery_receipt(
+            gate,
+            _copilot_result(),
+            architecture_result=_architecture_result(),
+            artifact_name="supportability-delivery-receipt",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertTrue(any("candidate_receipt_produced" in error for error in receipt["errors"]))
+
+    def test_bootstrap_receipt_remains_red(self) -> None:
+        receipt = supportability_module.generate_bootstrap_receipt(
+            repository_url="https://github.com/example/repo.git",
+            pr_url="https://github.com/example/repo/pull/7",
+            base_sha="1" * 40,
+            head_sha="2" * 40,
+        )
+
+        self.assertEqual(receipt["owner_status"], STATUS_RED)
+        self.assertEqual(receipt["bootstrap"]["gate_result"], STATUS_RED)
+        self.assertEqual(receipt["bootstrap"]["reason"], "baseline protected workflow missing on main")
+        self.assertEqual(receipt["bootstrap"]["human_decision_required"], "YES")
+        self.assertFalse(receipt["bootstrap"]["governance_pass"])
+
     def test_receipt_rejects_architecture_status_mismatch(self) -> None:
         architecture = _architecture_result()
         architecture["repo_architecture_supportability"] = "FAIL"
@@ -860,6 +977,43 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(result["owner_status"], STATUS_GREEN)
 
+    def test_receipt_verifier_rejects_fabricated_nested_green(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            architecture_result=_architecture_result(),
+            artifact_name="supportability-gate-evidence",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+        receipt["supportability_gate"] = {}
+        receipt["copilot_review"] = {}
+        receipt["architecture"] = {}
+        receipt["required_judges"] = {}
+
+        result = verify_delivery_receipt(receipt)
+
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any("delivery receipt schema invalid" in error for error in result["errors"]))
+
+    def test_receipt_verifier_rejects_legacy_architecture_fields(self) -> None:
+        receipt = generate_delivery_receipt(
+            _gate_result(),
+            _copilot_result(),
+            architecture_result=_architecture_result(),
+            artifact_name="supportability-gate-evidence",
+            artifact_id="456",
+            artifact_digest=f"sha256:{'a' * 64}",
+        )
+        receipt["architecture"][LEGACY_APPLIED_DEBT_FIELD] = [{"rule": "old"}]
+        receipt["architecture"][LEGACY_EXPIRED_DEBT_FIELD] = [{"rule": "old"}]
+
+        result = verify_delivery_receipt(receipt)
+
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any(LEGACY_APPLIED_DEBT_FIELD in error for error in result["errors"]))
+        self.assertTrue(any(LEGACY_EXPIRED_DEBT_FIELD in error for error in result["errors"]))
+
     def test_receipt_verifier_rejects_merged_sha_missing_from_main_history(self) -> None:
         gate = _gate_result()
         copilot = _copilot_result()
@@ -1049,6 +1203,10 @@ class DeliveryReceiptTests(unittest.TestCase):
                         "456",
                         "--artifact-digest",
                         f"sha256:{'a' * 64}",
+                        "--protected-baseline-judge-ran",
+                        "--candidate-judge-ran",
+                        "--baseline-receipt-produced",
+                        "--candidate-receipt-produced",
                     ]
                 )
 
@@ -1210,7 +1368,7 @@ architecture_policy:
         max_class_lines: 200
         max_functions_per_file: 50
         max_classes_per_file: 20
-  exceptions: []
+  known_debt: []
 """
 
 
@@ -1264,7 +1422,7 @@ def _architecture_policy() -> dict:
                 },
             },
         },
-        "exceptions": [],
+        "known_debt": [],
     }
 
 
@@ -1332,6 +1490,13 @@ def _gate_result() -> dict:
         "changed_files": ["src/app.py"],
         "high_risk_files": ["src/risk.py"],
         "coverage": {"changed_files": {"src/app.py": ["lint"]}},
+        "required_judges": {
+            "protected_baseline_judge_ran": True,
+            "candidate_judge_ran": True,
+            "baseline_receipt_produced": True,
+            "candidate_receipt_produced": True,
+            "governance_weakening_detected": False,
+        },
         "errors": [],
     }
 
@@ -1354,7 +1519,8 @@ def _architecture_result() -> dict:
         "violations": [],
         "new_violations": [],
         "existing_violations": [],
-        "expired_exceptions": [],
+        "known_debt_applied": [],
+        "expired_known_debt": [],
         "errors": [],
     }
 

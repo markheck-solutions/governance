@@ -1,7 +1,7 @@
 standard:
   name: supportability-standard
   source: docs/reference/supportability-standard.md
-  hash: "81653c5057c1555f8b6d41c6e5999d0b54caa178a2ca97a07216147ec16133e2"
+  hash: "a3808f788f1dcb8c004112bfe64bc92c718a676e4c97e5f81e67a2ef42e73ac9"
 
 required_gates:
   lint:
@@ -276,4 +276,4 @@ architecture_policy:
         max_class_lines: 0
         max_functions_per_file: 0
         max_classes_per_file: 0
-  exceptions: []
+  known_debt: []

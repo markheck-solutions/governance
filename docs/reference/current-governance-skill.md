@@ -45,14 +45,14 @@ No other process router outranks this skill. Repo `AGENTS.md` files add local co
 
 - Read applicable repo contracts before editing.
 - For supportability, refactor, package/runtime, architecture cleanup, test hardening, repo maintainability, release/package proof, or completion-gate work, read `C:\Users\mheck\Documents\AI\HOW-TO\HOW-TO_supportability_standard.md` from disk before planning, editing, validating, or claiming completion.
-- Treat every required item in `C:\Users\mheck\Documents\AI\HOW-TO\HOW-TO_supportability_standard.md` as pass/fail unless the owner explicitly scopes that item out in the current prompt.
+- Treat every required item in `C:\Users\mheck\Documents\AI\HOW-TO\HOW-TO_supportability_standard.md` as pass/fail. Owner scope reductions must be recorded outside the gate; the required gate stays RED for missing proof.
 - Do not rely on this skill's summary as a substitute for the canonical supportability standard file.
 - If the canonical supportability standard cannot be read, stop and report the blocker. Do not proceed as if governance has been applied.
 - No completion claim without fresh proof from the current turn.
-- No supportability pass from narrowed gates, non-blocking gates, exception ledgers, ratchets, docs-only edits, or tests-only edits.
+- No supportability pass from narrowed gates, non-blocking gates, known_debt ledgers, ratchets, docs-only edits, or tests-only edits.
 - For brownfield repos, map changed files plus highest-risk production files to gates before claiming supportability.
 - For greenfield repos, create gates before feature work.
-- Preserve approved local infrastructure unless the owner explicitly asks to change it.
+- Preserve approved local infrastructure. Owner-directed infrastructure changes must be explicit and separately recorded.
 
 ## SQL Supportability Gate
 
@@ -67,7 +67,7 @@ Status must be reported separately:
 ```text
 Gate implementation: PASS|FAIL
 Repo SQL supportability: PASS|FAIL
-SQL behavior proof: PASS|FAIL|NOT_REQUIRED
+SQL behavior proof: PASS|FAIL
 ```
 
 Do not merge these statuses into "done".
@@ -82,7 +82,7 @@ Fail closed:
 - Production SQL parse failure = `SQL gate FAIL` and `Repo SQL supportability: FAIL`.
 - Required live database proof unavailable = `SQL behavior proof: FAIL` and `Repo SQL supportability: FAIL`.
 
-`SQL behavior proof: NOT_REQUIRED` is allowed only when current evidence proves extracted executable SQL, canonical SQL, execution-sink hash, role metadata hash, and dependency graph hash match the prior baseline.
+Prior SQL baselines may explain debt, but they do not create a skipped-proof PASS.
 
 For SQL gate or governance-skill edits, final proof must include current file hashes, exact commands, pass/fail results, and gate coverage for changed files plus highest-risk production SQL files.
 

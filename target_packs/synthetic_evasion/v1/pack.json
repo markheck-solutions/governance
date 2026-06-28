@@ -76,7 +76,7 @@
     "required_files": [],
     "required_commands": [],
     "governed_roots": ["src"],
-    "allowed_exceptions": []
+    "known_debt": []
   },
   "target_specific_exclusions": [
     {

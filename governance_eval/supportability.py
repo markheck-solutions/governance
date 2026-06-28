@@ -36,6 +36,9 @@ GIT_NETWORK_TIMEOUT_SECONDS = 60
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
+LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
+LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
 SEVERE_RE = re.compile(r"\bP[0-2]\b|\[P[0-2]\]|severity:\s*P[0-2]", re.IGNORECASE)
 PRODUCTION_SUFFIXES = {
     ".py",
@@ -245,6 +248,8 @@ def generate_delivery_receipt(
     artifact_id: str = "",
     artifact_digest: str = "",
     merged_sha: str = "",
+    required_judges: dict[str, bool] | None = None,
+    bootstrap_reason: str = "",
 ) -> dict[str, Any]:
     resolved_repository_url = repository_url or str(gate_result.get("repository_url") or "")
     resolved_pr_url = pr_url or str(gate_result.get("pull_request_url") or "")
@@ -257,7 +262,11 @@ def generate_delivery_receipt(
         "architecture_behavior_proof": "FAIL",
         "errors": ["architecture gate result missing"],
     }
+    judge_status = _required_judge_status(gate_result, required_judges)
     errors = _receipt_input_errors(gate_result, copilot_result, artifact_name, artifact_id, artifact_digest, architecture_result)
+    errors.extend(_required_judge_errors(judge_status))
+    if bootstrap_reason:
+        errors.append(f"bootstrap receipt remains RED: {bootstrap_reason}")
     if not SHA1_RE.fullmatch(base_sha):
         errors.append("base_sha must be a 40-character lowercase Git SHA")
     if not SHA1_RE.fullmatch(head_sha):
@@ -312,8 +321,16 @@ def generate_delivery_receipt(
             "violation_count": len(architecture_result.get("violations") or []),
             "new_violation_count": len(architecture_result.get("new_violations") or []),
             "existing_violation_count": len(architecture_result.get("existing_violations") or []),
-            "expired_exception_count": len(architecture_result.get("expired_exceptions") or []),
+            "known_debt_applied_count": len(architecture_result.get("known_debt_applied") or []),
+            "expired_known_debt_count": len(architecture_result.get("expired_known_debt") or []),
             "errors": architecture_result.get("errors", []),
+        },
+        "required_judges": judge_status,
+        "bootstrap": {
+            "gate_result": STATUS_RED if bootstrap_reason else "",
+            "reason": bootstrap_reason,
+            "human_decision_required": "YES" if bootstrap_reason else "NO",
+            "governance_pass": False if bootstrap_reason else status == STATUS_GREEN,
         },
         "remote_audit": {
             "ls_remote_main_sha": "",
@@ -329,6 +346,52 @@ def generate_delivery_receipt(
         _write_json(output_dir / "supportability-delivery-receipt.json", receipt)
         _write_markdown(output_dir / "supportability-delivery-receipt.md", _receipt_markdown(receipt))
     return receipt
+
+
+def generate_bootstrap_receipt(
+    *,
+    repository_url: str,
+    pr_url: str,
+    base_sha: str,
+    head_sha: str,
+    reason: str = "baseline protected workflow missing on main",
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    gate = {
+        "owner_status": STATUS_RED,
+        "repository_url": repository_url,
+        "pull_request_url": pr_url,
+        "base_sha": base_sha,
+        "head_sha": head_sha,
+        "changed_files": [],
+        "high_risk_files": [],
+        "coverage": {},
+        "errors": [reason],
+    }
+    copilot = {"owner_status": STATUS_RED, "review_status": {}, "errors": [reason]}
+    architecture = {
+        "owner_status": STATUS_RED,
+        "gate_implementation": "FAIL",
+        "repo_architecture_supportability": "FAIL",
+        "architecture_behavior_proof": "FAIL",
+        "enforcement_mode": "block_all",
+        "violations": [],
+        "new_violations": [],
+        "existing_violations": [],
+        "known_debt_applied": [],
+        "expired_known_debt": [],
+        "errors": [reason],
+    }
+    return generate_delivery_receipt(
+        gate,
+        copilot,
+        architecture_result=architecture,
+        output_dir=output_dir,
+        repository_url=repository_url,
+        pr_url=pr_url,
+        required_judges={},
+        bootstrap_reason=reason,
+    )
 
 
 def verify_delivery_receipt(
@@ -424,6 +487,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_gate_parser(subparsers)
     _add_copilot_parser(subparsers)
     _add_receipt_parser(subparsers)
+    _add_bootstrap_parser(subparsers)
     _add_verify_parser(subparsers)
     args = parser.parse_args(argv)
     if args.command == "supportability-config":
@@ -434,6 +498,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cli_copilot(args)
     if args.command == "delivery-receipt":
         return _cli_receipt(args)
+    if args.command == "bootstrap-receipt":
+        return _cli_bootstrap_receipt(args)
     if args.command == "verify-receipt":
         return _cli_verify_receipt(args)
     raise AssertionError(args.command)
@@ -519,8 +585,10 @@ def _architecture_policy_errors(policy: Any) -> list[str]:
         errors.append("architecture_policy.vague_names must be an object")
     if not isinstance(policy.get("modules"), dict) or not policy["modules"]:
         errors.append("architecture_policy.modules must be a non-empty object")
-    if not isinstance(policy.get("exceptions", []), list):
-        errors.append("architecture_policy.exceptions must be a list")
+    if LEGACY_POLICY_DEBT_FIELD in policy:
+        errors.append("legacy architecture debt field is not supported; use architecture_policy.known_debt")
+    if not isinstance(policy.get("known_debt", []), list):
+        errors.append("architecture_policy.known_debt must be a list")
     return errors
 
 
@@ -631,7 +699,7 @@ def _architecture_governance_change_errors(
     touched_checkers = sorted(changed_set & checker_paths)
     if touched_checkers:
         errors.append(
-            "architecture checker files changed; protected baseline judge or human-only approval is required: "
+            "architecture checker files changed; protected baseline judge must report RED for self-judging change: "
             + ", ".join(touched_checkers)
         )
     workflow_path = ".github/workflows/supportability-gate.yml"
@@ -639,7 +707,7 @@ def _architecture_governance_change_errors(
         base_text = _git_show_text(target_repo, base_sha, workflow_path)
         head_text = (target_repo / workflow_path).read_text(encoding="utf-8") if (target_repo / workflow_path).exists() else ""
         if base_text is not None and _architecture_command_lines(base_text) != _architecture_command_lines(head_text):
-            errors.append("architecture gate workflow command changed; protected human-only approval is required")
+            errors.append("architecture gate workflow command changed; protected baseline judge must report RED")
     return errors
 
 
@@ -673,7 +741,7 @@ def _architecture_policy_weakening_errors(base_config: dict[str, Any], head_conf
     if not isinstance(base_policy, dict):
         return []
     if not isinstance(head_policy, dict):
-        return ["architecture_policy deleted; protected human-only approval is required"]
+        return ["architecture_policy deleted; protected baseline judge must report RED"]
     errors: list[str] = []
     if head_policy.get("enforcement_mode") != "block_all":
         errors.append("architecture_policy.enforcement_mode changed away from block_all")
@@ -681,7 +749,7 @@ def _architecture_policy_weakening_errors(base_config: dict[str, Any], head_conf
     errors.extend(_runtime_relevance_weakening_errors(base_policy, head_policy))
     errors.extend(_vague_name_weakening_errors(base_policy, head_policy))
     errors.extend(_module_policy_weakening_errors(base_policy, head_policy))
-    errors.extend(_exception_weakening_errors(base_policy, head_policy))
+    errors.extend(_known_debt_policy_change_errors(base_policy, head_policy))
     return errors
 
 
@@ -764,23 +832,23 @@ def _limit_weakening_errors(module_id: str, base_module: dict[str, Any], head_mo
     return errors
 
 
-def _exception_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base_exceptions = {_exception_identity(item): item for item in base_policy.get("exceptions", []) if isinstance(item, dict)}
+def _known_debt_policy_change_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
+    base_debt = {_known_debt_identity(item): item for item in base_policy.get("known_debt", []) if isinstance(item, dict)}
     errors = []
-    for item in head_policy.get("exceptions", []):
+    for item in head_policy.get("known_debt", []):
         if not isinstance(item, dict):
             continue
-        identity = _exception_identity(item)
-        base_item = base_exceptions.get(identity)
+        identity = _known_debt_identity(item)
+        base_item = base_debt.get(identity)
         if base_item is None:
-            errors.append("architecture_policy.exceptions added or broadened")
+            errors.append("architecture_policy.known_debt added or changed")
             continue
         if str(item.get("expires_on") or "") > str(base_item.get("expires_on") or ""):
-            errors.append("architecture_policy.exceptions extended")
+            errors.append("architecture_policy.known_debt extended")
     return errors
 
 
-def _exception_identity(item: dict[str, Any]) -> tuple[Any, ...]:
+def _known_debt_identity(item: dict[str, Any]) -> tuple[Any, ...]:
     return (
         item.get("rule"),
         _norm_policy_path(item.get("path")),
@@ -1389,6 +1457,33 @@ def _receipt_input_errors(
     return errors
 
 
+def _required_judge_status(gate_result: dict[str, Any], required_judges: dict[str, bool] | None) -> dict[str, bool]:
+    source = required_judges if required_judges is not None else gate_result.get("required_judges")
+    source = source if isinstance(source, dict) else {}
+    return {
+        "protected_baseline_judge_ran": source.get("protected_baseline_judge_ran") is True,
+        "candidate_judge_ran": source.get("candidate_judge_ran") is True,
+        "baseline_receipt_produced": source.get("baseline_receipt_produced") is True,
+        "candidate_receipt_produced": source.get("candidate_receipt_produced") is True,
+        "governance_weakening_detected": source.get("governance_weakening_detected") is True,
+    }
+
+
+def _required_judge_errors(required_judges: dict[str, bool]) -> list[str]:
+    errors: list[str] = []
+    for key in (
+        "protected_baseline_judge_ran",
+        "candidate_judge_ran",
+        "baseline_receipt_produced",
+        "candidate_receipt_produced",
+    ):
+        if required_judges.get(key) is not True:
+            errors.append(f"required judge proof missing: {key}")
+    if required_judges.get("governance_weakening_detected") is True:
+        errors.append("governance weakening detected")
+    return errors
+
+
 def _architecture_receipt_input_errors(architecture_result: dict[str, Any]) -> list[str]:
     errors = []
     expected = {
@@ -1401,9 +1496,31 @@ def _architecture_receipt_input_errors(architecture_result: dict[str, Any]) -> l
     for key, value in expected.items():
         if architecture_result.get(key) != value:
             errors.append(f"architecture {key} must be {value}")
-    for key in ("violations", "new_violations", "expired_exceptions", "errors"):
+    for key in (
+        "violations",
+        "new_violations",
+        "existing_violations",
+        "known_debt_applied",
+        "known_debt",
+        "expired_known_debt",
+        LEGACY_APPLIED_DEBT_FIELD,
+        LEGACY_EXPIRED_DEBT_FIELD,
+        "errors",
+    ):
         if architecture_result.get(key):
             errors.append(f"architecture {key} must be empty")
+    for key in (
+        "human_approval",
+        "codeowner_approval",
+        "CODEOWNER_approval",
+        "protected_baseline_debt_file",
+        "baseline_debt_file",
+        "waiver",
+        "allowlist",
+        "approval",
+    ):
+        if architecture_result.get(key):
+            errors.append(f"architecture {key} metadata cannot make GREEN")
     return errors
 
 
@@ -1430,6 +1547,7 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
         errors.append("owner_status must be GREEN, YELLOW, or RED")
     if receipt.get("owner_status") != STATUS_GREEN:
         errors.append("receipt owner_status must be GREEN before verification")
+    errors.extend(_embedded_receipt_status_errors(receipt))
     errors.extend(_receipt_sha_errors(receipt))
     artifact = receipt.get("artifact") if isinstance(receipt.get("artifact"), dict) else {}
     if not artifact.get("name"):
@@ -1444,6 +1562,51 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
         errors.append("artifact.digest is required")
     elif not DIGEST_RE.fullmatch(artifact_digest):
         errors.append("artifact.digest must be sha256:<hex>")
+    return errors
+
+
+def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    supportability_gate = receipt.get("supportability_gate") if isinstance(receipt.get("supportability_gate"), dict) else {}
+    copilot_review = receipt.get("copilot_review") if isinstance(receipt.get("copilot_review"), dict) else {}
+    architecture = receipt.get("architecture") if isinstance(receipt.get("architecture"), dict) else {}
+    required_judges = receipt.get("required_judges") if isinstance(receipt.get("required_judges"), dict) else {}
+    bootstrap = receipt.get("bootstrap") if isinstance(receipt.get("bootstrap"), dict) else {}
+    if supportability_gate.get("owner_status") != STATUS_GREEN:
+        errors.append("receipt supportability_gate.owner_status must be GREEN")
+    if supportability_gate.get("errors"):
+        errors.append("receipt supportability_gate.errors must be empty")
+    if copilot_review.get("owner_status") != STATUS_GREEN:
+        errors.append("receipt copilot_review.owner_status must be GREEN")
+    if copilot_review.get("errors"):
+        errors.append("receipt copilot_review.errors must be empty")
+    expected_architecture = {
+        "owner_status": STATUS_GREEN,
+        "gate_implementation": "PASS",
+        "repo_architecture_supportability": "PASS",
+        "architecture_behavior_proof": "PASS",
+        "enforcement_mode": "block_all",
+    }
+    for key, value in expected_architecture.items():
+        if architecture.get(key) != value:
+            errors.append(f"receipt architecture.{key} must be {value}")
+    for key in (
+        "violation_count",
+        "new_violation_count",
+        "existing_violation_count",
+        "known_debt_applied_count",
+        "expired_known_debt_count",
+    ):
+        if architecture.get(key) not in {0, None}:
+            errors.append(f"receipt architecture.{key} must be 0")
+    for key in (LEGACY_APPLIED_DEBT_FIELD, LEGACY_EXPIRED_DEBT_FIELD, "known_debt_applied", "known_debt", "expired_known_debt"):
+        if architecture.get(key):
+            errors.append(f"receipt architecture.{key} must be empty")
+    if architecture.get("errors"):
+        errors.append("receipt architecture.errors must be empty")
+    errors.extend(_required_judge_errors(required_judges))
+    if bootstrap.get("governance_pass") is False or bootstrap.get("gate_result") == STATUS_RED or bootstrap.get("reason"):
+        errors.append("receipt bootstrap must not indicate active bootstrap RED state")
     return errors
 
 
@@ -1738,6 +1901,21 @@ def _add_receipt_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--artifact-id", default="")
     parser.add_argument("--artifact-digest", default="")
     parser.add_argument("--merged-sha", default="")
+    parser.add_argument("--protected-baseline-judge-ran", action="store_true")
+    parser.add_argument("--candidate-judge-ran", action="store_true")
+    parser.add_argument("--baseline-receipt-produced", action="store_true")
+    parser.add_argument("--candidate-receipt-produced", action="store_true")
+    parser.add_argument("--governance-weakening-detected", action="store_true")
+
+
+def _add_bootstrap_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = subparsers.add_parser("bootstrap-receipt", help="generate a RED bootstrap receipt")
+    parser.add_argument("--output-dir", type=Path, default=Path("artifacts/supportability"))
+    parser.add_argument("--repository-url", default="")
+    parser.add_argument("--pr-url", default="")
+    parser.add_argument("--base-sha", required=True)
+    parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--reason", default="baseline protected workflow missing on main")
 
 
 def _add_verify_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1802,9 +1980,29 @@ def _cli_receipt(args: argparse.Namespace) -> int:
         artifact_id=args.artifact_id,
         artifact_digest=args.artifact_digest,
         merged_sha=args.merged_sha,
+        required_judges={
+            "protected_baseline_judge_ran": args.protected_baseline_judge_ran,
+            "candidate_judge_ran": args.candidate_judge_ran,
+            "baseline_receipt_produced": args.baseline_receipt_produced,
+            "candidate_receipt_produced": args.candidate_receipt_produced,
+            "governance_weakening_detected": args.governance_weakening_detected,
+        },
     )
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0 if receipt["owner_status"] == STATUS_GREEN else 1
+
+
+def _cli_bootstrap_receipt(args: argparse.Namespace) -> int:
+    receipt = generate_bootstrap_receipt(
+        repository_url=args.repository_url,
+        pr_url=args.pr_url,
+        base_sha=args.base_sha,
+        head_sha=args.head_sha,
+        reason=args.reason,
+        output_dir=args.output_dir,
+    )
+    print(json.dumps(receipt, indent=2, sort_keys=True))
+    return 1
 
 
 def _cli_verify_receipt(args: argparse.Namespace) -> int:

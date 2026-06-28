@@ -14,8 +14,8 @@
     "new_violations",
     "existing_violations",
     "resolved_violations",
-    "exceptions_applied",
-    "expired_exceptions",
+    "known_debt_applied",
+    "expired_known_debt",
     "behavior_fixtures",
     "rule_results",
     "errors"
@@ -35,8 +35,8 @@
     "new_violations": {"type": "array", "items": {"type": "object"}},
     "existing_violations": {"type": "array", "items": {"type": "object"}},
     "resolved_violations": {"type": "array", "items": {"type": "object"}},
-    "exceptions_applied": {"type": "array", "items": {"type": "object"}},
-    "expired_exceptions": {"type": "array", "items": {"type": "object"}},
+    "known_debt_applied": {"type": "array", "items": {"type": "object"}},
+    "expired_known_debt": {"type": "array", "items": {"type": "object"}},
     "behavior_fixtures": {"type": "array", "items": {"type": "object"}},
     "rule_results": {"type": "object"},
     "errors": {"type": "array", "items": {"type": "string"}}

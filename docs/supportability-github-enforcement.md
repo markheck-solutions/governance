@@ -101,12 +101,12 @@ architecture_policy:
         max_class_lines: 240
         max_functions_per_file: 45
         max_classes_per_file: 12
-  exceptions: []
+  known_debt: []
 ```
 
 If a repo contains SQL files and `sql_supportability` is `auto`, the gate returns RED until explicit SQL validation commands are configured.
 
-Config changes are protected. A PR that weakens `.github/governance/supportability.yml` returns RED. Weakening includes changing away from `block_all`, removing governed roots, narrowing runtime production globs, broadening non-runtime globs, narrowing vague-name controls, broadening allowed dependencies, narrowing forbidden dependencies, increasing size limits, or adding/extending exceptions.
+Config changes are protected. A PR that weakens `.github/governance/supportability.yml` returns RED. Weakening includes changing away from `block_all`, removing governed roots, narrowing runtime production globs, broadening non-runtime globs, narrowing vague-name controls, broadening allowed dependencies, narrowing forbidden dependencies, increasing size limits, or adding/extending `known_debt`.
 
 The `receipt` block is validated as the target repo's declared contract. Reusable workflow inputs/defaults enforce the actual artifact names and 90-day retention during upload.
 
@@ -116,10 +116,25 @@ Architecture enforcement is hard-stop only:
 
 - `block_all` is the only CI-valid mode.
 - `report_only` and `block_new` are rejected by schema/config validation.
-- `architecture_behavior_proof` is `PASS` only when approved positive, negative, and theater fixtures run and pass.
-- Exceptions document debt only. An applied exception does not convert architecture supportability to GREEN.
+- `architecture_behavior_proof` is `PASS` only when positive, negative, and theater fixtures run and pass.
+- `known_debt` documents debt only. It does not suppress findings, lower violation count, or convert architecture supportability to GREEN.
 
 Architecture evidence is written as both `architecture-gate-result.json` and `architecture-gate-result.md`.
+
+## Bootstrap Receipt
+
+Current bootstrap state is RED when `main` lacks protected baseline reusable workflows.
+
+Required bootstrap receipt fields:
+
+```text
+Gate result: RED
+Reason: baseline protected workflow missing on main
+Human decision required: YES
+This is not a successful governance pass.
+```
+
+Bootstrap mode is temporary. Once protected baseline workflows exist on `main`, remove bootstrap mode and restore the protected baseline judge.
 
 ## Caller Workflow
 
@@ -192,8 +207,8 @@ The workflows enforce objective proof:
 - Configured command strings do not contain known scope-narrowing or threshold-weakening markers.
 - Changed files and deterministic high-risk production files receive gate coverage.
 - The approved architecture checker runs directly and emits JSON plus Markdown evidence.
-- Workflow GREEN requires architecture owner status GREEN, gate implementation PASS, repo architecture supportability PASS, behavior proof PASS, no violations, no new violations, no expired exceptions, and no errors.
-- Architecture policy covers runtime/production-relevant files with registered module ownership, allowed dependencies, forbidden dependencies, strict fingerprinted exceptions, and deterministic Python size/import checks.
+- Workflow GREEN requires architecture owner status GREEN, gate implementation PASS, repo architecture supportability PASS, behavior proof PASS, no violations, no new violations, no known debt, no expired known debt, protected baseline judge evidence, candidate judge evidence, baseline and candidate receipts, and no errors.
+- Architecture policy covers runtime/production-relevant files with registered module ownership, allowed dependencies, forbidden dependencies, strict fingerprinted known debt records, and deterministic Python size/import checks. Known debt never forgives a violation.
 - The adopted standard file exists and matches the pinned hash.
 - Copilot or an allowed AI reviewer reviewed the latest head SHA.
 - Unresolved `P0`, `P1`, or `P2` AI review evidence blocks GREEN.

@@ -250,7 +250,7 @@ It prevents random cross-imports, circular dependencies, and business logic depe
 
 Do not introduce circular imports.
 
-Do not make domain or business logic depend directly on CLI code, UI code, framework glue, package runtime details, database clients, or external service clients unless the current architecture already requires it.
+Do not make domain or business logic depend directly on CLI code, UI code, framework glue, package runtime details, database clients, or external service clients. Existing architecture debt must remain visible as debt, not a GREEN result.
 
 Keep dependency direction predictable.
 
@@ -380,7 +380,7 @@ Pick one small high-value target first.
 
 Keep each logical step small and runnable.
 
-Do not attempt repo-wide cleanup unless explicitly asked.
+Do not attempt repo-wide cleanup without explicit owner scope.
 
 ### Acceptance test
 
@@ -415,7 +415,7 @@ The AI must verify and report:
 
 If lint, type-check, complexity, architecture, or test gates exclude production code, changed files, large files, legacy wrappers, generated-looking source, or files carrying the most risk, the AI must report that exclusion as a supportability failure.
 
-The AI must not claim quality gates passed unless the relevant gates cover the changed files and the highest-risk production files.
+The AI must not claim quality gates passed before proving the relevant gates cover the changed files and the highest-risk production files.
 
 The AI must not weaken thresholds, exclude files, rename files to avoid checks, move files outside checked paths, or narrow gate scope to make validation pass.
 
@@ -531,7 +531,7 @@ Do not perform repo-wide cleanup.
 ```
 
 ```text
-Do not move files unless the move improves a real responsibility or dependency boundary.
+Move files only when the move improves a real responsibility or dependency boundary.
 ```
 
 ---
@@ -580,7 +580,7 @@ Ask the AI to preserve or improve dependency direction.
 Instruction:
 
 ```text
-Do not introduce circular imports or dependency inversions. Keep domain/business logic independent from CLI, UI, framework, package, database, or external-service glue unless the current architecture explicitly requires otherwise.
+Do not introduce circular imports or dependency inversions. Keep domain/business logic independent from CLI, UI, framework, package, database, or external-service glue. Existing architecture debt remains RED until removed.
 ```
 
 ---
@@ -647,7 +647,7 @@ Rules:
 - Characterize current behavior before changing complex or legacy code.
 - Prefer incremental strangler-style cleanup over big-bang rewrites.
 - Keep each logical step small and runnable.
-- Preserve intended behavior unless explicitly told otherwise.
+- Preserve intended behavior. Explicit behavior changes require owner scope and proof.
 
 Validation:
 
@@ -701,5 +701,4 @@ Ask these questions:
 10. Did it explain the architectural improvement clearly?
 
 If the answer is mostly no, the AI did not clean the repo. It rearranged the mess.
-
 
