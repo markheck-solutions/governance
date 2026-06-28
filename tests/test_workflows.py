@@ -103,10 +103,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("baseline-supportability:", workflows["supportability-enforcement.yml"])
         self.assertIn("candidate-supportability:", workflows["supportability-enforcement.yml"])
         self.assertIn("Baseline Protected Supportability Gate", workflows["supportability-enforcement.yml"])
+        enforcement_docs = (self.root / "docs/supportability-github-enforcement.md").read_text(encoding="utf-8")
         for blocked_text in _legacy_startup_receipt_strings():
             for name in ("supportability-enforcement.yml", "delivery-receipt.yml"):
                 self.assertNotIn(blocked_text, workflows[name])
             self.assertNotIn(blocked_text, Path(__file__).read_text(encoding="utf-8"))
+            self.assertNotIn(blocked_text, enforcement_docs)
         self.assertIn(
             f"uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@{PROTECTED_GOVERNANCE_REF}",
             workflows["supportability-enforcement.yml"],
