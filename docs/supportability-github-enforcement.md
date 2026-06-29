@@ -187,6 +187,20 @@ The target repo ruleset should require:
 
 Copilot review is required input to the receipt, not the only merge authority.
 
+## Rollout Canary
+
+After branch protection or required checks are changed, open a harmless documentation-only pull request against `main` before wider rollout.
+
+The canary proves:
+
+- Required checks attach to the pull request.
+- Baseline and candidate supportability evidence both run.
+- The delivery receipt consumes both evidence artifacts.
+- Failed or missing evidence stays RED.
+- Merge happens only through GitHub's protected pull request path.
+
+The canary does not weaken governance and does not create a bypass record.
+
 ## What GitHub Enforces
 
 The workflows enforce objective proof:
