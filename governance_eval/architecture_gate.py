@@ -4,8 +4,10 @@ import argparse
 import ast
 import fnmatch
 import hashlib
+import json
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
