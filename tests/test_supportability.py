@@ -549,6 +549,34 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_GREEN)
             self.assertTrue(result["review_status"]["latest_head_reviewed"])
 
+    def test_copilot_review_gate_accepts_clean_latest_review_comment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "c" * 40
+            payload = _copilot_payload(
+                head,
+                reviews=[],
+                comments=[
+                    {
+                        "author": "chatgpt-codex-connector",
+                        "body": f"Codex Review: no major issues.\n\n**Reviewed commit:** `{head[:10]}`",
+                        "createdAt": "2026-06-30T14:35:45Z",
+                        "isMinimized": False,
+                    }
+                ],
+            )
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=payload,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_GREEN)
+            self.assertTrue(result["review_status"]["latest_head_reviewed"])
+            self.assertEqual(result["review_status"]["reviewer"], "chatgpt-codex-connector")
+            self.assertEqual(result["review_status"]["commit_oid"], head)
+
     def test_copilot_review_gate_rejects_missing_or_stale_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
@@ -568,6 +596,56 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(missing["owner_status"], STATUS_RED)
             self.assertEqual(stale["owner_status"], STATUS_RED)
             self.assertTrue(any("missing or stale" in error for error in stale["errors"]))
+
+    def test_copilot_review_gate_rejects_stale_review_comment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "d" * 40
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(
+                    head,
+                    reviews=[],
+                    comments=[
+                        {
+                            "author": "chatgpt-codex-connector",
+                            "body": f"Codex Review: no major issues.\n\n**Reviewed commit:** `{'e' * 10}`",
+                            "createdAt": "2026-06-30T14:35:45Z",
+                            "isMinimized": False,
+                        }
+                    ],
+                ),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("missing or stale" in error for error in result["errors"]))
+
+    def test_copilot_review_gate_rejects_severe_review_comment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "d" * 40
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(
+                    head,
+                    reviews=[],
+                    comments=[
+                        {
+                            "author": "chatgpt-codex-connector",
+                            "body": f"P1: still broken.\n\n**Reviewed commit:** `{head[:10]}`",
+                            "createdAt": "2026-06-30T14:35:45Z",
+                            "isMinimized": False,
+                        }
+                    ],
+                ),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("severe AI review comment" in error for error in result["errors"]))
 
     def test_copilot_review_gate_rejects_unresolved_p1_thread(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1461,11 +1539,17 @@ def _git(repo: Path, *args: str) -> str:
     return completed.stdout
 
 
-def _copilot_payload(head_sha: str, *, reviews: list[dict], review_threads: list[dict] | None = None) -> dict:
+def _copilot_payload(
+    head_sha: str,
+    *,
+    reviews: list[dict],
+    review_threads: list[dict] | None = None,
+    comments: list[dict] | None = None,
+) -> dict:
     return {
         "headRefOid": head_sha,
         "reviews": reviews,
-        "comments": [],
+        "comments": comments if comments is not None else [],
         "reviewThreads": review_threads if review_threads is not None else [],
     }
 
