@@ -5,6 +5,9 @@ description = "Offline governance benchmark evaluator for AI-directed software d
 requires-python = ">=3.12"
 dependencies = []
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.scripts]
 governance-eval = "governance_eval.cli:main"
 

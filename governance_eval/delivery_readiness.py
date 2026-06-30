@@ -34,7 +34,6 @@ GITHUB_REVIEW_BLOCKING = "BLOCKING_FINDINGS_PRESENT"
 def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
     latest_head_sha = payload.get("headRefOid") or ""
     latest_head_committed_at = payload.get("latestHeadCommittedAt") or ""
-    reviews = payload.get("reviews") or []
     unresolved = payload.get("unresolvedThreads") or []
     unresolved_blocking = [thread for thread in unresolved if _thread_is_p0_p2(thread)]
     blocking_comments = [
