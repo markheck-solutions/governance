@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from governance_eval.hashing import sha256_file, sha256_json
+from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
@@ -1256,8 +1256,7 @@ def _unique_paths(paths: list[str]) -> list[str]:
 
 def _copilot_review_errors(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> list[str]:
     errors: list[str] = []
-    reviews = [review for review in payload.get("reviews", []) if _author_matches(review.get("author"), patterns)]
-    latest = _latest_applicable_clean_review(reviews, head_sha)
+    latest = _latest_applicable_clean_review_evidence(payload, head_sha, patterns)
     if latest is None:
         errors.append("Copilot review is missing or stale for latest head SHA")
     errors.extend(_blocking_review_errors(payload, patterns))
@@ -1265,8 +1264,7 @@ def _copilot_review_errors(payload: dict[str, Any], head_sha: str, patterns: lis
 
 
 def _review_status(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> dict[str, Any]:
-    reviews = [review for review in payload.get("reviews", []) if _author_matches(review.get("author"), patterns)]
-    latest = _latest_applicable_clean_review(reviews, head_sha)
+    latest = _latest_applicable_clean_review_evidence(payload, head_sha, patterns)
     return {
         "latest_head_reviewed": latest is not None,
         "reviewer": latest.get("author") if latest else "",
@@ -1275,6 +1273,41 @@ def _review_status(payload: dict[str, Any], head_sha: str, patterns: list[str]) 
         "blocking_thread_count": len(_blocking_threads(payload.get("reviewThreads", []), patterns)),
         "blocking_comment_count": len(_blocking_comments(payload.get("comments", []), patterns)),
     }
+
+
+def _latest_applicable_clean_review_evidence(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> dict[str, Any] | None:
+    reviews = [review for review in payload.get("reviews", []) if _author_matches(review.get("author"), patterns)]
+    evidence: list[dict[str, Any]] = []
+    latest_review = _latest_applicable_clean_review(reviews, head_sha)
+    if latest_review is not None:
+        evidence.append(latest_review)
+    evidence.extend(_clean_review_comments(payload.get("comments", []), head_sha, patterns))
+    if not evidence:
+        return None
+    return max(evidence, key=lambda item: item.get("submittedAt") or "")
+
+
+def _clean_review_comments(comments: list[dict[str, Any]], head_sha: str, patterns: list[str]) -> list[dict[str, Any]]:
+    review_comments: list[dict[str, Any]] = []
+    for comment in comments:
+        body = comment.get("body") or ""
+        if (
+            not comment.get("isMinimized", False)
+            and _author_matches(comment.get("author"), patterns)
+            and "reviewed commit" in body.lower()
+            and _review_matches_head(comment, head_sha)
+            and not SEVERE_RE.search(body)
+        ):
+            review_comments.append(
+                {
+                    "state": "COMMENTED",
+                    "submittedAt": comment.get("createdAt"),
+                    "commitOid": head_sha,
+                    "author": comment.get("author"),
+                    "body": body,
+                }
+            )
+    return review_comments
 
 
 def _latest_applicable_clean_review(reviews: list[dict[str, Any]], head_sha: str) -> dict[str, Any] | None:
