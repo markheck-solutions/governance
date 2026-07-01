@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import fnmatch
 import hashlib
 import json
@@ -46,6 +47,11 @@ LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
 LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
 SEVERE_RE = re.compile(r"\bP[0-2]\b|\[P[0-2]\]|severity:\s*P[0-2]", re.IGNORECASE)
+MARKDOWN_BLOCKQUOTE_LINE_RE = re.compile(r"(?m)^[ \t]*>.*(?:\n|$)")
+MARKDOWN_FENCE_BLOCK_RE = re.compile(
+    r"(?ms)^[ \t]*(?P<backtick_fence>`{3,})[^\n]*\n.*?^[ \t]*(?P=backtick_fence)`*[ \t]*(?:\n|$)"
+    r"|^[ \t]*(?P<tilde_fence>~{3,})[^\n]*\n.*?^[ \t]*(?P=tilde_fence)~*[ \t]*(?:\n|$)"
+)
 PRODUCTION_SUFFIXES = {
     ".py",
     ".js",
@@ -218,6 +224,9 @@ def evaluate_copilot_review_gate(
         if not repo or pr_number is None:
             raise SupportabilityError("repo and pr_number are required when payload is not supplied")
         payload = load_copilot_payload(repo, pr_number)
+    payload = copy.deepcopy(payload)
+    payload["reviews"] = _normalized_reviews(payload.get("reviews") or [])
+    payload["comments"] = _normalized_comments(payload.get("comments") or [])
     review_config = config.get("ai_review") if isinstance(config.get("ai_review"), dict) else {}
     patterns = review_config.get("reviewer_login_patterns") or []
     errors.extend(_sha_errors("", head_sha))
@@ -1325,7 +1334,7 @@ def _latest_applicable_clean_review_evidence(payload: dict[str, Any], head_sha: 
 def _clean_review_comments(comments: list[dict[str, Any]], head_sha: str, patterns: list[str]) -> list[dict[str, Any]]:
     review_comments: list[dict[str, Any]] = []
     for comment in comments:
-        body = comment.get("body") or ""
+        body = visible_review_text(comment.get("body") or "")
         if (
             not comment.get("isMinimized", False)
             and _author_matches(comment.get("author"), patterns)
@@ -1353,11 +1362,13 @@ def _latest_applicable_clean_review(reviews: list[dict[str, Any]], head_sha: str
 
 
 def _review_is_clean(review: dict[str, Any]) -> bool:
-    return review.get("state") not in {"CHANGES_REQUESTED", "DISMISSED"} and not SEVERE_RE.search(review.get("body") or "")
+    return review.get("state") not in {"CHANGES_REQUESTED", "DISMISSED"} and not SEVERE_RE.search(
+        visible_review_text(review.get("body") or "")
+    )
 
 
 def _review_matches_head(review: dict[str, Any], head_sha: str) -> bool:
-    body = review.get("body") or ""
+    body = visible_review_text(review.get("body") or "")
     return review.get("commitOid") == head_sha or head_sha in body or head_sha[:10] in body
 
 
@@ -1393,7 +1404,14 @@ def _blocking_threads(threads: list[dict[str, Any]], patterns: list[str]) -> lis
         thread
         for thread in threads
         if not thread.get("isResolved", False)
-        and SEVERE_RE.search(thread.get("body") or "")
+        and SEVERE_RE.search(
+            visible_review_text(
+                MARKDOWN_FENCE_BLOCK_RE.sub(
+                    "",
+                    MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", str(thread.get("body") or "")),
+                )
+            )
+        )
         and _thread_author_matches(thread, patterns)
     ]
 
@@ -1433,13 +1451,15 @@ def _normalized_reviews(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for review in reviews:
         author = review.get("author") if isinstance(review.get("author"), dict) else {}
         commit = review.get("commit") if isinstance(review.get("commit"), dict) else {}
+        body = str(review.get("body") or "")
+        body = MARKDOWN_FENCE_BLOCK_RE.sub("", MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", body))
         normalized.append(
             {
                 "state": review.get("state"),
                 "submittedAt": review.get("submittedAt"),
                 "commitOid": review.get("commitOid") or commit.get("oid"),
                 "author": author.get("login") or review.get("author"),
-                "body": review.get("body") or "",
+                "body": body,
             }
         )
     return normalized
@@ -1449,10 +1469,12 @@ def _normalized_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]
     normalized = []
     for comment in comments:
         author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+        body = str(comment.get("body") or "")
+        body = MARKDOWN_FENCE_BLOCK_RE.sub("", MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", body))
         normalized.append(
             {
                 "author": author.get("login") or comment.get("author"),
-                "body": comment.get("body") or "",
+                "body": body,
                 "createdAt": comment.get("createdAt"),
                 "isMinimized": comment.get("isMinimized"),
             }
