@@ -115,6 +115,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("github.event.comment.user.type == 'Bot'", enforcement)
         self.assertIn("contains(github.event.comment.user.login, 'copilot')", enforcement)
         self.assertIn("startsWith(github.event.comment.user.login, 'chatgpt-codex-connector')", enforcement)
+        docs = (self.root / "docs" / "supportability-github-enforcement.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "supportability:\n    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
+            docs,
+        )
+        self.assertIn(
+            "latest failed Supportability Enforcement run for the resolved PR head",
+            docs,
+        )
         self.assertIn("governance-review-evidence:v1", enforcement)
         self.assertIn("actions: write", enforcement)
         self.assertIn("python3 - <<'PY'", enforcement)
@@ -126,8 +135,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('pulls/{pr_number}', enforcement)
         self.assertNotIn("pulls/{issue['number']}", enforcement)
         self.assertIn("head_sha={head_sha}&per_page=100", enforcement)
+        self.assertIn("runs?head_sha={head_sha}&per_page=100", enforcement)
+        self.assertNotIn("runs?event=pull_request&head_sha=", enforcement)
         self.assertIn("run_matches_pr", enforcement)
-        self.assertIn("No pull_request Supportability Enforcement run found for PR #", enforcement)
+        self.assertIn("No Supportability Enforcement run found for PR #", enforcement)
         self.assertIn("rerun-failed-jobs", enforcement)
         self.assertIn('if conclusion == "failure":', enforcement)
         self.assertNotIn('if conclusion in {"failure", "action_required"}', enforcement)
@@ -180,7 +191,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("candidate-supportability-artifact-id", delivery_block)
         self.assertIn("candidate-supportability-artifact-digest", delivery_block)
         self.assertIn("governance-ref: ${{ github.event.pull_request.base.sha }}", delivery_block)
-        self.assertIn("if: ${{ always() && github.event.pull_request.base.ref == 'main' }}", workflows["supportability-enforcement.yml"])
+        self.assertIn(
+            "if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
+            workflows["supportability-enforcement.yml"],
+        )
+        self.assertIn(
+            "if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
+            workflows["supportability-enforcement.yml"],
+        )
         self.assertIn("architecture_violation_count", workflows["supportability-gate.yml"])
         self.assertIn("architecture_known_debt_applied_count", workflows["supportability-gate.yml"])
         self.assertIn("architecture_expired_known_debt_count", workflows["supportability-gate.yml"])
