@@ -238,7 +238,7 @@ jobs:
           if not head_sha:
               raise SystemExit("PR head SHA missing; cannot rerun fail-closed gate.")
 
-          payload = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/actions/workflows/supportability-enforcement.yml/runs?event=pull_request&head_sha={head_sha}&per_page=100"))
+          payload = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/actions/workflows/supportability-enforcement.yml/runs?head_sha={head_sha}&per_page=100"))
           runs = []
           for run in payload.get("workflow_runs", []):
               run_prs = run.get("pull_requests") if isinstance(run.get("pull_requests"), list) else []
@@ -246,7 +246,7 @@ jobs:
               if run.get("head_sha") == head_sha and run_matches_pr:
                   runs.append(run)
           if not runs:
-              print(f"No pull_request Supportability Enforcement run found for PR #{pr_number} at {head_sha}; no rerun.")
+              print(f"No Supportability Enforcement run found for PR #{pr_number} at {head_sha}; no rerun.")
               raise SystemExit(0)
           latest = sorted(runs, key=lambda run: str(run.get("created_at") or ""), reverse=True)[0]
           run_id = latest["id"]
@@ -267,6 +267,7 @@ jobs:
           PY
 
   supportability:
+    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}
     uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@<governance-commit-sha>
     with:
       target-repository: ${{ github.repository }}
@@ -279,7 +280,7 @@ jobs:
 
   delivery-receipt:
     needs: supportability
-    if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
+    if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}
     uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@<governance-commit-sha>
     with:
       target-repository: ${{ github.repository }}
@@ -293,7 +294,7 @@ jobs:
       supportability-artifact-digest: ${{ needs.supportability.outputs['artifact-digest'] }}
 ```
 
-`issue_comment` is required because Copilot structured evidence is emitted as a PR comment. The comment-triggered job does not replace required checks and does not publish a separate required status. It only reruns the latest failed `pull_request` Supportability Enforcement run for the resolved PR head, so the required checks remain attached to the protected PR commit. The reusable gate still performs the deterministic author, SHA, verdict, and unresolved-finding checks.
+`issue_comment` is required because Copilot structured evidence is emitted as a PR comment. The comment-triggered job does not replace required checks and does not publish a separate required status. It only reruns the latest failed Supportability Enforcement run for the resolved PR head, so the required checks remain attached to the protected PR commit. The reusable gate still performs the deterministic author, SHA, verdict, and unresolved-finding checks.
 
 ## Required Repository Rules
 
