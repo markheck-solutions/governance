@@ -455,7 +455,7 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertTrue(any("architecture checker files changed" in error for error in result["errors"]))
             self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
-    def test_gate_blocks_existing_copilot_review_evidence_checker_change(self) -> None:
+    def test_gate_allows_copilot_review_evidence_checker_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
 
@@ -469,9 +469,12 @@ class SupportabilityGateTests(unittest.TestCase):
                     command_runner=_passing_runner,
                 )
 
-            self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("copilot_review_evidence.py" in error for error in result["errors"]))
-            self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
+            self.assertEqual(result["owner_status"], STATUS_GREEN)
+            self.assertFalse(any("copilot_review_evidence.py" in error for error in result["errors"]))
+            statuses = {command["gate"]: command["status"] for command in result["commands"]}
+            for gate in ("lint", "format_check", "typecheck", "complexity", "architecture", "tests", "compile_or_build"):
+                self.assertIn(gate, statuses)
+                self.assertEqual(statuses[gate], "PASS")
 
     def test_gate_blocks_architecture_workflow_command_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

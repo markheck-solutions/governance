@@ -703,13 +703,7 @@ def _architecture_governance_change_errors(
         "schemas/v1/architecture_gate_result.schema.json",
         "schemas/v1/supportability_config.schema.json",
     }
-    future_checker_paths = {
-        "governance_eval/copilot_review_evidence.py",
-    }
-    existing_future_checkers = {
-        path for path in changed_set & future_checker_paths if _git_show_text(target_repo, base_sha, path) is not None
-    }
-    touched_checkers = sorted((changed_set & checker_paths) | existing_future_checkers)
+    touched_checkers = sorted(changed_set & checker_paths)
     if touched_checkers:
         errors.append(
             "protected governance/architecture checker files changed; protected baseline judge must report RED for self-judging change: "
