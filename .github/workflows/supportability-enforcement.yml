@@ -99,22 +99,30 @@ jobs:
           if not runs:
               print(f"No Supportability Enforcement run found for PR #{pr_number} at {head_sha}; no rerun.")
               raise SystemExit(0)
-          latest = sorted(runs, key=lambda run: str(run.get("created_at") or ""), reverse=True)[0]
-          run_id = latest["id"]
-          status = latest.get("status")
-          conclusion = latest.get("conclusion")
-          if status != "completed":
-              print(f"Supportability run {run_id} is {status}; no rerun.")
-              raise SystemExit(0)
-          if conclusion == "success":
-              print(f"Supportability run {run_id} is already success; no rerun.")
-              raise SystemExit(0)
-          if conclusion == "failure":
+          def newest(items):
+              return sorted(items, key=lambda run: str(run.get("created_at") or ""), reverse=True)[0]
+
+          failed_runs = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "failure"]
+          if failed_runs:
+              run_id = newest(failed_runs)["id"]
               gh_api("-X", "POST", f"repos/{repository}/actions/runs/{run_id}/rerun-failed-jobs")
               print(f"Requested failed-job rerun for PR-head supportability run {run_id}.")
               raise SystemExit(0)
-          gh_api("-X", "POST", f"repos/{repository}/actions/runs/{run_id}/rerun")
-          print(f"Requested full rerun for PR-head supportability run {run_id}.")
+
+          rerunnable_runs = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") != "success"]
+          if rerunnable_runs:
+              run_id = newest(rerunnable_runs)["id"]
+              gh_api("-X", "POST", f"repos/{repository}/actions/runs/{run_id}/rerun")
+              print(f"Requested full rerun for PR-head supportability run {run_id}.")
+              raise SystemExit(0)
+
+          latest = newest(runs)
+          run_id = latest["id"]
+          status = latest.get("status")
+          if status != "completed":
+              print(f"Supportability run {run_id} is {status}; no rerun.")
+              raise SystemExit(0)
+          print(f"Supportability run {run_id} is already success; no rerun.")
           PY
 
   baseline-supportability:
