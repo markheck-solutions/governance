@@ -177,18 +177,16 @@ on:
 permissions:
   actions: read
   contents: read
-  issues: read
   pull-requests: read
 
 jobs:
   rerun-supportability-on-evidence:
     name: Rerun PR-head Supportability On Evidence
-    if: ${{ github.event_name == 'issue_comment' }}
+    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'governance-review-evidence:v1') }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: read
-      issues: read
       pull-requests: read
     steps:
       - name: Rerun latest failed PR-head supportability
@@ -214,14 +212,23 @@ jobs:
           body = str(comment.get("body") or "")
           user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
           author = str(user.get("login") or "").lower()
+          user_type = str(user.get("type") or "")
           if not issue.get("pull_request") or MARKER not in body:
               print("Comment is not structured PR review evidence; no rerun.")
               raise SystemExit(0)
-          if "copilot" not in author and not author.startswith("chatgpt-codex-connector"):
-              print(f"Comment author {author!r} is not an allowed AI reviewer; no rerun.")
+          allowed_bot_author = (
+              "copilot" in author
+              or author.startswith("chatgpt-codex-connector")
+          )
+          if user_type != "Bot" or not allowed_bot_author:
+              print(f"Comment author {author!r} with type {user_type!r} is not an allowed AI reviewer bot; no rerun.")
               raise SystemExit(0)
 
-          pr = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/pulls/{issue['number']}"))
+          pr_number = int(issue.get("number") or 0)
+          if not pr_number:
+              print("PR number missing from issue_comment payload; no rerun.")
+              raise SystemExit(0)
+          pr = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/pulls/{pr_number}"))
           base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
           head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
           if base.get("ref") != "main":
@@ -231,10 +238,16 @@ jobs:
           if not head_sha:
               raise SystemExit("PR head SHA missing; cannot rerun fail-closed gate.")
 
-          payload = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/actions/workflows/supportability-enforcement.yml/runs?event=pull_request&per_page=30"))
-          runs = [run for run in payload.get("workflow_runs", []) if run.get("head_sha") == head_sha]
+          payload = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/actions/workflows/supportability-enforcement.yml/runs?event=pull_request&head_sha={head_sha}&per_page=100"))
+          runs = []
+          for run in payload.get("workflow_runs", []):
+              run_prs = run.get("pull_requests") if isinstance(run.get("pull_requests"), list) else []
+              run_matches_pr = any(int(run_pr.get("number") or 0) == pr_number for run_pr in run_prs)
+              if run.get("head_sha") == head_sha and run_matches_pr:
+                  runs.append(run)
           if not runs:
-              raise SystemExit(f"No pull_request Supportability Enforcement run found for {head_sha}.")
+              print(f"No pull_request Supportability Enforcement run found for PR #{pr_number} at {head_sha}; no rerun.")
+              raise SystemExit(0)
           latest = sorted(runs, key=lambda run: str(run.get("created_at") or ""), reverse=True)[0]
           run_id = latest["id"]
           status = latest.get("status")
@@ -245,7 +258,7 @@ jobs:
           if conclusion == "success":
               print(f"Supportability run {run_id} is already success; no rerun.")
               raise SystemExit(0)
-          if conclusion in {"failure", "action_required"}:
+          if conclusion == "failure":
               gh_api("-X", "POST", f"repos/{os.environ['REPOSITORY']}/actions/runs/{run_id}/rerun-failed-jobs")
               print(f"Requested failed-job rerun for PR-head supportability run {run_id}.")
               raise SystemExit(0)
