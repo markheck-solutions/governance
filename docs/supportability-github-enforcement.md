@@ -106,6 +106,33 @@ architecture_policy:
 
 If a repo contains SQL files and `sql_supportability` is `auto`, the gate returns RED until explicit SQL validation commands are configured.
 
+## Copilot Review Evidence
+
+Target repos should add `.github/copilot-instructions.md` so Copilot emits structured review evidence before the gate needs it.
+
+```markdown
+# Supportability Review Instructions
+
+When reviewing pull requests in this repository, review against the adopted Supportability Standard.
+
+Use these severity labels exactly:
+
+- `P0`: fake delivery, security or data-loss risk, wrong repository, wrong branch, wrong commit proof, forged or missing GitHub evidence.
+- `P1`: missing required gate, missing behavior proof, missing SQL gate, missing artifact, missing remote proof, stale review, or failed supportability receipt.
+- `P2`: supportability boundary, complexity, testability, architecture, or gate-coverage issue that should block merge until resolved.
+- `P3`: non-blocking cleanup, clarity, naming, or documentation improvement.
+
+When the review is clean, end the response with this hidden evidence block using the exact reviewed head commit SHA:
+
+<!-- governance-review-evidence:v1
+{"schema_version":"governance-review-evidence.v1","reviewed_commit_sha":"<HEAD_SHA>","verdict":"clean","open_findings":[]}
+-->
+
+When the review is blocked, end with the same hidden evidence block using verdict `blocked` and list each open finding with `severity`, `title`, and `path`.
+```
+
+The reusable gate prefers the hidden evidence block. For old pinned adopters, the legacy `reviewed commit <sha>. No issues found.` style remains accepted as fallback evidence. The JSON artifact records `review_status.structured_evidence_present`, `review_status.structured_evidence_valid`, `review_status.reviewed_commit_sha`, `review_status.verdict`, `review_status.open_finding_count`, and `review_request.prompt`.
+
 Config changes are protected. A PR that weakens `.github/governance/supportability.yml` returns RED. Weakening includes changing away from `block_all`, removing governed roots, narrowing runtime production globs, broadening non-runtime globs, narrowing vague-name controls, broadening allowed dependencies, narrowing forbidden dependencies, increasing size limits, or adding/extending `known_debt`.
 
 The `receipt` block is validated as the target repo's declared contract. Reusable workflow inputs/defaults enforce the actual artifact names and 90-day retention during upload.

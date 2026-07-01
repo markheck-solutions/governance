@@ -80,11 +80,53 @@ class SchemaAndLockTests(unittest.TestCase):
             "owner_status": "RED",
             "head_sha": "not-a-sha",
             "reviewer_login_patterns": ["*copilot*"],
-            "review_status": {},
+            "review_status": {
+                "latest_head_reviewed": False,
+                "reviewer": "",
+                "submitted_at": "",
+                "commit_oid": "",
+                "structured_evidence_present": False,
+                "structured_evidence_valid": False,
+                "reviewed_commit_sha": "",
+                "verdict": "",
+                "open_finding_count": 0,
+                "blocking_thread_count": 0,
+                "blocking_comment_count": 0,
+            },
+            "review_request": {"prompt": ""},
             "errors": [],
         }
         with self.assertRaisesRegex(SchemaValidationError, "head_sha"):
             validate_named("copilot_review_gate_result", copilot_result, self.root)
+
+    def test_copilot_review_gate_schema_accepts_structured_review_fields(self) -> None:
+        head = "c" * 40
+        result = {
+            "schema_version": "1.0",
+            "generated_at": "2026-06-27T00:00:00Z",
+            "owner_status": "GREEN",
+            "repository": "example/repo",
+            "pull_request_number": 7,
+            "head_sha": head,
+            "reviewer_login_patterns": ["*copilot*"],
+            "review_status": {
+                "latest_head_reviewed": True,
+                "reviewer": "github-copilot[bot]",
+                "submitted_at": "2026-06-30T14:35:45Z",
+                "commit_oid": "",
+                "structured_evidence_present": True,
+                "structured_evidence_valid": True,
+                "reviewed_commit_sha": head,
+                "verdict": "clean",
+                "open_finding_count": 0,
+                "blocking_thread_count": 0,
+                "blocking_comment_count": 0,
+            },
+            "review_request": {"prompt": f"@copilot review commit {head}"},
+            "errors": [],
+        }
+
+        validate_named("copilot_review_gate_result", result, self.root)
 
     def test_spaghetti_lock_contains_full_immutable_shas(self) -> None:
         lock_path = self.root / "targets/spaghetti.lock.toml"

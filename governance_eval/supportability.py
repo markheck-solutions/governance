@@ -13,6 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from governance_eval.copilot_review_evidence import copilot_review_prompt
+from governance_eval.copilot_review_evidence import latest_clean_structured_review_evidence
+from governance_eval.copilot_review_evidence import latest_structured_review_evidence
+from governance_eval.copilot_review_evidence import structured_comment_superseded_by_clean_evidence
+from governance_eval.copilot_review_evidence import structured_review_errors
+from governance_eval.copilot_review_evidence import visible_review_text
 from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
@@ -225,6 +231,7 @@ def evaluate_copilot_review_gate(
         "head_sha": _schema_safe_sha(head_sha),
         "reviewer_login_patterns": patterns,
         "review_status": _review_status(payload, head_sha, patterns),
+        "review_request": {"prompt": copilot_review_prompt(head_sha)},
         "errors": errors,
     }
     _validate_if_schema_exists("copilot_review_gate_result", result)
@@ -696,10 +703,16 @@ def _architecture_governance_change_errors(
         "schemas/v1/architecture_gate_result.schema.json",
         "schemas/v1/supportability_config.schema.json",
     }
-    touched_checkers = sorted(changed_set & checker_paths)
+    future_checker_paths = {
+        "governance_eval/copilot_review_evidence.py",
+    }
+    existing_future_checkers = {
+        path for path in changed_set & future_checker_paths if _git_show_text(target_repo, base_sha, path) is not None
+    }
+    touched_checkers = sorted((changed_set & checker_paths) | existing_future_checkers)
     if touched_checkers:
         errors.append(
-            "architecture checker files changed; protected baseline judge must report RED for self-judging change: "
+            "protected governance/architecture checker files changed; protected baseline judge must report RED for self-judging change: "
             + ", ".join(touched_checkers)
         )
     workflow_path = ".github/workflows/supportability-gate.yml"
@@ -1256,28 +1269,50 @@ def _unique_paths(paths: list[str]) -> list[str]:
 
 def _copilot_review_errors(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> list[str]:
     errors: list[str] = []
+    errors.extend(structured_review_errors(payload, head_sha, patterns, _author_matches))
     latest = _latest_applicable_clean_review_evidence(payload, head_sha, patterns)
     if latest is None:
         errors.append("Copilot review is missing or stale for latest head SHA")
-    errors.extend(_blocking_review_errors(payload, patterns))
+    errors.extend(_blocking_review_errors(payload, patterns, head_sha, latest))
     return errors
 
 
 def _review_status(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> dict[str, Any]:
     latest = _latest_applicable_clean_review_evidence(payload, head_sha, patterns)
+    structured = latest_structured_review_evidence(payload, patterns, _author_matches)
+    reviewed_commit_sha = ""
+    verdict = ""
+    open_finding_count = 0
+    structured_valid = False
+    if structured is not None:
+        reviewed_commit_sha = str(structured.get("reviewed_commit_sha") or "")
+        verdict = str(structured.get("verdict") or "")
+        open_finding_count = int(structured.get("open_finding_count") or 0)
+        structured_valid = bool(structured.get("valid")) and reviewed_commit_sha == head_sha
+    elif latest is not None:
+        reviewed_commit_sha = str(latest.get("commitOid") or "")
+        verdict = "legacy_clean"
     return {
         "latest_head_reviewed": latest is not None,
         "reviewer": latest.get("author") if latest else "",
         "submitted_at": latest.get("submittedAt") if latest else "",
         "commit_oid": latest.get("commitOid") if latest else "",
+        "structured_evidence_present": structured is not None,
+        "structured_evidence_valid": structured_valid,
+        "reviewed_commit_sha": reviewed_commit_sha,
+        "verdict": verdict,
+        "open_finding_count": open_finding_count,
         "blocking_thread_count": len(_blocking_threads(payload.get("reviewThreads", []), patterns)),
-        "blocking_comment_count": len(_blocking_comments(payload.get("comments", []), patterns)),
+        "blocking_comment_count": len(_blocking_comments(payload.get("comments", []), patterns, head_sha, latest)),
     }
 
 
 def _latest_applicable_clean_review_evidence(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> dict[str, Any] | None:
     reviews = [review for review in payload.get("reviews", []) if _author_matches(review.get("author"), patterns)]
     evidence: list[dict[str, Any]] = []
+    structured = latest_clean_structured_review_evidence(payload, head_sha, patterns, _author_matches)
+    if structured is not None:
+        evidence.append(structured)
     latest_review = _latest_applicable_clean_review(reviews, head_sha)
     if latest_review is not None:
         evidence.append(latest_review)
@@ -1326,11 +1361,29 @@ def _review_matches_head(review: dict[str, Any], head_sha: str) -> bool:
     return review.get("commitOid") == head_sha or head_sha in body or head_sha[:10] in body
 
 
-def _blocking_review_errors(payload: dict[str, Any], patterns: list[str]) -> list[str]:
+def _blocking_review_errors(
+    payload: dict[str, Any],
+    patterns: list[str],
+    head_sha: str,
+    latest_clean: dict[str, Any] | None,
+) -> list[str]:
     errors = []
+    change_requests = [
+        review
+        for review in payload.get("reviews", [])
+        if review.get("state") == "CHANGES_REQUESTED"
+        and _author_matches(review.get("author"), patterns)
+        and _review_matches_head(review, head_sha)
+    ]
+    latest_change_request = max(change_requests, key=lambda item: item.get("submittedAt") or "") if change_requests else None
+    if latest_change_request is not None:
+        clean_submitted_at = latest_clean.get("submittedAt") if latest_clean else ""
+        change_submitted_at = latest_change_request.get("submittedAt") or ""
+        if not clean_submitted_at or change_submitted_at >= clean_submitted_at:
+            errors.append(f"AI review CHANGES_REQUESTED remains from {latest_change_request.get('author', '')}")
     for thread in _blocking_threads(payload.get("reviewThreads", []), patterns):
         errors.append(f"unresolved severe AI review thread remains: {thread.get('path', '')}")
-    for comment in _blocking_comments(payload.get("comments", []), patterns):
+    for comment in _blocking_comments(payload.get("comments", []), patterns, head_sha, latest_clean):
         errors.append(f"unresolved severe AI review comment remains from {comment.get('author', '')}")
     return errors
 
@@ -1345,13 +1398,19 @@ def _blocking_threads(threads: list[dict[str, Any]], patterns: list[str]) -> lis
     ]
 
 
-def _blocking_comments(comments: list[dict[str, Any]], patterns: list[str]) -> list[dict[str, Any]]:
+def _blocking_comments(
+    comments: list[dict[str, Any]],
+    patterns: list[str],
+    head_sha: str,
+    latest_clean: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
     return [
         comment
         for comment in comments
-        if SEVERE_RE.search(comment.get("body") or "")
+        if SEVERE_RE.search(visible_review_text(comment.get("body") or ""))
         and _author_matches(comment.get("author"), patterns)
         and not comment.get("isMinimized", False)
+        and not structured_comment_superseded_by_clean_evidence(comment, head_sha, latest_clean, patterns, _author_matches)
     ]
 
 
