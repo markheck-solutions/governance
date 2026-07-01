@@ -166,13 +166,93 @@ name: Governed PR
 
 on:
   pull_request:
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+  issue_comment:
+    types:
+      - created
 
 permissions:
   actions: read
   contents: read
+  issues: read
   pull-requests: read
 
 jobs:
+  rerun-supportability-on-evidence:
+    name: Rerun PR-head Supportability On Evidence
+    if: ${{ github.event_name == 'issue_comment' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Rerun latest failed PR-head supportability
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          MARKER = "governance-review-evidence:v1"
+
+          def gh_api(*args):
+              result = subprocess.run(["gh", "api", *args], check=True, text=True, capture_output=True)
+              return result.stdout
+
+          event = json.loads(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8").read())
+          issue = event.get("issue") if isinstance(event.get("issue"), dict) else {}
+          comment = event.get("comment") if isinstance(event.get("comment"), dict) else {}
+          body = str(comment.get("body") or "")
+          user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+          author = str(user.get("login") or "").lower()
+          if not issue.get("pull_request") or MARKER not in body:
+              print("Comment is not structured PR review evidence; no rerun.")
+              raise SystemExit(0)
+          if "copilot" not in author and not author.startswith("chatgpt-codex-connector"):
+              print(f"Comment author {author!r} is not an allowed AI reviewer; no rerun.")
+              raise SystemExit(0)
+
+          pr = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/pulls/{issue['number']}"))
+          base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
+          head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+          if base.get("ref") != "main":
+              print("PR base is not main; no rerun.")
+              raise SystemExit(0)
+          head_sha = str(head.get("sha") or "")
+          if not head_sha:
+              raise SystemExit("PR head SHA missing; cannot rerun fail-closed gate.")
+
+          payload = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/actions/workflows/supportability-enforcement.yml/runs?event=pull_request&per_page=30"))
+          runs = [run for run in payload.get("workflow_runs", []) if run.get("head_sha") == head_sha]
+          if not runs:
+              raise SystemExit(f"No pull_request Supportability Enforcement run found for {head_sha}.")
+          latest = sorted(runs, key=lambda run: str(run.get("created_at") or ""), reverse=True)[0]
+          run_id = latest["id"]
+          status = latest.get("status")
+          conclusion = latest.get("conclusion")
+          if status != "completed":
+              print(f"Supportability run {run_id} is {status}; no rerun.")
+              raise SystemExit(0)
+          if conclusion == "success":
+              print(f"Supportability run {run_id} is already success; no rerun.")
+              raise SystemExit(0)
+          if conclusion in {"failure", "action_required"}:
+              gh_api("-X", "POST", f"repos/{os.environ['REPOSITORY']}/actions/runs/{run_id}/rerun-failed-jobs")
+              print(f"Requested failed-job rerun for PR-head supportability run {run_id}.")
+              raise SystemExit(0)
+          gh_api("-X", "POST", f"repos/{os.environ['REPOSITORY']}/actions/runs/{run_id}/rerun")
+          print(f"Requested full rerun for PR-head supportability run {run_id}.")
+          PY
+
   supportability:
     uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@<governance-commit-sha>
     with:
@@ -186,7 +266,7 @@ jobs:
 
   delivery-receipt:
     needs: supportability
-    if: ${{ always() }}
+    if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
     uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@<governance-commit-sha>
     with:
       target-repository: ${{ github.repository }}
@@ -199,6 +279,8 @@ jobs:
       supportability-artifact-id: ${{ needs.supportability.outputs['artifact-id'] }}
       supportability-artifact-digest: ${{ needs.supportability.outputs['artifact-digest'] }}
 ```
+
+`issue_comment` is required because Copilot structured evidence is emitted as a PR comment. The comment-triggered job does not replace required checks and does not publish a separate required status. It only reruns the latest failed `pull_request` Supportability Enforcement run for the resolved PR head, so the required checks remain attached to the protected PR commit. The reusable gate still performs the deterministic author, SHA, verdict, and unresolved-finding checks.
 
 ## Required Repository Rules
 
