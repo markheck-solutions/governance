@@ -112,8 +112,12 @@ class WorkflowTests(unittest.TestCase):
             "github.event.issue.pull_request && contains(github.event.comment.body, 'governance-review-evidence:v1')",
             enforcement,
         )
+        self.assertIn("github.event.comment.user.type == 'Bot'", enforcement)
+        self.assertIn("contains(github.event.comment.user.login, 'copilot')", enforcement)
+        self.assertIn("startsWith(github.event.comment.user.login, 'chatgpt-codex-connector')", enforcement)
         self.assertIn("governance-review-evidence:v1", enforcement)
         self.assertIn("actions: write", enforcement)
+        self.assertIn("python3 - <<'PY'", enforcement)
         self.assertIn('user_type = str(user.get("type") or "")', enforcement)
         self.assertIn("allowed_bot_author", enforcement)
         self.assertIn('"copilot" in author', enforcement)

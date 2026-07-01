@@ -25,7 +25,7 @@ permissions:
 jobs:
   rerun-supportability-on-evidence:
     name: Rerun PR-head Supportability On Evidence
-    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'governance-review-evidence:v1') }}
+    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'governance-review-evidence:v1') && github.event.comment.user.type == 'Bot' && (contains(github.event.comment.user.login, 'copilot') || startsWith(github.event.comment.user.login, 'chatgpt-codex-connector')) }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -38,7 +38,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import json
           import os
           import subprocess
