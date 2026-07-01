@@ -152,6 +152,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("architecture_violation_count", workflows["supportability-gate.yml"])
         self.assertIn("architecture_known_debt_applied_count", workflows["supportability-gate.yml"])
         self.assertIn("architecture_expired_known_debt_count", workflows["supportability-gate.yml"])
+        self.assertIn("copilot_structured_evidence_present", workflows["supportability-gate.yml"])
+        self.assertIn("copilot_structured_evidence_valid", workflows["supportability-gate.yml"])
+        self.assertIn("copilot_review_prompt", workflows["supportability-gate.yml"])
+        self.assertIn("Structured Copilot evidence present", workflows["supportability-gate.yml"])
+        self.assertIn("Copilot review request", workflows["supportability-gate.yml"])
         self.assertIn("workflow_call:", workflows["delivery-receipt.yml"])
         self.assertIn("Delivery Receipt", workflows["delivery-receipt.yml"])
         self.assertIn("gh api \"repos/${TARGET_REPOSITORY}/actions/artifacts/${SUPPORTABILITY_ARTIFACT_ID}/zip\"", workflows["delivery-receipt.yml"])
@@ -187,6 +192,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("Fail closed on RED delivery receipt", workflows["delivery-receipt.yml"])
         docs = (self.root / "docs/supportability-github-enforcement.md").read_text(encoding="utf-8")
         self.assertNotIn("trusted base config", docs)
+        self.assertIn("governance-review-evidence:v1", docs)
+        self.assertIn("review_status.structured_evidence_present", docs)
 
 
 if __name__ == "__main__":

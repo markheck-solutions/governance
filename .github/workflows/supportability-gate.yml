@@ -184,6 +184,8 @@ jobs:
           gate = json.loads(gate_path.read_text(encoding="utf-8")) if gate_path.exists() else {"owner_status": "RED", "errors": ["supportability gate result missing"], "changed_files": []}
           architecture = json.loads(architecture_path.read_text(encoding="utf-8")) if architecture_path.exists() and architecture_md_path.exists() else {"owner_status": "RED", "errors": ["architecture gate evidence missing"]}
           copilot = json.loads(copilot_path.read_text(encoding="utf-8")) if copilot_path.exists() else {"owner_status": "RED", "errors": ["Copilot review gate result missing"]}
+          copilot_review_status = copilot.get("review_status") if isinstance(copilot.get("review_status"), dict) else {}
+          copilot_review_request = copilot.get("review_request") if isinstance(copilot.get("review_request"), dict) else {}
           architecture_green = (
               architecture.get("owner_status") == "GREEN"
               and architecture.get("gate_implementation") == "PASS"
@@ -211,6 +213,9 @@ jobs:
           emit("architecture_known_debt_applied_count", len(architecture.get("known_debt_applied") or []))
           emit("architecture_expired_known_debt_count", len(architecture.get("expired_known_debt") or []))
           emit("copilot_status", copilot.get("owner_status", "RED"))
+          emit("copilot_structured_evidence_present", copilot_review_status.get("structured_evidence_present", False))
+          emit("copilot_structured_evidence_valid", copilot_review_status.get("structured_evidence_valid", False))
+          emit("copilot_review_prompt", copilot_review_request.get("prompt", ""))
           emit("changed_count", len(gate.get("changed_files") or []))
           emit("gate_errors", "; ".join((gate.get("errors") or [])[:5]))
           emit("architecture_errors", "; ".join((architecture.get("errors") or [])[:5]))
@@ -246,6 +251,9 @@ jobs:
             echo "| Architecture known debt applied | \`${{ steps.summary.outputs.architecture_known_debt_applied_count }}\` |"
             echo "| Expired architecture known debt | \`${{ steps.summary.outputs.architecture_expired_known_debt_count }}\` |"
             echo "| Copilot review | \`${{ steps.summary.outputs.copilot_status }}\` |"
+            echo "| Structured Copilot evidence present | \`${{ steps.summary.outputs.copilot_structured_evidence_present }}\` |"
+            echo "| Structured Copilot evidence valid | \`${{ steps.summary.outputs.copilot_structured_evidence_valid }}\` |"
+            echo "| Copilot review request | \`${{ steps.summary.outputs.copilot_review_prompt }}\` |"
             echo "| Gate errors | \`${{ steps.summary.outputs.gate_errors }}\` |"
             echo "| Architecture errors | \`${{ steps.summary.outputs.architecture_errors }}\` |"
             echo "| Copilot errors | \`${{ steps.summary.outputs.copilot_errors }}\` |"

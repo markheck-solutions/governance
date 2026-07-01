@@ -7,6 +7,7 @@
     "head_sha",
     "reviewer_login_patterns",
     "review_status",
+    "review_request",
     "errors"
   ],
   "properties": {
@@ -17,7 +18,44 @@
     "pull_request_number": {"type": ["integer", "null"]},
     "head_sha": {"type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
     "reviewer_login_patterns": {"type": "array", "items": {"type": "string"}},
-    "review_status": {"type": "object"},
+    "review_status": {
+      "type": "object",
+      "required": [
+        "latest_head_reviewed",
+        "reviewer",
+        "submitted_at",
+        "commit_oid",
+        "structured_evidence_present",
+        "structured_evidence_valid",
+        "reviewed_commit_sha",
+        "verdict",
+        "open_finding_count",
+        "blocking_thread_count",
+        "blocking_comment_count"
+      ],
+      "properties": {
+        "latest_head_reviewed": {"type": "boolean"},
+        "reviewer": {"type": "string"},
+        "submitted_at": {"type": "string"},
+        "commit_oid": {"type": "string"},
+        "structured_evidence_present": {"type": "boolean"},
+        "structured_evidence_valid": {"type": "boolean"},
+        "reviewed_commit_sha": {"type": "string"},
+        "verdict": {"type": "string"},
+        "open_finding_count": {"type": "integer", "minimum": 0},
+        "blocking_thread_count": {"type": "integer", "minimum": 0},
+        "blocking_comment_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "review_request": {
+      "type": "object",
+      "required": ["prompt"],
+      "properties": {
+        "prompt": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
     "errors": {"type": "array", "items": {"type": "string"}}
   },
   "additionalProperties": false
