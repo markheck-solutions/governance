@@ -831,6 +831,58 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_GREEN)
             self.assertTrue(result["review_status"]["structured_evidence_valid"])
 
+    def test_copilot_review_gate_rejects_fenced_example_evidence_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "d" * 40
+            comment = _structured_review_comment(head)
+            comment["body"] = "\n".join(
+                [
+                    "Example format only:",
+                    "````text",
+                    "```notclosing",
+                    _structured_review_block(head),
+                    "````",
+                    "I did not review this commit.",
+                ]
+            )
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(head, reviews=[], comments=[comment]),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["latest_head_reviewed"])
+            self.assertFalse(result["review_status"]["structured_evidence_present"])
+            self.assertTrue(any("missing or stale" in error for error in result["errors"]))
+
+    def test_copilot_review_gate_rejects_fenced_legacy_clean_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "d" * 40
+            comment = _structured_review_comment(head)
+            comment["body"] = "\n".join(
+                [
+                    "Example only:",
+                    "```text",
+                    f"Reviewed commit: {head}",
+                    "No issues found.",
+                    "```",
+                ]
+            )
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(head, reviews=[], comments=[comment]),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["latest_head_reviewed"])
+            self.assertTrue(any("missing or stale" in error for error in result["errors"]))
+
     def test_copilot_review_gate_allows_legacy_fallback_when_stale_structured_json_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
@@ -1057,6 +1109,30 @@ class CopilotReviewGateTests(unittest.TestCase):
 
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("severe AI review comment" in error for error in result["errors"]))
+
+    def test_copilot_review_gate_ignores_fenced_severe_examples_with_clean_structured_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "d" * 40
+            comment = _structured_review_comment(head)
+            comment["body"] = "\n".join(
+                [
+                    "Example finding label:",
+                    "```text",
+                    "[P1] example only",
+                    "```",
+                    comment["body"],
+                ]
+            )
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(head, reviews=[], comments=[comment]),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_GREEN)
+            self.assertEqual(result["review_status"]["blocking_comment_count"], 0)
 
     def test_copilot_review_gate_allows_later_clean_structured_evidence_after_blocked_comment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
