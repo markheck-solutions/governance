@@ -243,6 +243,9 @@ class WorkflowTests(unittest.TestCase):
         auth_command = "gh auth setup-git --force --hostname github.com"
         receipt_job = receipt_workflow.split("  receipt:\n", 1)[1]
         receipt_job_env = receipt_job.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
+        checkout_block = receipt_workflow.split(
+            "      - name: Checkout governance evaluator", 1
+        )[1].split("      - name: Set up Python", 1)[0]
         verify_block = receipt_workflow.split("      - name: Verify delivery receipt", 1)[1].split(
             "      - name: Read delivery summary", 1
         )[0]
@@ -252,9 +255,14 @@ class WorkflowTests(unittest.TestCase):
             for line in verify_script.splitlines()
             if line.startswith("          ") and line.strip()
         ]
-        self.assertEqual(verify_commands[0], auth_command)
-        self.assertEqual(verify_commands[1], "cd governance")
-        self.assertEqual(verify_commands[2], "python -m governance_eval verify-receipt \\")
+        self.assertEqual(
+            verify_commands[:3],
+            [
+                auth_command,
+                "cd governance",
+                "python -m governance_eval verify-receipt \\",
+            ],
+        )
         self.assertNotIn("|| true", verify_block)
         self.assertIn("\n      GH_TOKEN: ${{ github.token }}\n", receipt_job_env)
         self.assertIn(
@@ -262,6 +270,7 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertIn('os.environ["TARGET_REPOSITORY_URL"] != expected_url', receipt_workflow)
         self.assertNotIn("x-access-token", receipt_workflow)
+        self.assertIn("\n          persist-credentials: false\n", checkout_block)
         self.assertNotIn("persist-credentials: true", receipt_workflow)
         self.assertNotIn("secrets: inherit", receipt_workflow)
         self.assertNotIn("--skip-live", receipt_workflow)
