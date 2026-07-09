@@ -239,10 +239,52 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("--architecture-result", workflows["delivery-receipt.yml"])
         self.assertIn("architecture-gate-result.json", workflows["delivery-receipt.yml"])
         self.assertIn("verify-receipt", workflows["delivery-receipt.yml"])
+        receipt_workflow = workflows["delivery-receipt.yml"]
+        auth_command = "gh auth setup-git --force --hostname github.com"
+        receipt_job = receipt_workflow.split("  receipt:\n", 1)[1]
+        receipt_job_env = receipt_job.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
+        verify_block = receipt_workflow.split("      - name: Verify delivery receipt", 1)[1].split(
+            "      - name: Read delivery summary", 1
+        )[0]
+        verify_script = verify_block.split("        run: |\n", 1)[1]
+        verify_commands = [
+            line[10:]
+            for line in verify_script.splitlines()
+            if line.startswith("          ") and line.strip()
+        ]
+        self.assertEqual(verify_commands[0], auth_command)
+        self.assertEqual(verify_commands[1], "cd governance")
+        self.assertEqual(verify_commands[2], "python -m governance_eval verify-receipt \\")
+        self.assertNotIn("|| true", verify_block)
+        self.assertIn("\n      GH_TOKEN: ${{ github.token }}\n", receipt_job_env)
+        self.assertIn(
+            'expected_url = f"https://github.com/{repository}.git"', receipt_workflow
+        )
+        self.assertIn('os.environ["TARGET_REPOSITORY_URL"] != expected_url', receipt_workflow)
+        self.assertNotIn("x-access-token", receipt_workflow)
+        self.assertNotIn("persist-credentials: true", receipt_workflow)
+        self.assertNotIn("secrets: inherit", receipt_workflow)
+        self.assertNotIn("--skip-live", receipt_workflow)
         self.assertIn("artifact-digest", workflows["delivery-receipt.yml"])
         self.assertIn("artifact-digest: ${{ steps.upload.outputs.artifact-digest }}", workflows["delivery-receipt.yml"])
         self.assertNotIn("steps.upload.outputs.digest", workflows["delivery-receipt.yml"])
-        self.assertIn("Fail closed on RED delivery receipt", workflows["delivery-receipt.yml"])
+        fail_closed_block = receipt_workflow.split(
+            "      - name: Fail closed on RED delivery receipt", 1
+        )[1]
+        fail_closed_header, fail_closed_script = fail_closed_block.split("        run: |\n", 1)
+        fail_closed_commands = [
+            line[10:]
+            for line in fail_closed_script.splitlines()
+            if line.startswith("          ") and line.strip()
+        ]
+        self.assertIn(
+            "\n        if: always() && steps.summary.outputs.owner_status != 'GREEN'\n",
+            fail_closed_header,
+        )
+        self.assertEqual(
+            fail_closed_commands,
+            ["echo \"Delivery receipt is RED\"", "exit 1"],
+        )
         docs = (self.root / "docs/supportability-github-enforcement.md").read_text(encoding="utf-8")
         self.assertNotIn("trusted base config", docs)
         self.assertIn("governance-review-evidence:v1", docs)

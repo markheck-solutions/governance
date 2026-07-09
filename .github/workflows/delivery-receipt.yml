@@ -124,6 +124,14 @@ jobs:
           if not sha_re.fullmatch(os.environ["GOVERNANCE_REF"]):
               print("Governance ref must be an exact commit SHA", file=sys.stderr)
               raise SystemExit(64)
+          repository = os.environ["TARGET_REPOSITORY"]
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+              print("Invalid target repository", file=sys.stderr)
+              raise SystemExit(64)
+          expected_url = f"https://github.com/{repository}.git"
+          if os.environ["TARGET_REPOSITORY_URL"] != expected_url:
+              print("Target repository URL must be canonical GitHub HTTPS URL", file=sys.stderr)
+              raise SystemExit(64)
           if not re.fullmatch(r"[1-9][0-9]{0,9}", os.environ["TARGET_PR_NUMBER"]):
               print("Invalid target PR number", file=sys.stderr)
               raise SystemExit(64)
@@ -335,6 +343,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
+          gh auth setup-git --force --hostname github.com
           cd governance
           python -m governance_eval verify-receipt \
             --receipt ../artifacts/supportability/supportability-delivery-receipt.json \
