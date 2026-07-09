@@ -242,11 +242,67 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("artifact-digest", workflows["delivery-receipt.yml"])
         self.assertIn("artifact-digest: ${{ steps.upload.outputs.artifact-digest }}", workflows["delivery-receipt.yml"])
         self.assertNotIn("steps.upload.outputs.digest", workflows["delivery-receipt.yml"])
-        self.assertIn("Fail closed on RED delivery receipt", workflows["delivery-receipt.yml"])
         docs = (self.root / "docs/supportability-github-enforcement.md").read_text(encoding="utf-8")
         self.assertNotIn("trusted base config", docs)
         self.assertIn("governance-review-evidence:v1", docs)
         self.assertIn("review_status.structured_evidence_present", docs)
+
+    def test_private_repository_receipt_auth_is_active_and_fail_closed(self) -> None:
+        receipt_workflow = (self.root / ".github/workflows/delivery-receipt.yml").read_text(
+            encoding="utf-8"
+        )
+        auth_command = "gh auth setup-git --force --hostname github.com"
+        receipt_job = receipt_workflow.split("  receipt:\n", 1)[1]
+        receipt_job_env = receipt_job.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
+        checkout_block = receipt_workflow.split(
+            "      - name: Checkout governance evaluator", 1
+        )[1].split("      - name: Set up Python", 1)[0]
+        verify_block = receipt_workflow.split("      - name: Verify delivery receipt", 1)[1].split(
+            "      - name: Read delivery summary", 1
+        )[0]
+        verify_script = verify_block.split("        run: |\n", 1)[1]
+        verify_commands = [
+            line[10:]
+            for line in verify_script.splitlines()
+            if line.startswith("          ") and line.strip()
+        ]
+        self.assertEqual(
+            verify_commands[:3],
+            [
+                auth_command,
+                "cd governance",
+                "python -m governance_eval verify-receipt \\",
+            ],
+        )
+        self.assertNotIn("|| true", verify_block)
+        self.assertIn("\n      GH_TOKEN: ${{ github.token }}\n", receipt_job_env)
+        self.assertIn(
+            'expected_url = f"https://github.com/{repository}.git"', receipt_workflow
+        )
+        self.assertIn('os.environ["TARGET_REPOSITORY_URL"] != expected_url', receipt_workflow)
+        self.assertNotIn("x-access-token", receipt_workflow)
+        self.assertIn("\n          persist-credentials: false\n", checkout_block)
+        self.assertNotIn("persist-credentials: true", receipt_workflow)
+        self.assertNotIn("secrets: inherit", receipt_workflow)
+        self.assertNotIn("--skip-live", receipt_workflow)
+
+        fail_closed_block = receipt_workflow.split(
+            "      - name: Fail closed on RED delivery receipt", 1
+        )[1]
+        fail_closed_header, fail_closed_script = fail_closed_block.split("        run: |\n", 1)
+        fail_closed_commands = [
+            line[10:]
+            for line in fail_closed_script.splitlines()
+            if line.startswith("          ") and line.strip()
+        ]
+        self.assertIn(
+            "\n        if: always() && steps.summary.outputs.owner_status != 'GREEN'\n",
+            fail_closed_header,
+        )
+        self.assertEqual(
+            fail_closed_commands,
+            ["echo \"Delivery receipt is RED\"", "exit 1"],
+        )
 
 
 if __name__ == "__main__":
