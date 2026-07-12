@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "owner_status",
+    "repository_url",
+    "repository_id",
+    "head_repository_id",
+    "pull_request_url",
+    "base_sha",
+    "head_sha",
+    "run_id",
+    "protected_baseline_evidence",
+    "candidate_evidence",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "owner_status": {"type": "string", "enum": ["GREEN", "RED"]},
+    "repository_url": {"type": "string"},
+    "repository_id": {"type": "string"},
+    "head_repository_id": {"type": "string"},
+    "pull_request_url": {"type": "string"},
+    "base_sha": {"type": "string"},
+    "head_sha": {"type": "string"},
+    "run_id": {"type": "string"},
+    "protected_baseline_evidence": {"type": "object"},
+    "candidate_evidence": {"type": "object"},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}
