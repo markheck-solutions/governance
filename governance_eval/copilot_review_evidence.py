@@ -32,9 +32,11 @@ MARKDOWN_FENCE_BLOCK_RE = re.compile(
 AuthorMatcher = Callable[[Any, list[str]], bool]
 
 
-def evaluate_review_evidence(payload: dict[str, Any], head_sha: str) -> dict[str, Any]:
-    normalized = _normalized_payload(payload)
-    errors = _evidence_shape_errors(payload)
+def evaluate_review_evidence(payload: Any, head_sha: str) -> dict[str, Any]:
+    source: dict[str, Any] = payload if isinstance(payload, dict) else {}
+    errors = [] if isinstance(payload, dict) else ["review payload must be a JSON object"]
+    errors.extend(_evidence_shape_errors(source))
+    normalized = _normalized_payload(source)
     errors.extend(_head_binding_errors(normalized, head_sha))
     errors.extend(
         structured_review_errors(
@@ -85,10 +87,13 @@ def _head_binding_errors(payload: dict[str, Any], head_sha: str) -> list[str]:
 
 def _evidence_shape_errors(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    for comment in payload.get("comments", []):
-        if not isinstance(comment, dict):
-            errors.append("review payload comments must contain objects")
-            continue
+    for field in ("reviews", "comments", "reviewThreads"):
+        value = payload.get(field)
+        if not isinstance(value, list):
+            errors.append(f"review payload {field} must be a list")
+        elif not all(isinstance(item, dict) for item in value):
+            errors.append(f"review payload {field} must contain objects")
+    for comment in _payload_objects(payload, "comments"):
         author = comment.get("author")
         login = author.get("login") if isinstance(author, dict) else author
         if canonical_ai_author(login) != STRUCTURED_COPILOT_COMMENTER:
@@ -99,6 +104,23 @@ def _evidence_shape_errors(payload: dict[str, Any]) -> list[str]:
             errors.append("structured Copilot comment createdAt must be a non-empty string")
         if not isinstance(comment.get("body"), str):
             errors.append("structured Copilot comment body must be a string")
+    for thread in _payload_objects(payload, "reviewThreads"):
+        errors.extend(_review_thread_shape_errors(thread))
+    return errors
+
+
+def _review_thread_shape_errors(thread: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(thread.get("isResolved"), bool):
+        errors.append("review thread isResolved must be a boolean")
+    path = thread.get("path")
+    if not isinstance(path, str) or not path.strip():
+        errors.append("review thread path must be a non-empty string")
+    authors = thread.get("authors")
+    if not isinstance(authors, list) or not authors or not all(
+        isinstance(author, str) and author.strip() for author in authors
+    ):
+        errors.append("review thread authors must contain non-empty strings")
     return errors
 
 
@@ -449,16 +471,17 @@ def _structured_review_finding_errors(open_findings: list[Any]) -> list[str]:
 def _normalized_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         **payload,
-        "reviews": [
-            _normalized_review(review) for review in payload.get("reviews", [])
-        ],
-        "comments": [
-            _normalized_comment(comment) for comment in payload.get("comments", [])
-        ],
-        "reviewThreads": [
-            _normalized_thread(thread) for thread in payload.get("reviewThreads", [])
-        ],
+        "reviews": [_normalized_review(review) for review in _payload_objects(payload, "reviews")],
+        "comments": [_normalized_comment(comment) for comment in _payload_objects(payload, "comments")],
+        "reviewThreads": [_normalized_thread(thread) for thread in _payload_objects(payload, "reviewThreads")],
     }
+
+
+def _payload_objects(payload: dict[str, Any], field: str) -> list[dict[str, Any]]:
+    value = payload.get(field)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _normalized_review(review: dict[str, Any]) -> dict[str, Any]:

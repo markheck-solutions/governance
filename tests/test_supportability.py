@@ -489,8 +489,8 @@ class SupportabilityGateTests(unittest.TestCase):
             _set_semantic_gate_commands(base_config)
             head_config = json.loads(json.dumps(base_config))
             head_config["ai_review"]["reviewer_login_patterns"] = [
-                "copilot-pull-request-reviewer",
-                "copilot-swe-agent",
+                "copilot-pull-request-reviewer[bot]",
+                "copilot-swe-agent[bot]",
             ]
             (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
             seen: list[str] = []

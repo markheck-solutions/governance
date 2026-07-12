@@ -20,8 +20,8 @@ from governance_eval.architecture_policy import (
     architecture_policy_weakening_errors as _architecture_policy_weakening_errors,
 )
 from governance_eval.copilot_review_evidence import (
-    NATIVE_COPILOT_REVIEWER,
-    STRUCTURED_COPILOT_COMMENTER,
+    NATIVE_COPILOT_REVIEWER_ALIASES,
+    STRUCTURED_COPILOT_COMMENTER_ALIASES,
     copilot_review_prompt,
     evaluate_review_evidence,
 )
@@ -102,6 +102,7 @@ THRESHOLD_WEAKENING_MARKERS = (
     "--max-warnings=-1",
     "--pass-with-no-tests",
 )
+_UNSET_REVIEW_PAYLOAD = object()
 
 
 class SupportabilityError(ValueError):
@@ -211,14 +212,16 @@ def evaluate_copilot_review_gate(
     config_path: Path,
     head_sha: str,
     *,
-    payload: dict[str, Any] | None = None,
+    payload: Any = _UNSET_REVIEW_PAYLOAD,
+    payload_errors: list[str] | None = None,
     repo: str = "",
     pr_number: int | None = None,
     output_dir: Path | None = None,
 ) -> dict[str, Any]:
     config = load_supportability_config(config_path)
     errors = validate_supportability_config(config)
-    if payload is None:
+    errors.extend(payload_errors or [])
+    if payload is _UNSET_REVIEW_PAYLOAD:
         if not repo or pr_number is None:
             raise SupportabilityError("repo and pr_number are required when payload is not supplied")
         try:
@@ -778,7 +781,7 @@ def _ai_review_change_errors(base_config: dict[str, Any], head_config: dict[str,
         return ["ai_review must remain an object"]
     errors = _ai_review_errors(head)
     head_patterns = [str(item) for item in head.get("reviewer_login_patterns") or []]
-    approved = {NATIVE_COPILOT_REVIEWER, STRUCTURED_COPILOT_COMMENTER}
+    approved = NATIVE_COPILOT_REVIEWER_ALIASES | STRUCTURED_COPILOT_COMMENTER_ALIASES
     for pattern in head_patterns:
         if "*" in pattern or "?" in pattern:
             errors.append(f"ai_review reviewer identity must be exact after config change: {pattern}")
@@ -1885,17 +1888,27 @@ def _cli_gate(args: argparse.Namespace) -> int:
 
 
 def _cli_copilot(args: argparse.Namespace) -> int:
-    payload = json.loads(args.payload.read_text(encoding="utf-8")) if args.payload else None
+    payload, payload_errors = _load_review_payload(args.payload)
     result = evaluate_copilot_review_gate(
         args.config,
         args.head_sha,
         payload=payload,
+        payload_errors=payload_errors,
         repo=args.repo,
         pr_number=args.pr,
         output_dir=args.output_dir,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["owner_status"] == STATUS_GREEN else 1
+
+
+def _load_review_payload(path: Path | None) -> tuple[Any, list[str]]:
+    if path is None:
+        return _UNSET_REVIEW_PAYLOAD, []
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), []
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return None, [f"review payload load failed: {type(exc).__name__}: {exc}"]
 
 
 def _cli_receipt(args: argparse.Namespace) -> int:

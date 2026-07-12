@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
+from governance_eval import supportability as supportability_module
 from governance_eval.paths import repo_root
 from governance_eval.supportability import (
     STATUS_GREEN,
@@ -123,6 +126,161 @@ class NativeReviewEvidenceTests(unittest.TestCase):
             self.assertTrue(
                 any("missing or stale" in error for error in result["errors"])
             )
+
+    def test_copilot_review_gate_returns_red_for_non_list_evidence_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _review_repo(Path(tmp), self.root)
+            head = "c" * 40
+            for field, malformed in (
+                ("reviews", None),
+                ("comments", {"not": "a list"}),
+                ("reviewThreads", "not-a-list"),
+            ):
+                with self.subTest(field=field):
+                    payload = _copilot_payload(head, reviews=[_review(head)])
+                    payload[field] = malformed
+
+                    result = evaluate_copilot_review_gate(
+                        repo / ".github/governance/supportability.yml",
+                        head,
+                        payload=payload,
+                    )
+
+                    self.assertEqual(result["owner_status"], STATUS_RED)
+                    self.assertTrue(any(field in error for error in result["errors"]))
+
+    def test_copilot_review_gate_returns_red_for_non_object_evidence_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _review_repo(Path(tmp), self.root)
+            head = "c" * 40
+            payload = _copilot_payload(head, reviews=[_review(head)])
+            payload["comments"] = ["not-an-object"]
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=payload,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("comments" in error for error in result["errors"]))
+
+    def test_copilot_review_gate_returns_red_for_malformed_thread_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _review_repo(Path(tmp), self.root)
+            head = "c" * 40
+            malformed_threads = (
+                {
+                    "isResolved": "false",
+                    "path": "src/app.py",
+                    "authors": ["copilot-pull-request-reviewer"],
+                },
+                {
+                    "isResolved": False,
+                    "path": "src/app.py",
+                    "authors": "copilot-pull-request-reviewer",
+                },
+                {"isResolved": False, "path": "", "authors": []},
+            )
+            for thread in malformed_threads:
+                with self.subTest(thread=thread):
+                    result = evaluate_copilot_review_gate(
+                        repo / ".github/governance/supportability.yml",
+                        head,
+                        payload=_copilot_payload(
+                            head,
+                            reviews=[_review(head)],
+                            review_threads=[thread],
+                        ),
+                    )
+
+                    self.assertEqual(result["owner_status"], STATUS_RED)
+                    self.assertTrue(any("review thread" in error for error in result["errors"]))
+
+    def test_copilot_review_cli_returns_red_for_explicit_null_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _review_repo(Path(tmp), self.root)
+            payload_path = repo / "payload.json"
+            output_dir = repo / "artifacts"
+            payload_path.write_text("null", encoding="utf-8")
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = supportability_module.main(
+                    [
+                        "copilot-review-gate",
+                        "--config",
+                        str(repo / ".github/governance/supportability.yml"),
+                        "--head-sha",
+                        "c" * 40,
+                        "--payload",
+                        str(payload_path),
+                        "--output-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            result = json.loads(
+                (output_dir / "copilot-review-gate-result.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(rc, 1)
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("JSON object" in error for error in result["errors"]))
+
+    def test_copilot_review_cli_returns_red_for_invalid_json_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _review_repo(Path(tmp), self.root)
+            payload_path = repo / "payload.json"
+            output_dir = repo / "artifacts"
+            payload_path.write_text("{bad", encoding="utf-8")
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = supportability_module.main(
+                    [
+                        "copilot-review-gate",
+                        "--config",
+                        str(repo / ".github/governance/supportability.yml"),
+                        "--head-sha",
+                        "c" * 40,
+                        "--payload",
+                        str(payload_path),
+                        "--output-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            result = json.loads(
+                (output_dir / "copilot-review-gate-result.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(rc, 1)
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("payload load failed" in error for error in result["errors"]))
+
+    def test_copilot_review_cli_returns_red_for_unreadable_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _review_repo(Path(tmp), self.root)
+            output_dir = repo / "artifacts"
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = supportability_module.main(
+                    [
+                        "copilot-review-gate",
+                        "--config",
+                        str(repo / ".github/governance/supportability.yml"),
+                        "--head-sha",
+                        "c" * 40,
+                        "--payload",
+                        str(repo / "missing.json"),
+                        "--output-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            result = json.loads(
+                (output_dir / "copilot-review-gate-result.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(rc, 1)
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("payload load failed" in error for error in result["errors"]))
 
     def test_copilot_review_gate_rejects_wildcard_identity_spoof(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
