@@ -7,8 +7,10 @@
   "critical": false,
   "expected_decision": "MERGE",
   "fixture_path": "fixtures/historical/spaghetti_pr_141_clean",
-  "detectors": ["spaghetti_lock", "route_interleaving"],
-  "required_evidence": ["spaghetti_lock", "route_interleaving"],
+  "detectors": ["target_lock", "route_interleaving"],
+  "required_evidence": ["target_lock", "route_interleaving"],
+  "target_lock_path": "targets/spaghetti.lock.toml",
+  "target_pack_path": "target_packs/spaghetti/v1/pack.json",
   "sources": [
     "targets/spaghetti.toml",
     "targets/spaghetti.lock.toml",

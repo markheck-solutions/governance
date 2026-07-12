@@ -53,8 +53,7 @@ class DetectorDecisionTests(unittest.TestCase):
         clean = [
             case_id
             for case_id, case in self.cases.items()
-            if case["category"] in {"synthetic_structural", "historical_behavior"}
-            and case["label"] == "VERIFIED_SAFE"
+            if case["category"] in {"synthetic_structural", "historical_behavior"} and case["label"] == "VERIFIED_SAFE"
         ]
         self.assertEqual(len(clean), 7)
         for case_id in clean:
@@ -102,6 +101,88 @@ class DetectorDecisionTests(unittest.TestCase):
         self.assertFalse(_covered_by_any_gate("src/app/public_api.py", gates))
         self.assertTrue(_covered_by_any_gate("src/public_api.py", gates))
         self.assertTrue(_covered_by_any_gate("src/app/public_api.py", [{"name": "ruff", "scope": ["src/**"]}]))
+
+    def test_gate_scope_requires_every_applicable_gate(self) -> None:
+        case = copy.deepcopy(self.cases["SYN-NARROWED-GATE-SCOPE-CLEAN"])
+        with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+            fixture = Path(tmp) / "fixture"
+            fixture.mkdir()
+            (fixture / "governance_gates.json").write_text(
+                json.dumps(
+                    {
+                        "changed_files": ["src/app/public_api.py"],
+                        "high_risk_files": [],
+                        "required_gate_names": ["ruff", "mypy"],
+                        "gates": [
+                            {"name": "ruff", "scope": ["src/**"]},
+                            {"name": "mypy", "scope": ["tests/**"]},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            case["fixture_path"] = str(fixture.relative_to(self.root))
+            evidence = run_detectors(case, self.root)
+        self.assertEqual(evidence[0].status.value, "FAIL")
+        self.assertIn("mypy", evidence[0].findings[0].message)
+
+    def test_private_module_import_used_internally_is_not_a_reexport(self) -> None:
+        case = copy.deepcopy(self.cases["SYN-PRIVATE-REEXPORT-CLEAN"])
+        with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+            fixture = Path(tmp) / "fixture"
+            source = fixture / "src" / "app"
+            source.mkdir(parents=True)
+            (source / "_ranking.py").write_text("def rank():\n    return 1\n", encoding="utf-8")
+            (source / "public_api.py").write_text(
+                "from ._ranking import rank\n\ndef public_rank():\n    return rank()\n",
+                encoding="utf-8",
+            )
+            case["fixture_path"] = str(fixture.relative_to(self.root))
+            evidence = run_detectors(case, self.root)
+        self.assertEqual(evidence[0].status.value, "PASS")
+
+    def test_private_helper_public_alias_is_blocked(self) -> None:
+        case = copy.deepcopy(self.cases["SYN-PRIVATE-REEXPORT-CLEAN"])
+        with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+            fixture = Path(tmp) / "fixture"
+            source = fixture / "src" / "app"
+            source.mkdir(parents=True)
+            (source / "_ranking.py").write_text("def rank():\n    return 1\n", encoding="utf-8")
+            (source / "__init__.py").write_text(
+                "from ._ranking import rank as public_rank\n\n__all__ = ['public_rank']\n",
+                encoding="utf-8",
+            )
+            case["fixture_path"] = str(fixture.relative_to(self.root))
+            evidence = run_detectors(case, self.root)
+        self.assertEqual(evidence[0].status.value, "FAIL")
+
+    def test_async_raw_dictionary_public_boundary_is_blocked(self) -> None:
+        case = copy.deepcopy(self.cases["SYN-UNTYPED-PUBLIC-DICT-CLEAN"])
+        with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+            fixture = Path(tmp) / "fixture"
+            source = fixture / "src" / "app"
+            source.mkdir(parents=True)
+            (source / "public_api.py").write_text(
+                "async def load(payload: dict) -> dict:\n    return payload\n",
+                encoding="utf-8",
+            )
+            case["fixture_path"] = str(fixture.relative_to(self.root))
+            evidence = run_detectors(case, self.root)
+        self.assertEqual(evidence[0].status.value, "FAIL")
+
+    def test_import_cycle_through_package_initializer_is_blocked(self) -> None:
+        case = copy.deepcopy(self.cases["SYN-IMPORT-CYCLE-CLEAN"])
+        with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+            fixture = Path(tmp) / "fixture"
+            source = fixture / "src" / "app"
+            source.mkdir(parents=True)
+            (source / "__init__.py").write_text("from .routes import route\n", encoding="utf-8")
+            (source / "routes.py").write_text(
+                "from app import ticket\n\ndef route():\n    return ticket\n", encoding="utf-8"
+            )
+            case["fixture_path"] = str(fixture.relative_to(self.root))
+            evidence = run_detectors(case, self.root)
+        self.assertEqual(evidence[0].status.value, "FAIL")
 
     def test_malformed_fixture_is_evidence_not_crash(self) -> None:
         case = copy.deepcopy(self.cases["SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-DEFECT"])

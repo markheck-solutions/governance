@@ -135,7 +135,45 @@ class SupportabilityConfigTests(unittest.TestCase):
 
         errors = validate_supportability_config(config)
 
-        self.assertTrue(any("auto, a non-empty command string, or a non-empty command list" in error for error in errors))
+        self.assertTrue(
+            any("auto, a non-empty command string, or a non-empty command list" in error for error in errors)
+        )
+
+    def test_config_rejects_placeholder_commands_for_semantic_gates(self) -> None:
+        config = _valid_config(self.root)
+        for gate in ("lint", "format_check", "typecheck", "complexity", "architecture", "tests", "compile_or_build"):
+            config["required_gates"][gate] = ["python -m compileall -q ."]
+
+        errors = validate_supportability_config(config)
+
+        for gate in ("lint", "format_check", "typecheck", "complexity", "architecture", "tests", "compile_or_build"):
+            self.assertTrue(any(f"required_gates.{gate}" in error and "semantic" in error for error in errors))
+
+    def test_config_rejects_duplicate_commands_across_distinct_capabilities(self) -> None:
+        config = _valid_config(self.root)
+        config["required_gates"]["typecheck"] = list(config["required_gates"]["lint"])
+
+        errors = validate_supportability_config(config)
+
+        self.assertTrue(any("same command cannot satisfy distinct gate capabilities" in error for error in errors))
+
+    def test_config_requires_package_audit_command(self) -> None:
+        config = _valid_config(self.root)
+        config["required_gates"]["package_audit"] = []
+
+        errors = validate_supportability_config(config)
+
+        self.assertTrue(any("required_gates.package_audit" in error for error in errors))
+
+    def test_config_rejects_reviewer_login_globs(self) -> None:
+        config = _valid_config(self.root)
+        config["ai_review"]["reviewer_login_patterns"] = ["*copilot*"]
+
+        errors = validate_supportability_config(config)
+
+        self.assertTrue(any("exact GitHub logins" in error for error in errors))
+        with self.assertRaises(SchemaValidationError):
+            validate_named("supportability_config", config, self.root)
 
 
 class SupportabilityGateTests(unittest.TestCase):
@@ -158,6 +196,22 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_GREEN)
             self.assertEqual(result["errors"], [])
             self.assertIn("lint", result["coverage"]["changed_files"]["src/app.py"])
+
+    def test_plain_local_subprocess_cannot_claim_isolated_green(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            with mock.patch("governance_eval.supportability._run_shell_command") as shell_runner:
+                result = run_supportability_gate(
+                    repo / ".github/governance/supportability.yml",
+                    repo,
+                    "a" * 40,
+                    "b" * 40,
+                    changed_files=["src/app.py"],
+                )
+
+        shell_runner.assert_not_called()
+        self.assertEqual(result["owner_status"], STATUS_RED)
+        self.assertTrue(any("isolated executor" in error for error in result["errors"]))
 
     def test_gate_fails_on_scope_narrowing_excluding_changed_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -343,7 +397,9 @@ class SupportabilityGateTests(unittest.TestCase):
             base_config = dict(config)
             base_config.pop("architecture_policy")
 
-            with mock.patch("governance_eval.supportability._base_supportability_config", return_value=(base_config, [])):
+            with mock.patch(
+                "governance_eval.supportability._base_supportability_config", return_value=(base_config, [])
+            ):
                 result = run_supportability_gate(
                     repo / ".github/governance/supportability.yml",
                     repo,
@@ -553,7 +609,7 @@ class CopilotReviewGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 
-    def test_copilot_review_gate_accepts_latest_clean_review(self) -> None:
+    def test_copilot_review_gate_rejects_unstructured_clean_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "c" * 40
@@ -564,10 +620,10 @@ class CopilotReviewGateTests(unittest.TestCase):
                 payload=_copilot_payload(head, reviews=[_review(head)]),
             )
 
-            self.assertEqual(result["owner_status"], STATUS_GREEN)
-            self.assertTrue(result["review_status"]["latest_head_reviewed"])
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["latest_head_reviewed"])
 
-    def test_copilot_review_gate_accepts_clean_latest_review_comment(self) -> None:
+    def test_copilot_review_gate_rejects_unstructured_codex_comment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "c" * 40
@@ -590,10 +646,8 @@ class CopilotReviewGateTests(unittest.TestCase):
                 payload=payload,
             )
 
-            self.assertEqual(result["owner_status"], STATUS_GREEN)
-            self.assertTrue(result["review_status"]["latest_head_reviewed"])
-            self.assertEqual(result["review_status"]["reviewer"], "chatgpt-codex-connector")
-            self.assertEqual(result["review_status"]["commit_oid"], head)
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["latest_head_reviewed"])
 
     def test_copilot_review_gate_accepts_structured_clean_latest_head_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -618,6 +672,58 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["review_status"]["reviewed_commit_sha"], head)
             self.assertEqual(result["review_status"]["verdict"], "clean")
             self.assertEqual(result["review_status"]["open_finding_count"], 0)
+
+    def test_copilot_review_gate_accepts_rest_verified_bot_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "c" * 40
+            raw_comment = {
+                "user": {"login": "github-copilot[bot]", "type": "Bot"},
+                "body": _structured_review_block(head),
+                "created_at": "2026-06-30T14:35:45Z",
+            }
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(head, reviews=[], comments=[raw_comment]),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_GREEN)
+            self.assertTrue(result["review_status"]["structured_evidence_valid"])
+
+    def test_copilot_review_gate_rejects_human_impersonating_approved_bot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "c" * 40
+            forged = _structured_review_comment(head)
+            forged["author"] = "copilot-pull-request-reviewer[bot]"
+            forged["author_type"] = "User"
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(head, reviews=[], comments=[forged]),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["structured_evidence_present"])
+
+    def test_copilot_review_gate_rejects_unstructured_bot_narrative(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            head = "c" * 40
+            narrative = _review(head)
+            narrative["body"] = f"Reviewed commit {head}. No issues."
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(head, reviews=[narrative]),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["structured_evidence_present"])
 
     def test_copilot_review_gate_rejects_missing_or_stale_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -700,7 +806,7 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["review_status"]["reviewed_commit_sha"], stale_head)
             self.assertTrue(any("missing or stale" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_allows_legacy_fallback_when_structured_evidence_is_stale(self) -> None:
+    def test_copilot_review_gate_rejects_legacy_fallback_when_structured_evidence_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -716,8 +822,8 @@ class CopilotReviewGateTests(unittest.TestCase):
                 ),
             )
 
-            self.assertEqual(result["owner_status"], STATUS_GREEN)
-            self.assertTrue(result["review_status"]["latest_head_reviewed"])
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["latest_head_reviewed"])
             self.assertTrue(result["review_status"]["structured_evidence_present"])
             self.assertFalse(result["review_status"]["structured_evidence_valid"])
 
@@ -735,6 +841,7 @@ class CopilotReviewGateTests(unittest.TestCase):
                     comments=[
                         {
                             "author": "github-copilot[bot]",
+                            "author_type": "Bot",
                             "body": (
                                 f"Reviewed commit {head}.\n"
                                 "<!-- governance-review-evidence:v1\n"
@@ -769,6 +876,7 @@ class CopilotReviewGateTests(unittest.TestCase):
                     comments=[
                         {
                             "author": "github-copilot[bot]",
+                            "author_type": "Bot",
                             "body": f"Reviewed commit `{head}`.\n<!-- governance-review-evidence:v1\n{{not-json}}\n-->",
                             "createdAt": "2026-06-30T14:35:45Z",
                             "isMinimized": False,
@@ -883,7 +991,7 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertFalse(result["review_status"]["latest_head_reviewed"])
             self.assertTrue(any("missing or stale" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_allows_legacy_fallback_when_stale_structured_json_is_invalid(self) -> None:
+    def test_copilot_review_gate_rejects_legacy_fallback_when_stale_structured_json_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -906,10 +1014,10 @@ class CopilotReviewGateTests(unittest.TestCase):
                 ),
             )
 
-            self.assertEqual(result["owner_status"], STATUS_GREEN)
-            self.assertTrue(result["review_status"]["latest_head_reviewed"])
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["latest_head_reviewed"])
 
-    def test_copilot_review_gate_allows_legacy_fallback_when_unparseable_structured_json_only_context_mentions_head(
+    def test_copilot_review_gate_rejects_legacy_fallback_when_unparseable_structured_json_only_context_mentions_head(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -933,10 +1041,10 @@ class CopilotReviewGateTests(unittest.TestCase):
                 ),
             )
 
-            self.assertEqual(result["owner_status"], STATUS_GREEN)
-            self.assertTrue(result["review_status"]["latest_head_reviewed"])
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["latest_head_reviewed"])
 
-    def test_copilot_review_gate_allows_legacy_fallback_when_off_head_structured_document_is_invalid(self) -> None:
+    def test_copilot_review_gate_rejects_legacy_fallback_when_off_head_structured_document_is_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -972,8 +1080,8 @@ class CopilotReviewGateTests(unittest.TestCase):
                 ),
             )
 
-            self.assertEqual(result["owner_status"], STATUS_GREEN)
-            self.assertTrue(result["review_status"]["latest_head_reviewed"])
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertFalse(result["review_status"]["latest_head_reviewed"])
 
     def test_copilot_review_gate_rejects_structured_evidence_from_wrong_author(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1170,7 +1278,8 @@ class CopilotReviewGateTests(unittest.TestCase):
                     reviews=[],
                     comments=[
                         {
-                            "author": "chatgpt-codex-connector",
+                            "author": "github-copilot[bot]",
+                            "author_type": "Bot",
                             "body": f"P1: still broken.\n\n**Reviewed commit:** `{head[:10]}`",
                             "createdAt": "2026-06-30T14:35:45Z",
                             "isMinimized": False,
@@ -1724,6 +1833,53 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(calls[0]["timeout"], supportability_module.GIT_NETWORK_TIMEOUT_SECONDS)
 
+    def test_github_review_lists_fetch_and_flatten_every_page(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            pages = [[{"id": index} for index in range(100)], [{"id": 100}]]
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps(pages), stderr="")
+
+        with mock.patch("governance_eval.supportability.subprocess.run", side_effect=fake_run):
+            records = supportability_module._gh_json_list(["api", "repos/example/repo/pulls/1/reviews"])
+
+        self.assertEqual(len(records), 101)
+        self.assertIn("--paginate", calls[0])
+        self.assertIn("--slurp", calls[0])
+
+    def test_inline_review_thread_fetches_comments_after_first_hundred(self) -> None:
+        node = {
+            "id": "thread-1",
+            "comments": {
+                "nodes": [
+                    {"body": f"comment-{index}", "author": {"login": "github-copilot[bot]"}} for index in range(100)
+                ],
+                "pageInfo": {"hasNextPage": True, "endCursor": "cursor-100"},
+            },
+        }
+        last_page = {
+            "data": {
+                "node": {
+                    "id": "thread-1",
+                    "comments": {
+                        "nodes": [{"body": "P1: late blocking finding", "author": {"login": "github-copilot[bot]"}}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": "cursor-101"},
+                    },
+                }
+            }
+        }
+
+        with mock.patch("governance_eval.supportability._gh_thread_comments", return_value=last_page):
+            complete = supportability_module._complete_review_thread(node)
+
+        self.assertEqual(len(complete["comments"]["nodes"]), 101)
+        self.assertIn("late blocking finding", complete["comments"]["nodes"][-1]["body"])
+
+        with mock.patch("governance_eval.supportability._gh_thread_comments", return_value={}):
+            with self.assertRaises(SupportabilityError):
+                supportability_module._complete_review_thread(node)
+
     def test_fresh_clone_log_uses_full_history_fetch(self) -> None:
         calls: list[list[str]] = []
         timeouts: list[object] = []
@@ -1888,15 +2044,20 @@ def _valid_config(root: Path) -> dict:
             "source": "docs/reference/supportability-standard.md",
             "hash": sha256_file(standard),
         },
+        "execution": {
+            "adapter": "python",
+            "setup_commands": ["python -m pip install .[governance]"],
+            "max_commands": 16,
+        },
         "required_gates": {
-            "lint": ["python -c pass"],
-            "format_check": ["python -c pass"],
-            "typecheck": ["python -c pass"],
-            "complexity": ["python -c pass"],
-            "architecture": ["python -c pass"],
-            "tests": ["python -c pass"],
-            "compile_or_build": ["python -c pass"],
-            "package_audit": [],
+            "lint": ["python -m ruff check src tests"],
+            "format_check": ["python -m ruff format --check src tests"],
+            "typecheck": ["python -m mypy src tests"],
+            "complexity": ["python -m ruff check --select C901 src tests"],
+            "architecture": ["python -m governance_eval architecture-gate --config supportability.yml"],
+            "tests": ["python -m unittest discover -s tests"],
+            "compile_or_build": ["python -m build"],
+            "package_audit": ["python -m pip check"],
             "sql_supportability": "auto",
         },
         "coverage": {
@@ -1909,7 +2070,7 @@ def _valid_config(root: Path) -> dict:
             "copilot_required": True,
             "latest_head_required": True,
             "unresolved_p0_p1_p2_blocks": True,
-            "reviewer_login_patterns": ["*copilot*", "chatgpt-codex-connector*"],
+            "reviewer_login_patterns": ["copilot-pull-request-reviewer[bot]", "github-copilot[bot]"],
         },
         "receipt": {"artifact_name": "supportability-delivery-receipt", "retention_days": 90},
         "architecture_policy": _architecture_policy(),
@@ -1921,22 +2082,28 @@ def _config_yaml(standard_hash: str) -> str:
   name: supportability-standard
   source: docs/reference/supportability-standard.md
   hash: "{standard_hash}"
+execution:
+  adapter: python
+  setup_commands:
+    - python -m pip install .[governance]
+  max_commands: 16
 required_gates:
   lint:
-    - python -c pass
+    - python -m ruff check src tests
   format_check:
-    - python -c pass
+    - python -m ruff format --check src tests
   typecheck:
-    - python -c pass
+    - python -m mypy src tests
   complexity:
-    - python -c pass
+    - python -m ruff check --select C901 src tests
   architecture:
-    - python -c pass
+    - python -m governance_eval architecture-gate --config supportability.yml
   tests:
-    - python -c pass
+    - python -m unittest discover -s tests
   compile_or_build:
-    - python -c pass
-  package_audit: []
+    - python -m build
+  package_audit:
+    - python -m pip check
   sql_supportability: auto
 coverage:
   changed_files: required
@@ -1948,8 +2115,8 @@ ai_review:
   latest_head_required: true
   unresolved_p0_p1_p2_blocks: true
   reviewer_login_patterns:
-    - "*copilot*"
-    - "chatgpt-codex-connector*"
+    - "copilot-pull-request-reviewer[bot]"
+    - "github-copilot[bot]"
 receipt:
   artifact_name: supportability-delivery-receipt
   retention_days: 90
@@ -2131,6 +2298,7 @@ def _review(head_sha: str) -> dict:
         "submittedAt": "2026-06-25T10:05:00Z",
         "commitOid": head_sha,
         "author": "github-copilot[bot]",
+        "author_type": "Bot",
         "body": f"Reviewed commit {head_sha[:10]}. Clean.",
     }
 
@@ -2164,6 +2332,7 @@ def _structured_review_comment(
 ) -> dict:
     return {
         "author": "github-copilot[bot]",
+        "author_type": "Bot",
         "body": _structured_review_block(head_sha, verdict=verdict, open_findings=open_findings),
         "createdAt": "2026-06-30T14:35:45Z",
         "isMinimized": False,

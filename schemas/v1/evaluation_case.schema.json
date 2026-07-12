@@ -29,6 +29,8 @@
     "fixture_path": {"type": "string", "minLength": 1},
     "detectors": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "required_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "target_lock_path": {"type": "string", "minLength": 1},
+    "target_pack_path": {"type": "string", "minLength": 1},
     "sources": {"type": "array", "items": {"type": "string"}}
   },
   "additionalProperties": false

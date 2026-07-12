@@ -79,7 +79,8 @@
       "type": "string",
       "enum": ["CLEAN", "STALE", "UNAVAILABLE", "BLOCKING_FINDINGS_PRESENT", "NOT_APPLICABLE"]
     },
-    "enforcement_mode": { "type": "string", "enum": ["NON_BLOCKING"] },
+    "enforcement_mode": { "type": "string", "enum": ["SHADOW", "BLOCKING"] },
+    "execution_identity": {"type": "object"},
     "real_target_shadow_decision": {
       "type": "string",
       "enum": ["SHADOW_MERGE", "SHADOW_BLOCK_TECHNICAL", "SHADOW_ASK_BUSINESS"]

@@ -44,7 +44,7 @@ def resolve_pack_path(path: Path, root: Path, require_governance_owned: bool = F
 
 def _validate_repository_identity(pack: dict[str, Any]) -> None:
     identity = pack.get("repository_identity") or {}
-    canonical = identity.get("canonical_url") or pack.get("repository_url")
+    canonical = str(identity.get("canonical_url") or pack.get("repository_url") or "")
     if _normalize_url(canonical) != _normalize_url(pack["repository_url"]):
         raise SchemaValidationError(f"{pack['id']}: repository_identity.canonical_url does not match repository_url")
 
@@ -81,7 +81,7 @@ def _validate_behavior_cases(pack: dict[str, Any], root: Path) -> None:
         reproducer = root / case["reproducer"]
         if not reproducer.exists():
             raise SchemaValidationError(f"{case['id']}: reproducer missing: {case['reproducer']}")
-        if not case.get("source_symbols"):
+        if pack.get("adapter") == "python" and not case.get("source_symbols"):
             raise SchemaValidationError(f"{case['id']}: source_symbols required")
         if "expected_source_hashes" not in case:
             raise SchemaValidationError(f"{case['id']}: expected_source_hashes required")
@@ -147,7 +147,11 @@ def validate_target_request(
 def _validate_requested_repository(pack: dict[str, Any], repository_url: str, revision_mode: str) -> None:
     if _normalize_url(repository_url) != _normalize_url(pack["repository_url"]):
         raise ValueError(f"target repository mismatch for pack {pack['id']}: {repository_url}")
-    if revision_mode == "CANDIDATE_DYNAMIC" and repository_url and _normalize_url(repository_url) != _normalize_url(pack["repository_url"]):
+    if (
+        revision_mode == "CANDIDATE_DYNAMIC"
+        and repository_url
+        and _normalize_url(repository_url) != _normalize_url(pack["repository_url"])
+    ):
         raise ValueError(f"candidate mode cannot override target repository for pack {pack['id']}")
 
 
@@ -165,23 +169,36 @@ def _validate_requested_revisions(
             raise ValueError(f"invalid target {label} SHA: {value}")
     if merge_sha and not SHA_RE.fullmatch(merge_sha):
         raise ValueError(f"invalid target merge SHA: {merge_sha}")
+    validators = {
+        "HISTORICAL_FIXED": _validate_historical_revisions,
+        "SAFE_FIXED": _validate_safe_revisions,
+        "CANDIDATE_DYNAMIC": _validate_candidate_revisions,
+    }
+    validator = validators.get(revision_mode)
+    if validator is None:
+        raise ValueError(f"unknown revision mode: {revision_mode}")
+    validator(pack, base_sha, head_sha, merge_sha)
+
+
+def _validate_historical_revisions(pack: dict[str, Any], base: str, head: str, merge: str | None) -> None:
     revisions = pack["immutable_revisions"]
-    if revision_mode == "HISTORICAL_FIXED":
-        if base_sha != revisions["base_sha"] or head_sha != revisions["head_sha"]:
-            raise ValueError(f"HISTORICAL_FIXED requires pinned target revisions for pack {pack['id']}")
-        expected_merge = revisions.get("merge_sha")
-        if expected_merge and merge_sha != expected_merge:
-            raise ValueError(f"HISTORICAL_FIXED requires pinned merge SHA for pack {pack['id']}: {expected_merge}")
-        return
-    if revision_mode == "SAFE_FIXED":
-        if base_sha != revisions.get("safe_base_sha") or head_sha != revisions.get("safe_head_sha") or merge_sha:
-            raise ValueError(f"SAFE_FIXED requires pinned safe base/head and no merge SHA for pack {pack['id']}")
-        return
-    if revision_mode == "CANDIDATE_DYNAMIC":
-        if merge_sha:
-            raise ValueError("CANDIDATE_DYNAMIC must evaluate base/head directly without a merge SHA")
-        return
-    raise ValueError(f"unknown revision mode: {revision_mode}")
+    if base != revisions["base_sha"] or head != revisions["head_sha"]:
+        raise ValueError(f"HISTORICAL_FIXED requires pinned target revisions for pack {pack['id']}")
+    expected = revisions.get("merge_sha")
+    if expected and merge != expected:
+        raise ValueError(f"HISTORICAL_FIXED requires pinned merge SHA for pack {pack['id']}: {expected}")
+
+
+def _validate_safe_revisions(pack: dict[str, Any], base: str, head: str, merge: str | None) -> None:
+    revisions = pack["immutable_revisions"]
+    if base != revisions.get("safe_base_sha") or head != revisions.get("safe_head_sha") or merge:
+        raise ValueError(f"SAFE_FIXED requires pinned safe base/head and no merge SHA for pack {pack['id']}")
+
+
+def _validate_candidate_revisions(pack: dict[str, Any], base: str, head: str, merge: str | None) -> None:
+    del pack, base, head
+    if merge:
+        raise ValueError("CANDIDATE_DYNAMIC must evaluate base/head directly without a merge SHA")
 
 
 def infer_revision_mode(pack: dict[str, Any], base_sha: str, head_sha: str, merge_sha: str | None) -> str:

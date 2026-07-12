@@ -144,13 +144,9 @@ jobs:
     if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}
     uses: ./.github/workflows/supportability-gate.yml
     with:
-      target-repository: ${{ github.repository }}
-      target-repository-url: https://github.com/${{ github.repository }}.git
       target-base-sha: ${{ github.event.pull_request.base.sha }}
       target-head-sha: ${{ github.event.pull_request.head.sha }}
       target-pr-number: ${{ github.event.pull_request.number }}
-      target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: ${{ github.event.pull_request.head.sha }}
       artifact-name: candidate-supportability-gate-evidence
 
   delivery-receipt:

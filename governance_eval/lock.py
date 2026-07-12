@@ -1,130 +1,127 @@
 from __future__ import annotations
 
+import json
+import re
+import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from governance_eval.target_pack import load_target_pack
+
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
 
 @dataclass(frozen=True)
-class SpaghettiLock:
+class TargetLock:
+    target_id: str
     repository_url: str
-    pull_request: int
-    base_sha: str
-    head_sha: str
-    merge_commit_sha: str
-    approved_oracle_sha: str
-    observed_main_sha: str
     generated_at: str
     evidence_source: str
+    revisions: dict[str, str]
+    metadata: dict[str, Any]
 
     def to_json(self) -> dict[str, Any]:
         return {
+            "target_id": self.target_id,
             "repository_url": self.repository_url,
-            "pull_request": self.pull_request,
-            "base_sha": self.base_sha,
-            "head_sha": self.head_sha,
-            "merge_commit_sha": self.merge_commit_sha,
-            "approved_oracle_sha": self.approved_oracle_sha,
-            "observed_main_sha": self.observed_main_sha,
             "generated_at": self.generated_at,
             "evidence_source": self.evidence_source,
+            "revisions": dict(self.revisions),
+            "metadata": dict(self.metadata),
         }
 
 
-PINNED_SPAGHETTI_LOCK = SpaghettiLock(
-    repository_url="https://github.com/markheck-solutions/Spaghetti.git",
-    pull_request=141,
-    base_sha="60da7dbe2fad70836f15ed7ec4d7969c6ad436f1",
-    head_sha="43f96f395b8a0acb4d323943b6fc68727bf21121",
-    merge_commit_sha="dce7cd0397341c87a2c16d5681db586da1c85c75",
-    approved_oracle_sha="60da7dbe2fad70836f15ed7ec4d7969c6ad436f1",
-    observed_main_sha="9b05ec90140ee65f4c82e8f63cf0c6d50c3a380d",
-    generated_at="2026-06-25T19:45:00Z",
-    evidence_source="GitHub REST pull #141 and git ls-remote, resolved 2026-06-25",
-)
-
-
-def write_spaghetti_lock(path: Path) -> SpaghettiLock:
-    lock = PINNED_SPAGHETTI_LOCK
+def write_target_lock(
+    path: Path,
+    pack_path: Path,
+    *,
+    evidence_source: str,
+    metadata: dict[str, Any] | None = None,
+    root: Path | None = None,
+) -> TargetLock:
+    pack = load_target_pack(pack_path, root=root)
+    lock = TargetLock(
+        target_id=pack["id"],
+        repository_url=pack["repository_url"],
+        generated_at=datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        evidence_source=evidence_source,
+        revisions={key: value for key, value in pack["immutable_revisions"].items() if value},
+        metadata=metadata or {},
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_toml(lock), encoding="utf-8")
     return lock
 
 
-def read_spaghetti_lock(path: Path) -> SpaghettiLock:
-    import tomllib
-
+def read_target_lock(path: Path) -> TargetLock:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    pr = data["pull_request_141"]
-    return SpaghettiLock(
+    return TargetLock(
+        target_id=data["target_id"],
         repository_url=data["repository_url"],
-        pull_request=pr["number"],
-        base_sha=pr["base_sha"],
-        head_sha=pr["head_sha"],
-        merge_commit_sha=pr["merge_commit_sha"],
-        approved_oracle_sha=pr["approved_oracle_sha"],
-        observed_main_sha=pr["observed_main_sha"],
         generated_at=data["generated_at"],
         evidence_source=data["evidence_source"],
+        revisions=dict(data["revisions"]),
+        metadata=dict(data.get("metadata", {})),
     )
 
 
-def validate_spaghetti_lock(path: Path) -> list[str]:
-    import tomllib
-
+def validate_target_lock(path: Path, pack_path: Path, *, root: Path | None = None) -> list[str]:
     if not path.exists():
         return [f"missing lock file: {path}"]
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-        lock = read_spaghetti_lock(path)
-    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
+        lock = read_target_lock(path)
+        pack = load_target_pack(pack_path, root=root)
+    except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as exc:
         return [f"malformed lock file: {exc}"]
     problems: list[str] = []
     if raw.get("schema_version") != 1:
         problems.append("schema_version must be 1")
-    if raw.get("repository_url") != PINNED_SPAGHETTI_LOCK.repository_url:
-        problems.append("repository_url does not match targets/spaghetti.toml")
-    pr = raw.get("pull_request_141", {})
-    if pr.get("historical_case_id") != "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING":
-        problems.append("historical_case_id mismatch")
-    for name, value in lock.to_json().items():
-        if name.endswith("_sha") and not _is_full_sha(value):
-            problems.append(f"{name} is not a full immutable SHA: {value!r}")
-    expected = PINNED_SPAGHETTI_LOCK.to_json()
-    for name in ("base_sha", "head_sha", "merge_commit_sha", "approved_oracle_sha", "observed_main_sha"):
-        if lock.to_json()[name] != expected[name]:
-            problems.append(f"{name} does not match resolved PR #141 evidence")
-    if lock.pull_request != 141:
-        problems.append(f"unexpected pull request: {lock.pull_request}")
-    if lock.approved_oracle_sha != lock.base_sha:
-        problems.append("approved oracle SHA must equal PR base SHA for Phase 1 historical oracle")
+    if lock.target_id != pack["id"]:
+        problems.append("target_id does not match target pack")
+    if _normalize_url(lock.repository_url) != _normalize_url(pack["repository_url"]):
+        problems.append("repository_url does not match target pack")
+    if not lock.evidence_source.strip():
+        problems.append("evidence_source must be non-empty")
+    expected = {key: value for key, value in pack["immutable_revisions"].items() if value}
+    if lock.revisions != expected:
+        problems.append("revisions do not match target pack immutable revisions")
+    for name, value in lock.revisions.items():
+        if name.endswith("_sha") and not SHA_RE.fullmatch(value):
+            problems.append(f"revisions.{name} is not a full immutable SHA")
     return problems
 
 
-def _is_full_sha(value: str) -> bool:
-    return len(value) == 40 and all(char in "0123456789abcdef" for char in value)
+def _toml(lock: TargetLock) -> str:
+    lines = [
+        "schema_version = 1",
+        f"target_id = {json.dumps(lock.target_id)}",
+        f"repository_url = {json.dumps(lock.repository_url)}",
+        f"generated_at = {json.dumps(lock.generated_at)}",
+        f"evidence_source = {json.dumps(lock.evidence_source)}",
+        "",
+        "[revisions]",
+    ]
+    lines.extend(f"{key} = {json.dumps(value)}" for key, value in sorted(lock.revisions.items()))
+    if lock.metadata:
+        lines.extend(["", "[metadata]"])
+        lines.extend(f"{key} = {_toml_scalar(value)}" for key, value in sorted(lock.metadata.items()))
+    return "\n".join([*lines, ""])
 
 
-def _toml(lock: SpaghettiLock) -> str:
-    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    return "\n".join(
-        [
-            "schema_version = 1",
-            f"generated_at = {now!r}",
-            f"evidence_source = {lock.evidence_source!r}",
-            f"repository_url = {lock.repository_url!r}",
-            "",
-            "[pull_request_141]",
-            f"number = {lock.pull_request}",
-            'html_url = "https://github.com/markheck-solutions/Spaghetti/pull/141"',
-            f"base_sha = {lock.base_sha!r}",
-            f"head_sha = {lock.head_sha!r}",
-            f"merge_commit_sha = {lock.merge_commit_sha!r}",
-            f"approved_oracle_sha = {lock.approved_oracle_sha!r}",
-            f"observed_main_sha = {lock.observed_main_sha!r}",
-            'historical_case_id = "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING"',
-            'oracle_reason = "TASK.md and targets/spaghetti.toml define approved sequence; PR base SHA pins the pre-change oracle."',
-            "",
-        ]
-    )
+def _toml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return json.dumps(value)
+    raise TypeError(f"unsupported lock metadata type: {type(value).__name__}")
+
+
+def _normalize_url(value: str) -> str:
+    normalized = value.strip().rstrip("/").lower()
+    return normalized[:-4] if normalized.endswith(".git") else normalized

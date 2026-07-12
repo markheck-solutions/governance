@@ -3,12 +3,6 @@ name: Delivery Receipt
 on:
   workflow_call:
     inputs:
-      target-repository:
-        required: true
-        type: string
-      target-repository-url:
-        required: true
-        type: string
       target-base-sha:
         required: true
         type: string
@@ -16,12 +10,6 @@ on:
         required: true
         type: string
       target-pr-number:
-        required: true
-        type: string
-      target-pr-url:
-        required: true
-        type: string
-      governance-ref:
         required: true
         type: string
       supportability-artifact-name:
@@ -78,13 +66,12 @@ jobs:
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
       artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
     env:
-      TARGET_REPOSITORY: ${{ inputs.target-repository }}
-      TARGET_REPOSITORY_URL: ${{ inputs.target-repository-url }}
+      TARGET_REPOSITORY: ${{ github.repository }}
+      TARGET_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
       TARGET_BASE_SHA: ${{ inputs.target-base-sha }}
       TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
       TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
-      TARGET_PR_URL: ${{ inputs.target-pr-url }}
-      GOVERNANCE_REF: ${{ inputs.governance-ref }}
+      TARGET_PR_URL: ${{ github.server_url }}/${{ github.repository }}/pull/${{ inputs.target-pr-number }}
       SUPPORTABILITY_ARTIFACT_NAME: ${{ inputs.supportability-artifact-name }}
       SUPPORTABILITY_ARTIFACT_ID: ${{ inputs.supportability-artifact-id }}
       SUPPORTABILITY_ARTIFACT_DIGEST: ${{ inputs.supportability-artifact-digest }}
@@ -94,11 +81,11 @@ jobs:
       RECEIPT_ARTIFACT_NAME: ${{ inputs.receipt-artifact-name }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout governance evaluator
+      - name: Checkout trusted evaluator from reusable workflow identity
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: markheck-solutions/governance
-          ref: ${{ inputs.governance-ref }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: governance
           persist-credentials: false
       - name: Set up Python
@@ -120,9 +107,6 @@ jobs:
               raise SystemExit(64)
           if not sha_re.fullmatch(os.environ["TARGET_HEAD_SHA"]):
               print("Invalid target head SHA", file=sys.stderr)
-              raise SystemExit(64)
-          if not sha_re.fullmatch(os.environ["GOVERNANCE_REF"]):
-              print("Governance ref must be an exact commit SHA", file=sys.stderr)
               raise SystemExit(64)
           repository = os.environ["TARGET_REPOSITORY"]
           if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):

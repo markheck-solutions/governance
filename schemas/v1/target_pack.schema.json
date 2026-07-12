@@ -3,6 +3,7 @@
   "required": [
     "schema_version",
     "id",
+    "adapter",
     "repository_url",
     "repository_identity",
     "language_runtime",
@@ -26,6 +27,10 @@
   "properties": {
     "schema_version": { "type": "string" },
     "id": { "type": "string", "minLength": 1 },
+    "adapter": {
+      "type": "string",
+      "enum": ["raw", "python", "node", "dotnet", "go", "rust", "java", "powershell"]
+    },
     "repository_url": { "type": "string", "minLength": 1 },
     "repository_identity": {
       "type": "object",

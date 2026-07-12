@@ -5,8 +5,33 @@ description = "Offline governance benchmark evaluator for AI-directed software d
 requires-python = ">=3.12"
 dependencies = []
 
+[project.optional-dependencies]
+governance = [
+    "build==1.5.0",
+    "mypy==2.2.0",
+    "ruff==0.15.20",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "C90"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+disallow_incomplete_defs = true
+warn_redundant_casts = true
+warn_unreachable = true
+warn_unused_configs = true
 
 [project.scripts]
 governance-eval = "governance_eval.cli:main"

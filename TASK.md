@@ -1,87 +1,101 @@
-# Task: Governance Evaluation Phase 1
-
-Implement Phase 1 completely in this repository.
+# Task: Repository-Agnostic Governance Framework Hardening
 
 ## Goal
 
-Create an offline-first benchmark that tests whether a governance system detects known software-development failures. The first deliverable is the test rig, not the autonomous coding factory.
+Build and prove a reusable governance framework for any repository that adopts a
+versioned target pack and the adapters required by that repository's technology
+stack. Spaghetti is one historical target pack. It is not a framework default,
+special case, or required runtime dependency.
 
-## Inputs
+## Framework contract
 
-Read:
+```text
+target-neutral deterministic core
+  + versioned target pack
+  + declared command/language adapters
+  + isolated target execution
+  + GitHub Actions and SHA-bound AI review evidence
+  = governed target decision
+```
 
-- `docs/spec/resolve_failure.md`
-- `docs/reference/supportability-standard.md`
-- `docs/reference/current-governance-skill.md`
-- `targets/spaghetti.toml`
+Unsupported, missing, malformed, stale, or unverifiable required capability is
+`UNKNOWN` and deterministically produces `BLOCK_TECHNICAL`.
 
-The Spaghetti repository is an evaluated target and must remain read-only.
+GitHub Copilot and Codex may produce structured findings and evidence.
+Only deterministic code computes `MERGE`, `BLOCK_TECHNICAL`, or `ASK_BUSINESS`.
 
 ## Required implementation
 
-1. Create a maintainable Python package and command-line interface for governance evaluation.
-2. Define versioned JSON Schemas for:
-   - evaluation cases;
-   - detector evidence;
-   - review findings;
-   - benchmark run results;
-   - final decisions.
-3. Implement deterministic final outcomes:
-   - `MERGE`
-   - `BLOCK_TECHNICAL`
-   - `ASK_BUSINESS`
-4. The decision engine must fail closed for missing, malformed, unresolved, or unverifiable required evidence.
-5. Resolve and record exact immutable commit SHAs for the Spaghetti historical case in a generated lock file. Do not rely on floating branches.
-6. Reproduce PR #141's partial-metadata route-interleaving defect as an executable historical behavior case. A review comment alone is not sufficient evidence.
-7. Add paired clean and defective fixtures for:
-   - private helper re-export;
-   - test dependency on private production internals;
-   - import cycle;
-   - untyped public dictionary boundary;
-   - narrowed validation-gate scope;
-   - weakened validation threshold.
-8. Each defective fixture must be blocked. Each clean fixture must pass.
-9. Produce a machine-readable benchmark artifact containing at least:
-   - critical-defect recall;
-   - negative-control recall;
-   - false-block rate;
-   - repeated-run decision stability;
-   - deterministic flake rate;
-   - execution duration.
-10. Add automated tests for the evaluator, schemas, detectors, decision engine, historical case, clean controls, and defective controls.
-11. Add a non-blocking GitHub Actions shadow workflow that runs the tests and benchmark and uploads the JSON artifact.
-12. Document one local command that performs the complete Phase 1 verification on Windows and on a GitHub-hosted runner.
-
-## Explicitly out of scope
-
-- Modifying Spaghetti production code.
-- Enabling auto-merge.
-- Changing branch protection or repository rulesets.
-- Building planner/builder/repair-agent orchestration.
-- Calling an AI model to make the final decision.
-- Claiming that human transferability or full autonomous governance has been established.
+1. Remove target-specific assumptions from core CLI, benchmark, locks, schemas,
+   artifacts, and detector orchestration. Keep target specifics inside packs and
+   adapters.
+2. Provide at least two target-neutral controls: a Python repository adapter and
+   a command-only non-Python repository adapter.
+3. Isolate untrusted target commands from the trusted judge. Candidate execution
+   must not share a writable judge checkout. Record and verify evaluator identity
+   and tree hashes across trust transitions.
+4. Validate gate semantics, applicability, and coverage. Placeholder commands,
+   compile-only substitutes, duplicated capabilities, non-blocking commands,
+   narrowed scopes, weakened thresholds, and missing package/SQL proof fail
+   closed.
+5. Require every applicable gate to cover every changed and high-risk production
+   file.
+6. Fix all reproduced detector false positives and false negatives, including:
+   private imports versus public re-exports, async raw-dictionary boundaries,
+   cycles through package initializers, and partial gate coverage.
+7. Complete verification must execute every registered required real-target pack
+   at exact immutable revisions. Fixture-only success cannot produce framework
+   success. Verified immutable caches may support explicit offline execution.
+8. Require structured GitHub AI review evidence from exact approved bot identities.
+   Copilot supplies supportability review evidence; Codex supplies final
+   delivery-readiness review evidence. Both bind to the latest target commit SHA
+   and fail closed on unresolved P0-P2 findings. Review evidence cannot compute
+   the governed decision.
+9. Keep AI review separate from deterministic enforcement. GitHub Actions collect
+   evidence; deterministic evaluator code alone computes the outcome.
+10. Support explicit `SHADOW` and `BLOCKING` enforcement modes. Blocking mode must
+    exit nonzero on technical blocks or missing required evidence. Do not add
+    auto-merge.
+11. Decompose oversized modules along real responsibilities. New and touched
+    production functions must satisfy C901 <= 10. Tighten repository limits; do
+    not raise or bypass them.
+12. Replace bootstrap documentation with an operator guide covering the threat
+    model, trust seams, target-pack/adapters, onboarding, commands, artifacts,
+    enforcement, and honest limitations.
 
 ## Required controls
 
-Before editing, explicitly spawn a read-only specification-analysis subagent to derive a proposed case matrix and identify ambiguities. The primary agent resolves technical ambiguities conservatively; use `ASK_BUSINESS` only for genuine business-behavior ambiguity.
+- Every blocking detector has clean, defective, and evasion/mutation controls.
+- A hostile target attempting judge mutation is blocked.
+- A target covered by only one of several applicable gates is blocked.
+- Internal use of a private module without public export passes.
+- Public export of a private helper blocks.
+- Async raw-dictionary public interfaces block.
+- Cycles through `__init__.py` block.
+- Removing the Spaghetti pack does not break generic-core tests.
+- A command-only non-Python pack evaluates through the same public interface.
+- Missing real-target, AI-review, or integrity evidence blocks the corresponding
+  configured claim.
 
-After implementation and tests, explicitly spawn a fresh read-only adversarial-review subagent against the exact final diff. It must inspect for false positives, false negatives, self-modifying judge risks, floating references, fabricated evidence, and tests that merely assert fixtures rather than exercise detectors. Repair every reproduced P0-P2 finding and rerun all verification.
+## Explicit boundaries
 
-## Acceptance criteria
+- Evaluated target repositories remain read-only except disposable isolated
+  checkouts and scratch output.
+- No application production refactoring.
+- No auto-merge.
+- No weakening, waiver, allowlist, baseline debt, or human approval converts RED
+  to GREEN.
+- Do not claim universal semantic support. A repo is governable when its required
+  capabilities have declared, versioned adapters; unsupported capabilities fail
+  closed.
 
-Completion is `FAIL` unless all are true:
+## Completion
 
-- The PR #141 behavior defect is executable and is blocked.
-- Every defective synthetic control is blocked.
-- Every clean control passes.
-- Critical-defect recall is 100% for the reproduced critical set.
-- Negative-control recall is 100%.
-- False-block rate is 0% for the initial verified-safe control set.
-- Repeated deterministic runs produce identical decisions.
-- Deterministic flake rate is 0% in the configured repetition test.
-- Benchmark results are written as schema-valid JSON.
-- The full local verification command exits nonzero on any failed criterion.
-- No evaluated target code was modified.
-- The final report lists exact commands, exit codes, generated artifacts, commit SHAs, unresolved unknowns, and the machine-computed decision.
+Completion is `FAIL` unless all confirmed P0-P2 findings are fixed, all controls
+run, the complete verification command exits zero, machine-readable evidence is
+schema-valid, target repos remain unchanged, and a fresh read-only adversarial
+review finds no unresolved P0-P2 issue.
 
-Do not weaken these criteria to finish. If the historical defect cannot be reproduced from available evidence, implement the remaining harness, return `BLOCK_TECHNICAL`, and state exactly what evidence is missing.
+GitHub enforcement status must be reported separately for repo config, caller
+workflow, protected branch/ruleset, required checks, clean canary, defective
+canary, and overall governance.

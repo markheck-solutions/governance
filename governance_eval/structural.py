@@ -60,9 +60,7 @@ def scan_structural_metrics(
         "large_typed_god_modules": sorted(
             path
             for path, data in module_sizes.items()
-            if data["lines"] > typed_size_lines
-            and data["function_count"] > typed_size_functions
-            and data["has_typing"]
+            if data["lines"] > typed_size_lines and data["function_count"] > typed_size_functions and data["has_typing"]
         ),
         "touched_function_complexity": _complexity(prod_files, root, changed_files or set(), complexity_threshold),
         "gate_scope_or_threshold_weakening": _gate_config(root, pack),
@@ -222,7 +220,7 @@ def _import_graph(root: Path, files: list[Path], production_roots: list[str]) ->
 
 def _import_from_targets(node: ast.ImportFrom, current_module: str, module_names: set[str]) -> set[str]:
     if node.level:
-        package_parts = current_module.split(".")[:-node.level]
+        package_parts = current_module.split(".")[: -node.level]
         base = ".".join(part for part in package_parts if part)
         if node.module:
             base = ".".join(part for part in [base, node.module] if part)
@@ -269,13 +267,7 @@ def _cycles(graph: dict[str, set[str]]) -> list[str]:
             elif target in on_stack:
                 lowlinks[node] = min(lowlinks[node], indexes[target])
         if lowlinks[node] == indexes[node]:
-            component: list[str] = []
-            while True:
-                item = stack.pop()
-                on_stack.remove(item)
-                component.append(item)
-                if item == node:
-                    break
+            component = _pop_component(node, stack, on_stack)
             if len(component) > 1 or node in graph.get(node, set()):
                 components.append(sorted(component))
 
@@ -283,6 +275,15 @@ def _cycles(graph: dict[str, set[str]]) -> list[str]:
         if node not in indexes:
             strongconnect(node)
     return sorted("->".join(component + [component[0]]) for component in components)
+
+
+def _pop_component(node: str, stack: list[str], on_stack: set[str]) -> list[str]:
+    component: list[str] = []
+    while not component or component[-1] != node:
+        item = stack.pop()
+        on_stack.remove(item)
+        component.append(item)
+    return component
 
 
 def _private_imports(files: list[Path], root: Path, include_attribute_access: bool) -> list[str]:
@@ -295,27 +296,33 @@ def _private_imports(files: list[Path], root: Path, include_attribute_access: bo
             continue
         imported_aliases: dict[str, str] = {}
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                module = node.module or ""
-                module_private = any(part.startswith("_") for part in module.split(".") if part)
-                for alias in node.names:
-                    local = alias.asname or alias.name
-                    imported_aliases[local] = ".".join(part for part in [module, alias.name] if part)
-                    if module_private or alias.name.startswith("_"):
-                        refs.add(f"{rel}:{module}:{alias.name}")
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    local = alias.asname or alias.name.split(".")[0]
-                    imported_aliases[local] = alias.name
-                    if any(part.startswith("_") for part in alias.name.split(".")):
-                        refs.add(f"{rel}:{alias.name}")
+            _collect_private_import(node, rel, imported_aliases, refs)
         if include_attribute_access:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute):
                     chain = _attribute_chain(node)
-                    if len(chain) >= 2 and chain[0] in imported_aliases and any(part.startswith("_") for part in chain[1:]):
+                    if (
+                        len(chain) >= 2
+                        and chain[0] in imported_aliases
+                        and any(part.startswith("_") for part in chain[1:])
+                    ):
                         refs.add(f"{rel}:{'.'.join(chain)}")
     return sorted(refs)
+
+
+def _collect_private_import(node: ast.AST, rel: str, aliases: dict[str, str], refs: set[str]) -> None:
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            aliases[alias.asname or alias.name.split(".")[0]] = alias.name
+            if any(part.startswith("_") for part in alias.name.split(".")):
+                refs.add(f"{rel}:{alias.name}")
+    elif isinstance(node, ast.ImportFrom):
+        module = node.module or ""
+        private = any(part.startswith("_") for part in module.split(".") if part)
+        for alias in node.names:
+            aliases[alias.asname or alias.name] = ".".join(part for part in [module, alias.name] if part)
+            if private or alias.name.startswith("_"):
+                refs.add(f"{rel}:{module}:{alias.name}")
 
 
 def _private_reexports(files: list[Path], root: Path) -> list[str]:
@@ -330,28 +337,40 @@ def _private_reexports(files: list[Path], root: Path) -> list[str]:
             continue
         private_names: set[str] = set()
         for node in tree.body:
-            if isinstance(node, ast.ImportFrom):
-                module = node.module or ""
-                module_private = any(part.startswith("_") for part in module.split(".") if part)
-                for alias in node.names:
-                    local = alias.asname or alias.name
-                    if module_private or alias.name.startswith("_"):
-                        private_names.add(local)
-                    if not local.startswith("_") and (module_private or alias.name.startswith("_")):
-                        refs.add(f"{rel}:alias:{module}.{alias.name}->{local}")
-            elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
-                if isinstance(node.value, (ast.List, ast.Tuple)):
-                    for item in node.value.elts:
-                        if isinstance(item, ast.Constant) and isinstance(item.value, str) and item.value.startswith("_"):
-                            refs.add(f"{rel}:__all__:{item.value}")
-            elif isinstance(node, ast.Assign):
-                value_name = _expr_name(node.value)
-                value_private = value_name.startswith("_") or "._" in value_name or value_name in private_names
-                if value_private:
-                    for target in node.targets:
-                        if isinstance(target, ast.Name) and not target.id.startswith("_"):
-                            refs.add(f"{rel}:rebinding:{value_name}->{target.id}")
+            _collect_private_reexport(node, rel, private_names, refs)
     return sorted(refs)
+
+
+def _collect_private_reexport(node: ast.stmt, rel: str, private_names: set[str], refs: set[str]) -> None:
+    if isinstance(node, ast.ImportFrom):
+        module = node.module or ""
+        module_private = any(part.startswith("_") for part in module.split(".") if part)
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if module_private or alias.name.startswith("_"):
+                private_names.add(local)
+                if not local.startswith("_"):
+                    refs.add(f"{rel}:alias:{module}.{alias.name}->{local}")
+    elif isinstance(node, ast.Assign):
+        _collect_assignment_reexport(node, rel, private_names, refs)
+
+
+def _collect_assignment_reexport(node: ast.Assign, rel: str, private_names: set[str], refs: set[str]) -> None:
+    if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+        if isinstance(node.value, (ast.List, ast.Tuple)):
+            refs.update(
+                f"{rel}:__all__:{item.value}"
+                for item in node.value.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str) and item.value.startswith("_")
+            )
+        return
+    value_name = _expr_name(node.value)
+    if value_name.startswith("_") or "._" in value_name or value_name in private_names:
+        refs.update(
+            f"{rel}:rebinding:{value_name}->{target.id}"
+            for target in node.targets
+            if isinstance(target, ast.Name) and not target.id.startswith("_")
+        )
 
 
 def _weak_contracts(files: list[Path], root: Path) -> list[str]:
@@ -364,29 +383,34 @@ def _weak_contracts(files: list[Path], root: Path) -> list[str]:
         except SyntaxError:
             continue
         for node in tree.body:
-            if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                value = getattr(node, "value", None)
-                targets = [node.target] if isinstance(node, ast.AnnAssign) else list(getattr(node, "targets", []))
-                text = ast.unparse(value) if value is not None else ""
-                if _is_weak_type_text(text):
-                    for target in targets:
-                        if isinstance(target, ast.Name):
-                            aliases.add(target.id)
-                            refs.add(f"{rel}:alias:{target.id}:{text}")
-            if isinstance(node, ast.ClassDef):
-                bases = {ast.unparse(base) for base in node.bases}
-                if any(base.endswith("TypedDict") or base == "TypedDict" for base in bases):
-                    for stmt in node.body:
-                        annotation = getattr(stmt, "annotation", None)
-                        if annotation is not None and "Any" in ast.unparse(annotation):
-                            refs.add(f"{rel}:{node.name}.Any")
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
-                annotations = [node.returns, *(arg.annotation for arg in node.args.args)]
-                for annotation in annotations:
-                    text = ast.unparse(annotation) if annotation else ""
-                    if _is_weak_type_text(text) or text in aliases:
-                        refs.add(f"{rel}:{node.name}:{text}")
+            _collect_weak_contract(node, rel, aliases, refs)
     return sorted(refs)
+
+
+def _collect_weak_contract(node: ast.stmt, rel: str, aliases: set[str], refs: set[str]) -> None:
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        value = getattr(node, "value", None)
+        text = ast.unparse(value) if value is not None else ""
+        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
+        if _is_weak_type_text(text):
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    aliases.add(target.id)
+                    refs.add(f"{rel}:alias:{target.id}:{text}")
+    elif isinstance(node, ast.ClassDef):
+        if any(ast.unparse(base).endswith("TypedDict") for base in node.bases):
+            refs.update(
+                f"{rel}:{node.name}.Any"
+                for stmt in node.body
+                if (annotation := getattr(stmt, "annotation", None)) is not None and "Any" in ast.unparse(annotation)
+            )
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
+        annotations = [node.returns, *(arg.annotation for arg in node.args.args)]
+        refs.update(
+            f"{rel}:{node.name}:{text}"
+            for annotation in annotations
+            if (text := ast.unparse(annotation) if annotation else "") and (_is_weak_type_text(text) or text in aliases)
+        )
 
 
 def _is_weak_type_text(text: str) -> bool:
@@ -447,15 +471,19 @@ def _gate_config(root: Path, pack: dict[str, Any] | None) -> dict[str, Any]:
     if not required_files:
         required_files = ["pyproject.toml", ".github/workflows"]
     try:
-        return _sets_to_lists({
-            "status": "MEASURED",
-            "required_files": required_files,
-            "governed_roots": list(contract.get("governed_roots") or []),
-            "required_commands": list(contract.get("required_commands") or []),
-            "pyproject": _parse_pyproject(root / "pyproject.toml"),
-            "workflows": _parse_workflows(root / ".github" / "workflows"),
-            "files": {relative: (root / relative).exists() for relative in required_files if not relative.endswith("/")},
-        })
+        return _sets_to_lists(
+            {
+                "status": "MEASURED",
+                "required_files": required_files,
+                "governed_roots": list(contract.get("governed_roots") or []),
+                "required_commands": list(contract.get("required_commands") or []),
+                "pyproject": _parse_pyproject(root / "pyproject.toml"),
+                "workflows": _parse_workflows(root / ".github" / "workflows"),
+                "files": {
+                    relative: (root / relative).exists() for relative in required_files if not relative.endswith("/")
+                },
+            }
+        )
     except Exception as exc:
         return {"status": "UNKNOWN", "reason": f"gate contract parsing failed: {type(exc).__name__}: {exc}"}
 
@@ -507,38 +535,17 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
     paths: set[str] = set()
     paths_ignore: set[str] = set()
     for file in sorted(path.glob("*.yml")) + sorted(path.glob("*.yaml")):
-        text = file.read_text(encoding="utf-8", errors="ignore")
-        in_jobs = False
-        current_job = ""
-        lines = text.splitlines()
-        disabled_jobs |= _workflow_disabled_jobs(file.name, lines)
-        for index, line in enumerate(lines):
-            if re.match(r"^jobs:\s*$", line):
-                in_jobs = True
-                continue
-            if in_jobs:
-                job = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
-                if job:
-                    current_job = job.group(1)
-                    jobs.add(f"{file.name}:{current_job}")
-                    continue
-            step = re.search(r"name:\s*['\"]?([^'\"]+?)['\"]?\s*$", line)
-            if step:
-                steps.add(f"{file.name}:{current_job}:{step.group(1).strip()}")
-            semantic_line = _workflow_semantic_line(line)
-            run_command = _workflow_run_command(lines, index)
-            job_disabled = f"{file.name}:{current_job}" in disabled_jobs
-            if run_command and not job_disabled and not _workflow_step_disabled(lines, index):
-                run_commands.add(f"{file.name}:{current_job}:{run_command}")
-            if "continue-on-error:" in semantic_line and "true" in semantic_line.lower():
-                continue_on_error.add(f"{file.name}:{current_job}")
-            match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", semantic_line)
-            if match:
-                key = match.group(1)
-                values = _workflow_path_values(lines, index, match.group(2))
-                target = paths_ignore if key == "paths-ignore" else paths
-                for value in values:
-                    target.add(f"{file.name}:{value}")
+        parsed = _parse_workflow_file(file)
+        for target, key in (
+            (jobs, "jobs"),
+            (disabled_jobs, "disabled_jobs"),
+            (steps, "steps"),
+            (run_commands, "run_commands"),
+            (continue_on_error, "continue_on_error"),
+            (paths, "paths"),
+            (paths_ignore, "paths_ignore"),
+        ):
+            target.update(parsed[key])
     return {
         "present": True,
         "jobs": jobs,
@@ -549,6 +556,41 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
         "paths": paths,
         "paths_ignore": paths_ignore,
     }
+
+
+def _parse_workflow_file(file: Path) -> dict[str, set[str]]:
+    lines = file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    result: dict[str, set[str]] = {
+        key: set() for key in ("jobs", "steps", "run_commands", "continue_on_error", "paths", "paths_ignore")
+    }
+    result["disabled_jobs"] = _workflow_disabled_jobs(file.name, lines)
+    current_job = ""
+    for index, line in enumerate(lines):
+        job = (
+            re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+            if any(re.match(r"^jobs:\s*$", prior) for prior in lines[: index + 1])
+            else None
+        )
+        if job:
+            current_job = job.group(1)
+            result["jobs"].add(f"{file.name}:{current_job}")
+        _collect_workflow_line(result, file.name, current_job, lines, index)
+    return result
+
+
+def _collect_workflow_line(result: dict[str, set[str]], file_name: str, job: str, lines: list[str], index: int) -> None:
+    line = lines[index]
+    if step := re.search(r"name:\s*['\"]?([^'\"]+?)['\"]?\s*$", line):
+        result["steps"].add(f"{file_name}:{job}:{step.group(1).strip()}")
+    semantic = _workflow_semantic_line(line)
+    command = _workflow_run_command(lines, index)
+    if command and f"{file_name}:{job}" not in result["disabled_jobs"] and not _workflow_step_disabled(lines, index):
+        result["run_commands"].add(f"{file_name}:{job}:{command}")
+    if "continue-on-error:" in semantic and "true" in semantic.lower():
+        result["continue_on_error"].add(f"{file_name}:{job}")
+    if match := re.search(r"\b(paths-ignore|paths):\s*(.*)$", semantic):
+        key = "paths_ignore" if match.group(1) == "paths-ignore" else "paths"
+        result[key].update(f"{file_name}:{value}" for value in _workflow_path_values(lines, index, match.group(2)))
 
 
 def _workflow_disabled_jobs(file_name: str, lines: list[str]) -> set[str]:
@@ -660,17 +702,22 @@ def _workflow_semantic_line(line: str) -> str:
 
 
 def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]:
-    values: set[str] = set()
     if inline.strip():
-        text = inline.split("#", 1)[0].strip()
-        if not text:
-            return values
-        if text.startswith("[") and text.endswith("]"):
-            for item in text.strip("[]").split(","):
-                cleaned = item.strip().strip("'\"")
-                if cleaned:
-                    values.add(cleaned)
-        return values or {text.strip("'\"")}
+        return _inline_workflow_paths(inline)
+    return _block_workflow_paths(lines, index)
+
+
+def _inline_workflow_paths(inline: str) -> set[str]:
+    text = inline.split("#", 1)[0].strip()
+    if not text:
+        return set()
+    if text.startswith("[") and text.endswith("]"):
+        return {cleaned for item in text.strip("[]").split(",") if (cleaned := item.strip().strip("'\""))}
+    return {text.strip("'\"")}
+
+
+def _block_workflow_paths(lines: list[str], index: int) -> set[str]:
+    values: set[str] = set()
     base_indent = len(lines[index]) - len(lines[index].lstrip(" "))
     for line in lines[index + 1 :]:
         if not line.strip():
@@ -700,13 +747,19 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
     after_py = head.get("pyproject") or {}
     introduced |= _removed_items("ruff.select", before_py.get("ruff_select"), after_py.get("ruff_select"))
     introduced |= _include_narrowing("ruff.include", before_py.get("ruff_include"), after_py.get("ruff_include"))
-    introduced |= _removed_items("ruff.extend-include", before_py.get("ruff_extend_include"), after_py.get("ruff_extend_include"))
+    introduced |= _removed_items(
+        "ruff.extend-include", before_py.get("ruff_extend_include"), after_py.get("ruff_extend_include")
+    )
     introduced |= _added_items("ruff.ignore", before_py.get("ruff_ignore"), after_py.get("ruff_ignore"))
     introduced |= _added_items("ruff.exclude", before_py.get("ruff_exclude"), after_py.get("ruff_exclude"))
-    introduced |= _added_items("ruff.per-file-ignores", before_py.get("ruff_per_file_ignores"), after_py.get("ruff_per_file_ignores"))
+    introduced |= _added_items(
+        "ruff.per-file-ignores", before_py.get("ruff_per_file_ignores"), after_py.get("ruff_per_file_ignores")
+    )
     introduced |= _added_items("mypy.exclude", before_py.get("mypy_exclude"), after_py.get("mypy_exclude"))
     introduced |= _removed_items("mypy.files", before_py.get("mypy_files"), after_py.get("mypy_files"))
-    introduced |= _removed_items("pytest.testpaths", before_py.get("pytest_testpaths"), after_py.get("pytest_testpaths"))
+    introduced |= _removed_items(
+        "pytest.testpaths", before_py.get("pytest_testpaths"), after_py.get("pytest_testpaths")
+    )
     introduced |= _added_items("coverage.omit", before_py.get("coverage_omit"), after_py.get("coverage_omit"))
     introduced |= _removed_items("coverage.source", before_py.get("coverage_source"), after_py.get("coverage_source"))
     if before_py.get("pytest_addopts") and not after_py.get("pytest_addopts"):
@@ -719,7 +772,9 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
     after_wf = head.get("workflows") or {}
     introduced |= _removed_items("workflow.job", before_wf.get("jobs"), after_wf.get("jobs"))
     introduced |= _removed_items("workflow.step", before_wf.get("steps"), after_wf.get("steps"))
-    introduced |= _added_items("workflow.continue-on-error", before_wf.get("continue_on_error"), after_wf.get("continue_on_error"))
+    introduced |= _added_items(
+        "workflow.continue-on-error", before_wf.get("continue_on_error"), after_wf.get("continue_on_error")
+    )
     introduced |= _workflow_paths_narrowing(before_wf.get("paths"), after_wf.get("paths"))
     introduced |= _added_items("workflow.paths-ignore", before_wf.get("paths_ignore"), after_wf.get("paths_ignore"))
     executable_commands = _workflow_command_lines(after_wf)

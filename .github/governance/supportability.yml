@@ -3,22 +3,29 @@ standard:
   source: docs/reference/supportability-standard.md
   hash: "a3808f788f1dcb8c004112bfe64bc92c718a676e4c97e5f81e67a2ef42e73ac9"
 
+execution:
+  adapter: python
+  setup_commands:
+    - python -m pip install .[governance]
+  max_commands: 16
+
 required_gates:
   lint:
-    - python -m compileall -q .
+    - python -m ruff check governance_eval tests
   format_check:
-    - python -c "import os, subprocess, sys; sys.exit(subprocess.run(['git', 'diff', '--check', os.environ['TARGET_BASE_SHA'], os.environ['TARGET_HEAD_SHA']]).returncode)"
+    - python -m ruff format --check governance_eval tests
   typecheck:
-    - python -m compileall -q .
+    - python -m mypy governance_eval
   complexity:
-    - python -m compileall -q .
+    - python -m ruff check --select C901 governance_eval tests
   architecture:
-    - python -m unittest discover -s tests -p test_*.py
+    - python -m governance_eval architecture-gate --config .github/governance/supportability.yml --target-repo . --base-sha $TARGET_BASE_SHA --head-sha $TARGET_HEAD_SHA --output-dir artifacts/supportability/architecture
   tests:
     - python -m unittest discover -s tests -p test_*.py
   compile_or_build:
-    - python -m compileall -q .
-  package_audit: []
+    - python -m build
+  package_audit:
+    - python -m pip check
   sql_supportability: auto
 
 coverage:
@@ -32,8 +39,8 @@ ai_review:
   latest_head_required: true
   unresolved_p0_p1_p2_blocks: true
   reviewer_login_patterns:
-    - "*copilot*"
-    - "chatgpt-codex-connector*"
+    - "copilot-pull-request-reviewer[bot]"
+    - "github-copilot[bot]"
 
 receipt:
   artifact_name: supportability-delivery-receipt

@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.1",
+  "id": "command-only-v1",
+  "adapter": "raw",
+  "repository_url": "https://example.invalid/command-only-target.git",
+  "repository_identity": {
+    "canonical_url": "https://example.invalid/command-only-target.git",
+    "owner": "example",
+    "name": "command-only-target"
+  },
+  "language_runtime": "declared-by-target",
+  "production_roots": ["source"],
+  "test_roots": ["checks"],
+  "source_globs": ["**/*"],
+  "ignore_globs": ["build/**"],
+  "immutable_revisions": {
+    "base_sha": "1111111111111111111111111111111111111111",
+    "head_sha": "2222222222222222222222222222222222222222",
+    "merge_sha": "3333333333333333333333333333333333333333",
+    "safe_base_sha": "1111111111111111111111111111111111111111",
+    "safe_head_sha": "1111111111111111111111111111111111111111"
+  },
+  "revision_modes": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
+  "checkout_commands": ["git checkout <full-sha>"],
+  "setup_commands": [],
+  "build_setup_commands": [],
+  "behavior_cases": [
+    {
+      "id": "COMMAND-ONLY-PUBLIC-CONTRACT",
+      "title": "Command-only target exposes its declared status",
+      "pull_request": null,
+      "revision_modes": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
+      "behavior_comparison_policy": "PINNED_EXPECTED",
+      "comparison_policies": {"HISTORICAL_FIXED": "PINNED_EXPECTED", "SAFE_FIXED": "PINNED_EXPECTED", "CANDIDATE_DYNAMIC": "PRESERVE_BASE_BEHAVIOR"},
+      "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
+      "classification_reason": "A governance-owned observer reads the public command-only contract from the exact target checkout.",
+      "reproducer": "target_packs/command_only/v1/reproducer.py",
+      "timeout_seconds": 30,
+      "source_files": ["governance.json"],
+      "source_symbols": [],
+      "expected_base_result": {"status": "ok"},
+      "expected_source_hashes": {}
+    }
+  ],
+  "structural_detectors": [],
+  "detector_policies": {},
+  "gate_contract": {
+    "required_files": ["governance.json"],
+    "required_commands": ["target-owned lint", "target-owned test", "target-owned build"],
+    "governed_roots": ["source", "checks"],
+    "known_debt": []
+  },
+  "target_specific_exclusions": [],
+  "expected_artifact_fields": ["target_repository_url", "target_base_sha", "target_head_sha"],
+  "supported_operating_systems": ["ubuntu-latest", "windows"],
+  "runtime_prerequisites": ["git"]
+}

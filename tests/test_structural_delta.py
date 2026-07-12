@@ -16,7 +16,10 @@ class StructuralDeltaTests(unittest.TestCase):
             head = root / "head"
             _write(base / "src/pkg/a.py", "from pkg._private import _old\n\n\ndef stable():\n    return _old()\n")
             _write(base / "src/pkg/_private.py", "def _old():\n    return 1\n")
-            _write(head / "src/pkg/a.py", "from pkg._private import _old\nfrom pkg._private import _new\n\n\ndef stable():\n    return _old()\n")
+            _write(
+                head / "src/pkg/a.py",
+                "from pkg._private import _old\nfrom pkg._private import _new\n\n\ndef stable():\n    return _old()\n",
+            )
             _write(head / "src/pkg/_private.py", "def _old():\n    return 1\n\n\ndef _new():\n    return 2\n")
 
             delta = structural_delta(scan_structural_metrics(base), scan_structural_metrics(head))
@@ -55,7 +58,9 @@ class StructuralDeltaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write(root / "app/pkg/api.py", "def _helper():\n    return 1\n")
-            _write(root / "spec/test_api.py", "import pkg.api\n\n\ndef test_api():\n    assert pkg.api._helper() == 1\n")
+            _write(
+                root / "spec/test_api.py", "import pkg.api\n\n\ndef test_api():\n    assert pkg.api._helper() == 1\n"
+            )
 
             metrics = scan_structural_metrics(root, pack=pack)
 
@@ -79,7 +84,9 @@ class StructuralDeltaTests(unittest.TestCase):
             _write(head / "src/pkg/api.py", "import pkg.util\n\n\ndef call():\n    return pkg.util._helper()\n")
             _write(head / "src/pkg/util.py", "def _helper():\n    return 1\n")
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         self.assertTrue(delta["cross_module_private_references"]["introduced"])
 
@@ -121,10 +128,18 @@ files = ["src", "tests"]
             head = root / "head"
             _write(base / "pyproject.toml", base_text)
             _write(head / "pyproject.toml", head_text)
-            _write(base / ".github/workflows/validation.yml", "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n")
-            _write(head / ".github/workflows/validation.yml", "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src tests\n")
+            _write(
+                base / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n",
+            )
+            _write(
+                head / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src tests\n",
+            )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertTrue(any("ruff.select_removed:C901" in item for item in introduced))
@@ -149,7 +164,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        # run: python -m mypy src scripts tests\n        run: echo skipped\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -171,7 +188,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        if: ${{ false }}\n        run: python -m mypy src scripts tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -193,7 +212,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - if: false\n        run: python -m mypy src scripts tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -215,7 +236,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n        if: false\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -237,7 +260,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    if: false\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -259,7 +284,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: |\n          # python -m mypy src scripts tests\n          echo skipped\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -276,7 +303,9 @@ files = ["src", "tests"]
             _write(base / ".github/workflows/validation.yml", workflow)
             _write(head / ".github/workflows/validation.yml", workflow)
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -293,7 +322,9 @@ files = ["src", "tests"]
             _write(base / ".github/workflows/validation.yml", workflow)
             _write(head / ".github/workflows/validation.yml", workflow)
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -307,11 +338,15 @@ files = ["src", "tests"]
             base = root / "base"
             head = root / "head"
             base_workflow = "jobs:\n  test:\n    steps:\n      - run: python -m mypy src scripts tests\n"
-            folded_workflow = "jobs:\n  test:\n    steps:\n      - run: >\n          python -m mypy\n          src scripts tests\n"
+            folded_workflow = (
+                "jobs:\n  test:\n    steps:\n      - run: >\n          python -m mypy\n          src scripts tests\n"
+            )
             _write(base / ".github/workflows/validation.yml", base_workflow)
             _write(head / ".github/workflows/validation.yml", folded_workflow)
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -331,7 +366,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      # continue-on-error: true\n      - name: Tests\n        run: python -m pytest\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertNotIn("workflow.continue-on-error_added:validation.yml:test", introduced)
@@ -342,8 +379,11 @@ files = ["src", "tests"]
             root = Path(tmp)
             base = root / "base"
             head = root / "head"
-            _write(base / "pyproject.toml", "[tool.ruff.lint]\nselect = [\"E\", \"F\"]\n")
-            _write(head / "pyproject.toml", "[tool.ruff]\ninclude = [\"src/pkg/*.py\"]\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\"]\n")
+            _write(base / "pyproject.toml", '[tool.ruff.lint]\nselect = ["E", "F"]\n')
+            _write(
+                head / "pyproject.toml",
+                '[tool.ruff]\ninclude = ["src/pkg/*.py"]\n\n[tool.ruff.lint]\nselect = ["E", "F"]\n',
+            )
             _write(
                 base / ".github/workflows/validation.yml",
                 "on:\n  pull_request:\n    paths:\n      - 'src/**'\n      - 'tests/**'\njobs:\n  test:\n    steps:\n      - name: Tests\n",
@@ -353,7 +393,9 @@ files = ["src", "tests"]
                 "on:\n  pull_request:\n    paths:\n      - 'docs/**'\njobs:\n  test:\n    steps:\n      - name: Tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertTrue(any("ruff.include_narrowed:src/pkg/*.py" in item for item in introduced))
@@ -375,7 +417,9 @@ files = ["src", "tests"]
                 "on:\n  pull_request:\n    # paths: ['src/**', 'tests/**']\n    paths: ['docs/**']\njobs:\n  test:\n    steps:\n      - name: Tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertTrue(any("workflow.paths_removed:validation.yml:src/**" in item for item in introduced))
@@ -395,7 +439,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: echo python -m mypy src scripts tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -415,7 +461,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests || true\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -435,7 +483,9 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: if false; then python -m mypy src scripts tests; fi\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
@@ -449,7 +499,9 @@ files = ["src", "tests"]
             _write(base / "src/demo/api.py", "def _helper(value):\n    return value + 1\n")
             _write(head / "src/demo/api.py", "def helper(value):\n    return value + 1\n")
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         metric = delta["publicized_private_helper_renames"]
         self.assertEqual(metric["status"], "MEASURED")
@@ -502,7 +554,9 @@ files = ["src", "scripts", "tests"]
             _write(base / "pyproject.toml", text)
             _write(head / "pyproject.toml", text + "\n[tool.ruff]\nline-length = 100\n")
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack
+            )
 
         self.assertEqual(delta["gate_scope_or_threshold_weakening"]["introduced"], [])
 
@@ -560,10 +614,25 @@ def _pack() -> dict:
             "publicized_private_helper_renames",
         ],
         "detector_policies": {
-            "tests_private_production_internals": {"required": True, "blocking": True, "fail_on_unknown": True, "thresholds": {}},
+            "tests_private_production_internals": {
+                "required": True,
+                "blocking": True,
+                "fail_on_unknown": True,
+                "thresholds": {},
+            },
             "import_cycles": {"required": True, "blocking": True, "fail_on_unknown": True, "thresholds": {}},
-            "gate_scope_or_threshold_weakening": {"required": True, "blocking": True, "fail_on_unknown": True, "thresholds": {}},
-            "publicized_private_helper_renames": {"required": True, "blocking": True, "fail_on_unknown": True, "thresholds": {}},
+            "gate_scope_or_threshold_weakening": {
+                "required": True,
+                "blocking": True,
+                "fail_on_unknown": True,
+                "thresholds": {},
+            },
+            "publicized_private_helper_renames": {
+                "required": True,
+                "blocking": True,
+                "fail_on_unknown": True,
+                "thresholds": {},
+            },
         },
         "gate_contract": {
             "required_files": ["pyproject.toml", ".github/workflows"],

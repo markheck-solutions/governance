@@ -229,8 +229,7 @@ class ArchitectureGateTests(unittest.TestCase):
                 "import tests.leak\n"
                 "import importlib\n"
                 "importlib.import_module('src.runtime')\n"
-                "class Oversized:\n"
-                + "    x = 1\n" * 10,
+                "class Oversized:\n" + "    x = 1\n" * 10,
                 encoding="utf-8",
             )
 
@@ -299,7 +298,11 @@ class ArchitectureGateTests(unittest.TestCase):
 
             with mock.patch(
                 "governance_eval.architecture_gate._architecture_behavior_fixtures",
-                return_value={"status": "FAIL", "fixtures": [{"name": "theater", "status": "FAIL"}], "errors": ["fixture failed"]},
+                return_value={
+                    "status": "FAIL",
+                    "fixtures": [{"name": "theater", "status": "FAIL"}],
+                    "errors": ["fixture failed"],
+                },
             ):
                 result, code = run_architecture_gate(
                     repo / ".github/governance/supportability.yml",
@@ -377,22 +380,28 @@ def _config_yaml(standard_hash: str, mode: str) -> str:
   name: supportability-standard
   source: docs/reference/supportability-standard.md
   hash: "{standard_hash}"
+execution:
+  adapter: python
+  setup_commands:
+    - python -m pip install .[governance]
+  max_commands: 16
 required_gates:
   lint:
-    - python -c pass
+    - python -m ruff check src tests
   format_check:
-    - python -c pass
+    - python -m ruff format --check src tests
   typecheck:
-    - python -c pass
+    - python -m mypy src tests
   complexity:
-    - python -c pass
+    - python -m ruff check --select C901 src tests
   architecture:
-    - python -c pass
+    - python -m governance_eval architecture-gate --config supportability.yml
   tests:
-    - python -c pass
+    - python -m unittest discover -s tests
   compile_or_build:
-    - python -c pass
-  package_audit: []
+    - python -m build
+  package_audit:
+    - python -m pip check
   sql_supportability: auto
 coverage:
   changed_files: required

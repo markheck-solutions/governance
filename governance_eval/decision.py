@@ -12,8 +12,7 @@ def decide(case: dict, evidence: list[DetectorEvidence]) -> FinalDecision:
             case_id=case["id"],
             decision=Decision.BLOCK_TECHNICAL,
             reasons=tuple(
-                f"evidence case mismatch: {item.evidence_id} belongs to {item.case_id}"
-                for item in wrong_case_evidence
+                f"evidence case mismatch: {item.evidence_id} belongs to {item.case_id}" for item in wrong_case_evidence
             ),
             evidence_refs=tuple(item.evidence_id for item in evidence),
             fail_closed=True,

@@ -1,6 +1,7 @@
 {
   "schema_version": "1.1",
   "id": "spaghetti-v1",
+  "adapter": "python",
   "repository_url": "https://github.com/markheck-solutions/Spaghetti.git",
   "repository_identity": {
     "canonical_url": "https://github.com/markheck-solutions/Spaghetti.git",

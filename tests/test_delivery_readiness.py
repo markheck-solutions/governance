@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import unittest
 from subprocess import CompletedProcess
@@ -24,6 +25,75 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertEqual(result["github_review_state"], "CLEAN")
         self.assertEqual(result["unresolved_p0_count"], 0)
         self.assertEqual(result["final_review_commit"], sha)
+
+    def test_unstructured_codex_final_review_does_not_satisfy_gate(self) -> None:
+        sha = "a" * 40
+        narrative = _clean_review(sha)
+        narrative["body"] = f"Reviewed commit {sha}. No issues."
+
+        result = evaluate_readiness(_payload(sha, reviews=[narrative]))
+
+        self.assertFalse(result["ready"])
+        self.assertNotEqual(result["review_gate"], "GITHUB_CODEX_FINAL_REVIEW")
+
+    def test_live_payload_fetches_all_review_and_comment_pages(self) -> None:
+        sha = "a" * 40
+        pr = {
+            "baseRefOid": "b" * 40,
+            "commits": [{"committedDate": "2026-06-25T10:00:00Z"}],
+            "statusCheckRollup": [],
+            "headRefOid": sha,
+            "isDraft": False,
+            "mergeStateStatus": "CLEAN",
+            "state": "OPEN",
+            "url": "https://github.com/example/repo/pull/1",
+        }
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+            calls.append(args)
+            if "pr" in args:
+                output = pr
+            else:
+                output = [[], []]
+            return CompletedProcess(args=args, returncode=0, stdout=json.dumps(output), stderr="")
+
+        with patch("governance_eval.delivery_readiness.subprocess.run", side_effect=fake_run):
+            with patch("governance_eval.delivery_readiness._load_review_threads", return_value=[]):
+                delivery_readiness.load_github_payload("example/repo", 1)
+
+        paginated = [args for args in calls if "--paginate" in args and "--slurp" in args]
+        self.assertEqual(len(paginated), 2)
+
+    def test_inline_review_thread_fetches_comments_after_first_hundred(self) -> None:
+        node = {
+            "id": "thread-1",
+            "comments": {
+                "nodes": [{"body": f"comment-{index}"} for index in range(100)],
+                "pageInfo": {"hasNextPage": True, "endCursor": "cursor-100"},
+            },
+        }
+        last_page = {
+            "data": {
+                "node": {
+                    "id": "thread-1",
+                    "comments": {
+                        "nodes": [{"body": "P1: late blocking finding"}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": "cursor-101"},
+                    },
+                }
+            }
+        }
+
+        with patch("governance_eval.delivery_readiness._load_thread_comment_page", return_value=last_page):
+            complete = delivery_readiness._complete_review_thread(node)
+
+        self.assertEqual(len(complete["comments"]["nodes"]), 101)
+        self.assertIn("late blocking finding", complete["comments"]["nodes"][-1]["body"])
+
+        with patch("governance_eval.delivery_readiness._load_thread_comment_page", return_value={}):
+            with self.assertRaises(RuntimeError):
+                delivery_readiness._complete_review_thread(node)
 
     def test_blocks_stale_review_unresolved_p1_and_failed_workflow(self) -> None:
         sha = "b" * 40
@@ -134,7 +204,9 @@ class DeliveryReadinessTests(unittest.TestCase):
             sha,
             reviews=[
                 _clean_review(sha, submitted_at="2026-06-25T10:05:00Z"),
-                _blocking_review(sha, submitted_at="2026-06-25T10:06:00Z", body="severity: P1 benchmark evidence missing"),
+                _blocking_review(
+                    sha, submitted_at="2026-06-25T10:06:00Z", body="severity: P1 benchmark evidence missing"
+                ),
             ],
         )
 
@@ -317,7 +389,9 @@ class DeliveryReadinessTests(unittest.TestCase):
 
     def test_green_workflow_but_benchmark_fail_blocks(self) -> None:
         sha = "7" * 40
-        payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=_benchmark(phase1_decision="BENCHMARK_FAIL"))
+        payload = _payload(
+            sha, reviews=[_clean_review(sha)], benchmark_evidence=_benchmark(phase1_decision="BENCHMARK_FAIL")
+        )
 
         result = evaluate_readiness(payload)
 
@@ -359,7 +433,9 @@ class DeliveryReadinessTests(unittest.TestCase):
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("cases[0].title must match governed manifest" in error for error in result["benchmark_evidence_errors"]))
+        self.assertTrue(
+            any("cases[0].title must match governed manifest" in error for error in result["benchmark_evidence_errors"])
+        )
 
     def test_green_workflow_but_truncated_manifest_case_list_blocks(self) -> None:
         sha = "7f" * 20
@@ -372,7 +448,12 @@ class DeliveryReadinessTests(unittest.TestCase):
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("benchmark cases must match governed manifest ids" in error for error in result["benchmark_evidence_errors"]))
+        self.assertTrue(
+            any(
+                "benchmark cases must match governed manifest ids" in error
+                for error in result["benchmark_evidence_errors"]
+            )
+        )
 
     def test_green_workflow_but_missing_stability_metrics_blocks(self) -> None:
         sha = "7c" * 20
@@ -384,7 +465,9 @@ class DeliveryReadinessTests(unittest.TestCase):
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("deterministic_flake_rate missing" in error for error in result["benchmark_evidence_errors"]))
+        self.assertTrue(
+            any("deterministic_flake_rate missing" in error for error in result["benchmark_evidence_errors"])
+        )
 
     def test_green_workflow_but_artifact_content_hash_mismatch_blocks(self) -> None:
         sha = "7d" * 20
@@ -395,7 +478,9 @@ class DeliveryReadinessTests(unittest.TestCase):
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("artifact_content_hash does not match" in error for error in result["benchmark_evidence_errors"]))
+        self.assertTrue(
+            any("artifact_content_hash does not match" in error for error in result["benchmark_evidence_errors"])
+        )
 
     def test_green_workflow_but_missing_phase1_decision_blocks(self) -> None:
         sha = "8" * 40
@@ -453,7 +538,10 @@ class DeliveryReadinessTests(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertTrue(
-            any("governance_evaluator_git_sha must match latest head" in error for error in result["benchmark_evidence_errors"])
+            any(
+                "governance_evaluator_git_sha must match latest head" in error
+                for error in result["benchmark_evidence_errors"]
+            )
         )
 
     def test_github_context_requires_artifact_binding_when_digest_required(self) -> None:
@@ -481,7 +569,9 @@ class DeliveryReadinessTests(unittest.TestCase):
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("workflow_head_sha does not match" in error for error in result["benchmark_evidence_errors"]))
+        self.assertTrue(
+            any("workflow_head_sha does not match" in error for error in result["benchmark_evidence_errors"])
+        )
         self.assertTrue(any("artifact_digest does not match" in error for error in result["benchmark_evidence_errors"]))
 
     def test_github_artifact_binding_must_match_benchmark_json_content_hash(self) -> None:
@@ -494,7 +584,9 @@ class DeliveryReadinessTests(unittest.TestCase):
         result = evaluate_readiness(payload)
 
         self.assertFalse(result["ready"])
-        self.assertTrue(any("evidence content hash does not match" in error for error in result["benchmark_evidence_errors"]))
+        self.assertTrue(
+            any("evidence content hash does not match" in error for error in result["benchmark_evidence_errors"])
+        )
 
     def test_green_workflow_but_missing_case_detector_evidence_blocks(self) -> None:
         sha = "ag" * 20
@@ -640,10 +732,14 @@ class DeliveryReadinessTests(unittest.TestCase):
                             "reviewThreads": {
                                 "nodes": [
                                     {
+                                        "id": "thread-a",
                                         "isResolved": True,
                                         "path": "a.py",
                                         "line": 1,
-                                        "comments": {"nodes": [{"body": "severity: P1 fixed"}]},
+                                        "comments": {
+                                            "nodes": [{"body": "severity: P1 fixed"}],
+                                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                        },
                                     }
                                 ],
                                 "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
@@ -659,10 +755,14 @@ class DeliveryReadinessTests(unittest.TestCase):
                             "reviewThreads": {
                                 "nodes": [
                                     {
+                                        "id": "thread-b",
                                         "isResolved": False,
                                         "path": "b.py",
                                         "line": 2,
-                                        "comments": {"nodes": [{"body": "severity: P2 still open"}]},
+                                        "comments": {
+                                            "nodes": [{"body": "severity: P2 still open"}],
+                                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                        },
                                     }
                                 ],
                                 "pageInfo": {"hasNextPage": False, "endCursor": None},
@@ -745,7 +845,9 @@ def _payload(
         "workflowContexts": workflow_contexts
         if workflow_contexts is not None
         else [{"name": "Phase 1 shadow run", "workflowName": "Governance Shadow Benchmark", "conclusion": "SUCCESS"}],
-        "benchmarkEvidence": benchmark_evidence if benchmark_evidence is not None else _benchmark(evaluator_sha=head_sha),
+        "benchmarkEvidence": benchmark_evidence
+        if benchmark_evidence is not None
+        else _benchmark(evaluator_sha=head_sha),
     }
     if fallback_quorum is not None:
         payload["fallbackQuorum"] = fallback_quorum
@@ -754,12 +856,25 @@ def _payload(
 
 
 def _clean_review(head_sha: str, submitted_at: str = "2026-06-25T10:05:00Z") -> dict:
+    evidence = {
+        "schema_version": "governance-review-evidence.v1",
+        "reviewed_commit_sha": head_sha,
+        "verdict": "clean",
+        "open_findings": [],
+    }
     return {
         "state": "COMMENTED",
         "submittedAt": submitted_at,
         "commitOid": head_sha,
         "author": "chatgpt-codex-connector",
-        "body": f"Reviewed commit {head_sha[:10]}. Clean.",
+        "body": "\n".join(
+            [
+                f"Reviewed commit {head_sha[:10]}. Clean.",
+                "<!-- governance-review-evidence:v1",
+                json.dumps(evidence, separators=(",", ":")),
+                "-->",
+            ]
+        ),
     }
 
 
@@ -816,16 +931,19 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS", evaluator_sha: str = "6"
         "acceptance_errors": [],
         "artifact_content_hash": "",
         "target_lock": {
+            "target_id": "example-v1",
             "repository_url": "https://github.com/example/repo.git",
-            "pull_request": 1,
-            "base_sha": "1" * 40,
-            "head_sha": "2" * 40,
-            "merge_commit_sha": "3" * 40,
-            "approved_oracle_sha": "4" * 40,
-            "observed_main_sha": "5" * 40,
             "generated_at": "2026-06-25T10:00:00Z",
             "evidence_source": "unit test",
+            "revisions": {
+                "base_sha": "1" * 40,
+                "head_sha": "2" * 40,
+                "merge_sha": "3" * 40,
+            },
+            "metadata": {"pull_request": 1},
         },
+        "target_locks": [],
+        "registered_target_evaluations": None,
         "metrics": {
             "case_count": len(cases),
             "critical_defect_recall": 1.0,
@@ -843,6 +961,7 @@ def _benchmark(phase1_decision: str = "BENCHMARK_PASS", evaluator_sha: str = "6"
         },
         "cases": cases,
     }
+    benchmark["target_locks"] = [copy.deepcopy(benchmark["target_lock"])]
     stable_metrics = dict(benchmark["metrics"])
     stable_metrics["execution_duration_seconds"] = 0
     benchmark["deterministic_evidence_hash"] = sha256_json(

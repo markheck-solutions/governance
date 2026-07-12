@@ -1,0 +1,43 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "workflow_repository",
+        "workflow_sha",
+        "evaluator_tree_hash",
+        "target_pack_path",
+        "target_pack_hash",
+        "target_repository_url",
+        "base_sha",
+        "head_sha",
+        "merge_sha",
+        "revision_mode",
+        "enforcement_mode",
+        "target_pr_number",
+        "adapter",
+        "setup_commands",
+        "matrix",
+        "plan_hash"
+    ],
+    "properties": {
+        "schema_version": {"const": "1.0"},
+        "workflow_repository": {"type": "string", "minLength": 1},
+        "workflow_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "evaluator_tree_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "target_pack_path": {"type": "string", "minLength": 1},
+        "target_pack_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "target_repository_url": {"type": "string", "minLength": 1},
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "merge_sha": {"type": ["string", "null"]},
+        "revision_mode": {"enum": ["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"]},
+        "enforcement_mode": {"enum": ["SHADOW", "BLOCKING"]},
+        "target_pr_number": {"type": ["integer", "null"]},
+        "adapter": {"type": "string"},
+        "setup_commands": {"type": "array", "items": {"type": "string"}},
+        "matrix": {"type": "array", "items": {"type": "object"}},
+        "plan_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "additionalProperties": false
+}

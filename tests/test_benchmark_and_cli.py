@@ -24,6 +24,7 @@ class BenchmarkCliTests(unittest.TestCase):
 
     def test_benchmark_meets_phase1_acceptance_metrics(self) -> None:
         result = run_benchmark(self.root, repeat=3)
+        self.assertNotIn("generalization_evidence", result)
         self.assertEqual(result["phase1_decision"], "BENCHMARK_PASS")
         self.assertEqual(result["acceptance_errors"], [])
         self.assertEqual(result["metrics"]["critical_defect_recall"], 1.0)
@@ -36,6 +37,31 @@ class BenchmarkCliTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["deterministic_flake_rate"], 0.0)
         validate_named("benchmark_run_result", result, self.root)
         validate_benchmark_result(result, self.root)
+
+    def test_verify_has_no_model_or_holdout_dependency(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "governance_eval", "verify", "--help"],
+            cwd=self.root,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+        help_text = completed.stdout.lower()
+        for forbidden in ("sol", "holdout", "model-evidence", "generalization"):
+            self.assertNotIn(forbidden, help_text)
+
+        for removed_schema in ("model_evidence.schema.json", "holdout_manifest.schema.json"):
+            self.assertFalse((self.root / "schemas" / "v1" / removed_schema).exists())
+
+        removed_flag = "--" + "hold" + "out-manifest"
+        rejected = subprocess.run(
+            [sys.executable, "-m", "governance_eval", "verify", removed_flag, "unused.json"],
+            cwd=self.root,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("unrecognized arguments", rejected.stderr)
 
     def test_benchmark_writes_schema_valid_json_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -65,7 +91,8 @@ class BenchmarkCliTests(unittest.TestCase):
 
     def test_nested_benchmark_result_validation_rejects_bad_lock_sha(self) -> None:
         result = run_benchmark(self.root, repeat=1)
-        result["target_lock"]["base_sha"] = "not-a-sha"
+        result["target_lock"]["revisions"]["base_sha"] = "not-a-sha"
+        result["target_locks"][0]["revisions"]["base_sha"] = "not-a-sha"
         with self.assertRaises(SchemaValidationError):
             validate_benchmark_result(result, self.root)
 

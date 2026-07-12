@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "required": ["standard", "required_gates", "coverage", "ai_review", "receipt", "architecture_policy"],
+  "required": ["standard", "execution", "required_gates", "coverage", "ai_review", "receipt", "architecture_policy"],
   "properties": {
     "standard": {
       "type": "object",
@@ -9,6 +9,18 @@
         "name": {"type": "string", "minLength": 1},
         "source": {"type": "string", "minLength": 1},
         "hash": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["adapter", "setup_commands", "max_commands"],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "enum": ["raw", "python", "node", "dotnet", "go", "rust", "java", "powershell"]
+        },
+        "setup_commands": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "max_commands": {"type": "integer", "minimum": 1, "maximum": 32}
       }
     },
     "required_gates": {
@@ -21,6 +33,7 @@
         "architecture",
         "tests",
         "compile_or_build",
+        "package_audit",
         "sql_supportability"
       ]
     },
@@ -40,7 +53,18 @@
         "latest_head_required",
         "unresolved_p0_p1_p2_blocks",
         "reviewer_login_patterns"
-      ]
+      ],
+      "properties": {
+        "copilot_required": {"const": true},
+        "latest_head_required": {"const": true},
+        "unresolved_p0_p1_p2_blocks": {"const": true},
+        "reviewer_login_patterns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1, "pattern": "^[^*?]+$"}
+        }
+      },
+      "additionalProperties": false
     },
     "receipt": {
       "type": "object",

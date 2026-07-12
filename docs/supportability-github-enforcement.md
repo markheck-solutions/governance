@@ -131,7 +131,7 @@ When the review is clean, end the response with this hidden evidence block using
 When the review is blocked, end with the same hidden evidence block using verdict `blocked` and list each open finding with `severity`, `title`, and `path`.
 ```
 
-The reusable gate prefers the hidden evidence block. For old pinned adopters, the legacy `reviewed commit <sha>. No issues found.` style remains accepted as fallback evidence. The JSON artifact records `review_status.structured_evidence_present`, `review_status.structured_evidence_valid`, `review_status.reviewed_commit_sha`, `review_status.verdict`, `review_status.open_finding_count`, and `review_request.prompt`.
+The reusable gate requires the hidden evidence block from an exact approved GitHub bot identity. Free-text review summaries, human accounts with similar names, stale commit references, and malformed blocks fail closed. The JSON artifact records `review_status.structured_evidence_present`, `review_status.structured_evidence_valid`, `review_status.reviewed_commit_sha`, `review_status.verdict`, `review_status.open_finding_count`, and `review_request.prompt`.
 
 Config changes are protected. A PR that weakens `.github/governance/supportability.yml` returns RED. Weakening includes changing away from `block_all`, removing governed roots, narrowing runtime production globs, broadening non-runtime globs, narrowing vague-name controls, broadening allowed dependencies, narrowing forbidden dependencies, increasing size limits, or adding/extending `known_debt`.
 

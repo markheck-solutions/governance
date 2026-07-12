@@ -3,209 +3,246 @@ name: Governance Target Evaluation
 on:
   workflow_call:
     inputs:
-      target-repository-url:
-        required: true
-        type: string
-      target-base-sha:
-        required: true
-        type: string
-      target-head-sha:
-        required: true
-        type: string
-      target-merge-sha:
-        required: false
-        type: string
-        default: ""
-      target-pack-path:
-        required: true
-        type: string
-      governance-ref:
-        required: true
-        type: string
-      revision-mode:
-        required: true
-        type: string
-      target-pr-number:
-        required: false
-        type: string
-        default: ""
-      artifact-name:
-        required: false
-        type: string
-        default: governance-target-evaluation
+      target-base-sha: {required: true, type: string}
+      target-head-sha: {required: true, type: string}
+      target-merge-sha: {required: false, type: string, default: ""}
+      target-pack-path: {required: true, type: string}
+      revision-mode: {required: true, type: string}
+      enforcement-mode: {required: false, type: string, default: SHADOW}
+      target-pr-number: {required: false, type: string, default: ""}
+      artifact-name: {required: false, type: string, default: governance-target-evaluation}
+    outputs:
+      decision:
+        value: ${{ jobs.judge.outputs.decision }}
+      artifact-id:
+        value: ${{ jobs.judge.outputs.artifact-id }}
+      artifact-digest:
+        value: ${{ jobs.judge.outputs.artifact-digest }}
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
-  evaluate:
-    name: Non-blocking target shadow evaluation
+  plan:
+    name: Trusted target plan
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      setup-commands: ${{ steps.matrix.outputs.setup_commands }}
     env:
-      TARGET_REPOSITORY_URL: ${{ inputs.target-repository-url }}
       TARGET_BASE_SHA: ${{ inputs.target-base-sha }}
       TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
       TARGET_MERGE_SHA: ${{ inputs.target-merge-sha }}
       TARGET_PACK_PATH: ${{ inputs.target-pack-path }}
-      GOVERNANCE_CHECKOUT_REF: ${{ inputs.governance-ref }}
       REVISION_MODE: ${{ inputs.revision-mode }}
+      ENFORCEMENT_MODE: ${{ inputs.enforcement-mode }}
       TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
-      ARTIFACT_NAME: ${{ inputs.artifact-name }}
     steps:
-      - name: Checkout governance evaluator
+      - name: Checkout trusted evaluator from reusable workflow identity
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          repository: markheck-solutions/governance
-          ref: ${{ inputs.governance-ref }}
-          path: governance
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Validate workflow inputs
+      - name: Bind candidate PR to exact revisions
+        if: ${{ inputs.revision-mode == 'CANDIDATE_DYNAMIC' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           python - <<'PY'
-          import os
-          import re
-          import sys
-
-          pack = os.environ["TARGET_PACK_PATH"]
-          sha_re = re.compile(r"^[0-9a-f]{40}$")
-          pack_re = re.compile(r"^[A-Za-z0-9_./-]+\.json$")
-          artifact_re = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
-          mode = os.environ["REVISION_MODE"]
-          if mode not in {"HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"}:
-              print("Invalid revision mode", file=sys.stderr)
-              raise SystemExit(64)
-          if not pack_re.fullmatch(pack) or ".." in pack.split("/"):
-              print("Invalid target pack path", file=sys.stderr)
-              raise SystemExit(64)
-          if not sha_re.fullmatch(os.environ["TARGET_BASE_SHA"]):
-              print("Invalid target base SHA", file=sys.stderr)
-              raise SystemExit(64)
-          if not sha_re.fullmatch(os.environ["TARGET_HEAD_SHA"]):
-              print("Invalid target head SHA", file=sys.stderr)
-              raise SystemExit(64)
-          merge_sha = os.environ.get("TARGET_MERGE_SHA", "")
-          if merge_sha and not sha_re.fullmatch(merge_sha):
-              print("Invalid target merge SHA", file=sys.stderr)
-              raise SystemExit(64)
-          if not sha_re.fullmatch(os.environ["GOVERNANCE_CHECKOUT_REF"]):
-              print("Invalid governance ref", file=sys.stderr)
-              raise SystemExit(64)
-          if not artifact_re.fullmatch(os.environ["ARTIFACT_NAME"]):
-              print("Invalid artifact name", file=sys.stderr)
-              raise SystemExit(64)
-          pr_number = os.environ.get("TARGET_PR_NUMBER", "")
-          if pr_number and not re.fullmatch(r"[1-9][0-9]{0,9}", pr_number):
-              print("Invalid target PR number", file=sys.stderr)
-              raise SystemExit(64)
+          import json, os, re, subprocess
+          number = os.environ["TARGET_PR_NUMBER"]
+          if not re.fullmatch(r"[1-9][0-9]{0,9}", number):
+              raise SystemExit("invalid target PR number")
+          pr = json.loads(subprocess.check_output(["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{number}"], text=True))
+          if pr["base"]["sha"] != os.environ["TARGET_BASE_SHA"] or pr["head"]["sha"] != os.environ["TARGET_HEAD_SHA"]:
+              raise SystemExit("target PR revisions do not match requested base/head")
           PY
-      - name: Validate governance-owned target pack
+      - name: Create target execution plan
         shell: bash
         run: |
-          cd governance
-          python -m governance_eval validate-target-request \
+          mkdir -p "$RUNNER_TEMP/target-plan"
+          args=(python -m governance_eval target-workflow plan \
             --pack "$TARGET_PACK_PATH" \
-            --repository-url "$TARGET_REPOSITORY_URL" \
+            --repository-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
             --base-sha "$TARGET_BASE_SHA" \
             --head-sha "$TARGET_HEAD_SHA" \
             --merge-sha "$TARGET_MERGE_SHA" \
-            --revision-mode "$REVISION_MODE"
-      - name: Run target evaluation
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          cd governance
-          args=(
-            python -m governance_eval evaluate-target
-            --pack "$TARGET_PACK_PATH"
-            --base-sha "$TARGET_BASE_SHA"
-            --head-sha "$TARGET_HEAD_SHA"
-            --merge-sha "$TARGET_MERGE_SHA"
-            --repository-url "$TARGET_REPOSITORY_URL"
-            --revision-mode "$REVISION_MODE"
-            --governance-owned-pack
-            --artifacts-dir artifacts/target
-          )
-          if [[ -n "$TARGET_PR_NUMBER" ]]; then
-            args+=(--target-pr-number "$TARGET_PR_NUMBER")
-          fi
+            --revision-mode "$REVISION_MODE" \
+            --enforcement-mode "$ENFORCEMENT_MODE" \
+            --workflow-repository "${{ job.workflow_repository }}" \
+            --workflow-sha "${{ job.workflow_sha }}" \
+            --output "$RUNNER_TEMP/target-plan/target-plan.json")
+          if [[ -n "$TARGET_PR_NUMBER" ]]; then args+=(--target-pr-number "$TARGET_PR_NUMBER"); fi
           "${args[@]}"
-      - name: Read target summary
-        id: target
-        if: always()
+          python - <<'PY'
+          import json, os, pathlib, shutil
+          bundle = pathlib.Path(os.environ["RUNNER_TEMP"]) / "target-plan"
+          plan = json.loads((bundle / "target-plan.json").read_text())
+          for item in plan["matrix"]:
+              source = pathlib.Path(item["reproducer"])
+              destination = bundle / item["reproducer"]
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source, destination)
+          PY
+      - name: Publish bounded target matrix
+        id: matrix
         shell: bash
         run: |
-          cd governance
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          from pathlib import Path
-
-          path = Path("artifacts/target/target-evaluation-latest.json")
-          if not path.exists():
-              print("decision=SHADOW_BLOCK_TECHNICAL")
-              print("case_count=0")
-              print("passed=0")
-              print("failed=0")
-              print("business=0")
-              print("unknown_required=0")
-              print("unknown_advisory=0")
-              print("revision_mode=UNKNOWN")
-              print("target_pr_number=")
-              print("errors=missing artifact")
-              print("content_hash=MISSING")
-              raise SystemExit(0)
-
-          data = json.loads(path.read_text(encoding="utf-8"))
-          counts = data["case_counts"]
-          print(f"decision={data['real_target_shadow_decision']}")
-          print(f"case_count={counts['behavior_case_count']}")
-          print(f"passed={counts['behavior_cases_passed']}")
-          print(f"failed={counts['behavior_cases_failed']}")
-          print(f"business={counts.get('behavior_cases_business_ambiguous', 0)}")
-          measurements = data.get("structural_measurements", {})
-          print(f"unknown_required={measurements.get('unknown_required_count', 0)}")
-          print(f"unknown_advisory={measurements.get('unknown_advisory_count', 0)}")
-          print(f"revision_mode={data.get('revision_mode', 'UNKNOWN')}")
-          print(f"target_pr_number={data.get('target_pr_number') or ''}")
-          print(f"errors={'; '.join(data['acceptance_errors'][:5])}")
-          print(f"content_hash={data['artifact_content_hash']}")
+          import json, os, pathlib
+          plan = json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "target-plan/target-plan.json").read_text())
+          print("matrix=" + json.dumps({"include": plan["matrix"]}, separators=(",", ":")))
+          print("setup_commands=" + json.dumps(plan["setup_commands"], separators=(",", ":")))
           PY
-      - name: Upload target JSON
-        id: upload
-        if: always()
+      - name: Upload trusted blind execution bundle
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: governance/artifacts/target/*.json
+          name: target-execution-plan
+          path: ${{ runner.temp }}/target-plan
           retention-days: 90
-      - name: Write job summary
-        if: always()
+
+  execute:
+    name: Untrusted target ${{ matrix.id }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    permissions:
+      contents: read
+    steps:
+      # target only; no evaluator checkout
+      - name: Checkout exact target revision
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ matrix.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Download trusted blind execution bundle
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: target-execution-plan
+          path: ${{ runner.temp }}/trusted
+      - name: Execute target without governance labels or decisions
+        shell: bash
+        env:
+          MATRIX_JSON: ${{ toJSON(matrix) }}
+          SETUP_JSON: ${{ needs.plan.outputs.setup-commands }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/raw"
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          matrix = json.loads(os.environ["MATRIX_JSON"])
+          image = "python@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf"
+          reproducer = pathlib.Path(os.environ["RUNNER_TEMP"]) / "trusted" / matrix["reproducer"]
+          container = f"governance-target-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}-{matrix['side']}"
+          create = ["docker", "create", "--name", container, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", "512m", "--cpus", "1", "-v", f"{os.environ['GITHUB_WORKSPACE']}:/target:ro", "-v", f"{reproducer}:/trusted/reproducer.py:ro", image, "sleep", "infinity"]
+          subprocess.run(create, check=True, capture_output=True, text=True)
+          subprocess.run(["docker", "start", container], check=True, capture_output=True, text=True)
+          setup = []
+          try:
+              for command in json.loads(os.environ["SETUP_JSON"]):
+                  run = subprocess.run(["docker", "exec", container, "sh", "-lc", command], text=True, capture_output=True)
+                  setup.append({"command": command, "exit_code": run.returncode, "stdout_hash": hashlib.sha256(run.stdout.encode()).hexdigest(), "stderr_hash": hashlib.sha256(run.stderr.encode()).hexdigest(), "timed_out": False})
+                  if run.returncode: break
+              subprocess.run(["docker", "network", "disconnect", "bridge", container], check=True, capture_output=True)
+              networks = subprocess.check_output(["docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container], text=True).strip()
+              if networks != "{}": raise RuntimeError("target observation container still has an attached network")
+              command = ["docker", "exec", container, "python", "/trusted/reproducer.py", "--target", "/target"]
+              if any(item["exit_code"] for item in setup): stdout, stderr, exit_code = "", "setup failed", 125
+              else:
+                  completed = subprocess.run(command, text=True, capture_output=True, timeout=matrix["timeout_seconds"])
+                  stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
+          finally:
+              subprocess.run(["docker", "rm", "-f", container], check=False, capture_output=True)
+          try: observed = json.loads(stdout) if stdout.strip() else {"stdout": ""}
+          except json.JSONDecodeError: observed = {"invalid_json_stdout": stdout}
+          result = {"id": matrix["id"], "case_id": matrix["case_id"], "side": matrix["side"], "sha": matrix["sha"], "command": " ".join(command), "exit_code": exit_code, "timed_out": False, "stdout_hash": hashlib.sha256(stdout.encode()).hexdigest(), "stderr_hash": hashlib.sha256(stderr.encode()).hexdigest(), "observed_result": observed, "setup_results": setup}
+          (pathlib.Path(os.environ["RUNNER_TEMP"]) / "raw/raw-result.json").write_text(json.dumps(result, sort_keys=True))
+          PY
+      - name: Upload raw untrusted observation
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: raw-${{ matrix.id }}
+          path: ${{ runner.temp }}/raw/raw-result.json
+          retention-days: 90
+
+  judge:
+    name: Governance target evaluation
+    needs: [plan, execute]
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      decision: ${{ steps.result.outputs.decision }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+    steps:
+      - name: Checkout fresh trusted evaluator
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: governance
+          persist-credentials: false
+      - name: Checkout trusted base source without execution
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ inputs.target-base-sha }}
+          path: target-base
+          persist-credentials: false
+      - name: Checkout trusted head source without execution
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ inputs.target-head-sha }}
+          path: target-head
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: target-execution-plan
+          path: ${{ runner.temp }}/trusted-plan
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          pattern: raw-*
+          path: ${{ runner.temp }}/raw
+      - name: Compute deterministic target decision in fresh judge
         shell: bash
         run: |
-          {
-            echo "## Governance Target Evaluation"
-            echo ""
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Governance commit SHA | \`${GOVERNANCE_CHECKOUT_REF}\` |"
-            echo "| Target repository | \`${TARGET_REPOSITORY_URL}\` |"
-            echo "| Target base SHA | \`${TARGET_BASE_SHA}\` |"
-            echo "| Target head SHA | \`${TARGET_HEAD_SHA}\` |"
-            echo "| Target PR number | \`${{ steps.target.outputs.target_pr_number }}\` |"
-            echo "| Revision mode | \`${{ steps.target.outputs.revision_mode }}\` |"
-            echo "| Shadow decision | \`${{ steps.target.outputs.decision }}\` |"
-            echo "| Enforcement mode | \`NON_BLOCKING\` |"
-            echo "| Behavior cases | \`${{ steps.target.outputs.passed }}/${{ steps.target.outputs.case_count }} passed; ${{ steps.target.outputs.failed }} failed; ${{ steps.target.outputs.business }} business ambiguous\` |"
-            echo "| Unknown required measurements | \`${{ steps.target.outputs.unknown_required }}\` |"
-            echo "| Unknown advisory measurements | \`${{ steps.target.outputs.unknown_advisory }}\` |"
-            echo "| Acceptance errors | \`${{ steps.target.outputs.errors }}\` |"
-            echo "| Artifact name | \`${ARTIFACT_NAME}\` |"
-            echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
-            echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
-            echo "| Artifact content hash | \`${{ steps.target.outputs.content_hash }}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          cd governance
+          python -m governance_eval target-workflow finalize \
+            --plan "$RUNNER_TEMP/trusted-plan/target-plan.json" \
+            --raw-dir "$RUNNER_TEMP/raw" \
+            --base-dir ../target-base \
+            --head-dir ../target-head \
+            --workflow-repository "${{ job.workflow_repository }}" \
+            --workflow-sha "${{ job.workflow_sha }}" \
+            --output-dir "$RUNNER_TEMP/evidence"
+      - name: Read deterministic decision
+        id: result
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib
+          result = json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "evidence/target-evaluation-latest.json").read_text())
+          print("decision=" + result["real_target_shadow_decision"])
+          PY
+      - name: Upload trusted target evidence
+        id: upload
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/evidence/*.json
+          retention-days: 90
+      - name: Enforce blocking mode
+        if: ${{ inputs.enforcement-mode == 'BLOCKING' && steps.result.outputs.decision != 'SHADOW_MERGE' }}
+        run: exit 1

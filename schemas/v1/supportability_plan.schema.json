@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "workflow_identity",
+    "target_identity",
+    "config_identity",
+    "execution",
+    "preflight",
+    "errors",
+    "plan_hash"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "workflow_identity": {
+      "type": "object",
+      "required": ["repository", "sha", "evaluator_tree_hash"]
+    },
+    "target_identity": {
+      "type": "object",
+      "required": ["repository_url", "pull_request_url", "base_sha", "head_sha", "head_tree_sha"]
+    },
+    "config_identity": {"type": "object", "required": ["path", "sha256"]},
+    "execution": {"type": "object", "required": ["adapter", "setup_commands", "matrix"]},
+    "preflight": {"type": "object"},
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "plan_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

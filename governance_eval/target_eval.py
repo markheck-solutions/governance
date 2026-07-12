@@ -29,7 +29,9 @@ from governance_eval.target_pack import (
 SHADOW_MERGE = "SHADOW_MERGE"
 SHADOW_BLOCK_TECHNICAL = "SHADOW_BLOCK_TECHNICAL"
 SHADOW_ASK_BUSINESS = "SHADOW_ASK_BUSINESS"
-NON_BLOCKING = "NON_BLOCKING"
+SHADOW = "SHADOW"
+BLOCKING = "BLOCKING"
+NON_BLOCKING = SHADOW
 GOVERNANCE_REPOSITORY_URL = "https://github.com/markheck-solutions/governance.git"
 
 
@@ -45,6 +47,9 @@ def evaluate_target(
     require_governance_owned_pack: bool = False,
     review_gate: str | None = None,
     github_review_state: str | None = None,
+    enforcement_mode: str = SHADOW,
+    cache_dir: Path | None = None,
+    offline: bool = False,
 ) -> dict[str, Any]:
     root = repo_root(Path(__file__).resolve())
     pack = load_target_pack(pack_path, root=root, require_governance_owned=require_governance_owned_pack)
@@ -54,12 +59,14 @@ def evaluate_target(
         pack = validate_target_request(pack_path, target_repository_url, base_sha, head_sha, merge_sha, mode, root=root)
     else:
         _validate_requested_target(pack, target_repository_url, base_sha, head_sha, merge_sha, mode)
+    if enforcement_mode not in {SHADOW, BLOCKING}:
+        raise ValueError(f"unsupported enforcement mode: {enforcement_mode}")
     started = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     validation: dict[str, Any] = {"status": "PASS", "mode": mode}
     with tempfile.TemporaryDirectory(prefix="governance-target-") as tmp:
         temp_root = Path(tmp)
-        base_dir = _checkout(target_repository_url, base_sha, temp_root / "base")
-        head_dir = _checkout(target_repository_url, head_sha, temp_root / "head")
+        base_dir = _checkout(target_repository_url, base_sha, temp_root / "base", cache_dir, offline)
+        head_dir = _checkout(target_repository_url, head_sha, temp_root / "head", cache_dir, offline)
         validation["base_commit_exists"] = _commit_exists(base_dir, base_sha)
         validation["head_commit_exists"] = _commit_exists(head_dir, head_sha)
         validation["candidate_pull_request_validation"] = _candidate_pull_request_validation(
@@ -107,7 +114,11 @@ def evaluate_target(
         validation,
         mode,
     )
-    decision = SHADOW_BLOCK_TECHNICAL if acceptance_errors else SHADOW_ASK_BUSINESS if business_ambiguities else SHADOW_MERGE
+    if enforcement_mode == BLOCKING:
+        acceptance_errors.append("BLOCKING target decisions require a trusted ephemeral workflow judge")
+    decision = (
+        SHADOW_BLOCK_TECHNICAL if acceptance_errors else SHADOW_ASK_BUSINESS if business_ambiguities else SHADOW_MERGE
+    )
     result: dict[str, Any] = {
         "schema_version": "1.1",
         "generated_at": started,
@@ -128,8 +139,11 @@ def evaluate_target(
         "runner_os": os.environ.get("RUNNER_OS", platform.system()),
         "python_version": platform.python_version(),
         "review_gate": review_gate or os.environ.get("GOVERNANCE_REVIEW_GATE") or "NOT_APPLICABLE",
-        "github_review_state": github_review_state or os.environ.get("GOVERNANCE_GITHUB_REVIEW_STATE") or "NOT_APPLICABLE",
-        "enforcement_mode": NON_BLOCKING,
+        "github_review_state": github_review_state
+        or os.environ.get("GOVERNANCE_GITHUB_REVIEW_STATE")
+        or "NOT_APPLICABLE",
+        "enforcement_mode": enforcement_mode,
+        "execution_identity": {"mode": "LOCAL_UNISOLATED", "certifiable": False},
         "real_target_shadow_decision": decision,
         "acceptance_errors": acceptance_errors,
         "business_ambiguities": business_ambiguities,
@@ -165,7 +179,9 @@ def evaluate_target(
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         name = f"target-evaluation-{pack['id']}-{started.replace(':', '').replace('-', '')}.json"
         (artifacts_dir / name).write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
-        (artifacts_dir / "target-evaluation-latest.json").write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+        (artifacts_dir / "target-evaluation-latest.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True), encoding="utf-8"
+        )
         result["artifact_path"] = str(artifacts_dir / name)
     return result
 
@@ -189,6 +205,8 @@ def _run_setup_commands(pack: dict[str, Any], target_dir: Path) -> list[dict[str
     for command in pack.get("setup_commands") or pack.get("build_setup_commands", []):
         if "<checkout>" in command:
             command = command.replace("<checkout>", str(target_dir))
+        if command == "python" or command.startswith("python "):
+            command = f'"{sys.executable}"{command[6:]}'
         try:
             completed = subprocess.run(
                 command,
@@ -243,13 +261,33 @@ def _normalize_transient_paths(value: Any) -> Any:
     return value
 
 
-def _checkout(repo_url: str, sha: str, path: Path) -> Path:
-    subprocess.run(["git", "clone", "--quiet", "--no-checkout", repo_url, str(path)], check=True)
+def _checkout(repo_url: str, sha: str, path: Path, cache_dir: Path | None = None, offline: bool = False) -> Path:
+    source = repo_url
+    if cache_dir is not None:
+        mirror = cache_dir / f"{sha256_text(repo_url)}.git"
+        if not mirror.exists():
+            if offline:
+                raise RuntimeError(f"offline target cache missing for {repo_url}")
+            mirror.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "clone", "--quiet", "--mirror", repo_url, str(mirror)], check=True)
+        _validate_target_mirror(mirror, repo_url, sha)
+        source = str(mirror)
+    elif offline:
+        raise RuntimeError("offline target evaluation requires --cache-dir")
+    subprocess.run(["git", "clone", "--quiet", "--no-checkout", source, str(path)], check=True)
     subprocess.run(["git", "checkout", "--quiet", sha], cwd=path, check=True)
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip()
     if actual != sha:
         raise RuntimeError(f"checkout integrity failure: expected {sha}, got {actual}")
     return path
+
+
+def _validate_target_mirror(mirror: Path, repo_url: str, sha: str) -> None:
+    origin = subprocess.check_output(["git", "config", "--get", "remote.origin.url"], cwd=mirror, text=True).strip()
+    if origin != repo_url:
+        raise RuntimeError(f"target cache repository mismatch: expected {repo_url}, got {origin}")
+    if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=mirror, capture_output=True).returncode:
+        raise RuntimeError(f"target cache does not contain commit {sha}")
 
 
 def _commit_exists(repo_dir: Path, sha: str) -> bool:
@@ -353,7 +391,9 @@ def _run_behavior_case(
     head = _execute_case(root, pack, case, head_dir, head_sha, policy)
     expected = case.get("expected_base_result") or base["observed_result"]
     status = _behavior_status(policy, base, head, expected)
-    source_validation = "PASS" if base["source_hash_validation"] == "PASS" and head["source_hash_validation"] == "PASS" else "FAIL"
+    source_validation = (
+        "PASS" if base["source_hash_validation"] == "PASS" and head["source_hash_validation"] == "PASS" else "FAIL"
+    )
     return {
         "case_id": case["id"],
         "status": status,
@@ -425,8 +465,8 @@ def _execute_case(
         exit_code = completed.returncode
     except subprocess.TimeoutExpired as exc:
         timed_out = True
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
+        stdout = _timeout_text(exc.stdout)
+        stderr = _timeout_text(exc.stderr)
         exit_code = 124
     try:
         observed = json.loads(stdout) if stdout.strip() else {"stdout": ""}
@@ -465,27 +505,29 @@ def _source_hash_validation(
     expected = case.get("expected_source_hashes", {}).get(sha)
     if not expected:
         return "FAIL" if behavior_policy == "PINNED_EXPECTED" and case.get("pull_request") is not None else "PASS"
-    for item in source_files:
-        expected_file = expected.get("files", {}).get(item["path"])
-        if not expected_file:
-            return "FAIL"
-        if item["file_sha256"] != expected_file.get("file_sha256"):
-            return "FAIL"
-        if item["git_blob_sha"] != expected_file.get("git_blob_sha"):
-            return "FAIL"
-    expected_symbols = expected.get("symbols", {})
-    for actual in source_symbols:
-        key = f"{actual['path']}::{actual['symbol']}"
-        expected_symbol = expected_symbols.get(key)
-        if not expected_symbol:
-            return "FAIL"
-        if actual["symbol_sha256"] != expected_symbol.get("symbol_sha256"):
-            return "FAIL"
-        if actual["line_start"] != expected_symbol.get("line_start"):
-            return "FAIL"
-        if actual["line_end"] != expected_symbol.get("line_end"):
-            return "FAIL"
-    return "PASS"
+    files_valid = all(_source_file_matches(item, expected.get("files", {})) for item in source_files)
+    symbols_valid = all(_source_symbol_matches(item, expected.get("symbols", {})) for item in source_symbols)
+    return "PASS" if files_valid and symbols_valid else "FAIL"
+
+
+def _timeout_text(value: bytes | str | None) -> str:
+    return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+
+
+def _source_file_matches(actual: dict[str, str], expected_files: dict[str, Any]) -> bool:
+    expected = expected_files.get(actual["path"])
+    return bool(
+        expected
+        and actual["file_sha256"] == expected.get("file_sha256")
+        and actual["git_blob_sha"] == expected.get("git_blob_sha")
+    )
+
+
+def _source_symbol_matches(actual: dict[str, Any], expected_symbols: dict[str, Any]) -> bool:
+    expected = expected_symbols.get(f"{actual['path']}::{actual['symbol']}")
+    return bool(
+        expected and all(actual[field] == expected.get(field) for field in ("symbol_sha256", "line_start", "line_end"))
+    )
 
 
 def _source_file_evidence(target_dir: Path, relative_paths: list[str], sha: str) -> list[dict[str, str]]:
@@ -579,47 +621,59 @@ def _target_acceptance_errors(
     required_behavior = [item for item in behavior if item.get("required_behavior_evidence", True)]
     if not required_behavior:
         errors.append(f"no applicable behavior cases for revision mode {revision_mode}")
-    if revision_validation.get("status") != "PASS":
-        errors.append("revision validation failed")
-    if not revision_validation.get("base_commit_exists") or not revision_validation.get("head_commit_exists"):
-        errors.append("target commit validation failed")
-    pr_validation = revision_validation.get("candidate_pull_request_validation") or {}
-    if pr_validation.get("status") == "FAIL":
-        errors.append(f"candidate pull request validation failed: {pr_validation.get('reason', '')}")
-    for side, results in setup_results.items():
-        for result in results:
-            if result["exit_code"] != 0:
-                errors.append(f"{side} setup failed: {result['command']}")
+    errors.extend(_revision_acceptance_errors(revision_validation))
+    errors.extend(
+        f"{side} setup failed: {result['command']}"
+        for side, results in setup_results.items()
+        for result in results
+        if result["exit_code"] != 0
+    )
     for item in behavior:
-        if not item.get("required_behavior_evidence", True):
-            continue
-        if item["provenance_classification"] == "FIXTURE_ONLY":
-            errors.append(f"{item['case_id']}: FIXTURE_ONLY provenance not accepted for required behavior")
-        if item["source_hash_validation"] != "PASS":
-            errors.append(f"{item['case_id']}: source hash validation failed")
-        if item["status"] == "BUSINESS_AMBIGUITY":
-            business.append(f"{item['case_id']}: deterministic behavior difference requires business review")
-        elif item["status"] != "PASS":
-            errors.append(f"{item['case_id']}: behavior evidence failed under {item['behavior_comparison_policy']}")
-    policies = _detector_policies(pack)
-    for name, policy in policies.items():
-        metric = delta.get(name)
-        if not isinstance(metric, dict):
-            if policy["required"] and policy["fail_on_unknown"]:
-                errors.append(f"{name}: required detector evidence missing")
-            continue
-        status = metric.get("status")
-        if status in {"UNKNOWN", "UNSUPPORTED"} and policy["required"] and policy["fail_on_unknown"]:
-            errors.append(f"{name}: required detector evidence {status}: {metric.get('reason', '')}")
-            continue
-        if status not in {"MEASURED", "UNKNOWN", "UNSUPPORTED"}:
-            if policy["required"] and policy["fail_on_unknown"]:
-                errors.append(f"{name}: malformed detector status {status!r}")
-            continue
-        introduced = metric.get("introduced") or []
-        if policy["blocking"] and introduced:
-            errors.append(f"{name}: new structural violation(s): {len(introduced)}")
+        item_errors, item_business = _behavior_acceptance(item)
+        errors.extend(item_errors)
+        business.extend(item_business)
+    for name, policy in _detector_policies(pack).items():
+        errors.extend(_structural_acceptance_errors(name, policy, delta.get(name)))
     return errors, business
+
+
+def _revision_acceptance_errors(validation: dict[str, Any]) -> list[str]:
+    errors = ["revision validation failed"] if validation.get("status") != "PASS" else []
+    if not validation.get("base_commit_exists") or not validation.get("head_commit_exists"):
+        errors.append("target commit validation failed")
+    pr = validation.get("candidate_pull_request_validation") or {}
+    if pr.get("status") == "FAIL":
+        errors.append(f"candidate pull request validation failed: {pr.get('reason', '')}")
+    return errors
+
+
+def _behavior_acceptance(item: dict[str, Any]) -> tuple[list[str], list[str]]:
+    if not item.get("required_behavior_evidence", True):
+        return [], []
+    errors: list[str] = []
+    business: list[str] = []
+    if item["provenance_classification"] == "FIXTURE_ONLY":
+        errors.append(f"{item['case_id']}: FIXTURE_ONLY provenance not accepted for required behavior")
+    if item["source_hash_validation"] != "PASS":
+        errors.append(f"{item['case_id']}: source hash validation failed")
+    if item["status"] == "BUSINESS_AMBIGUITY":
+        business.append(f"{item['case_id']}: deterministic behavior difference requires business review")
+    elif item["status"] != "PASS":
+        errors.append(f"{item['case_id']}: behavior evidence failed under {item['behavior_comparison_policy']}")
+    return errors, business
+
+
+def _structural_acceptance_errors(name: str, policy: dict[str, Any], metric: Any) -> list[str]:
+    fail_closed = policy["required"] and policy["fail_on_unknown"]
+    if not isinstance(metric, dict):
+        return [f"{name}: required detector evidence missing"] if fail_closed else []
+    status = metric.get("status")
+    if status in {"UNKNOWN", "UNSUPPORTED"}:
+        return [f"{name}: required detector evidence {status}: {metric.get('reason', '')}"] if fail_closed else []
+    if status != "MEASURED":
+        return [f"{name}: malformed detector status {status!r}"] if fail_closed else []
+    introduced = metric.get("introduced") or []
+    return [f"{name}: new structural violation(s): {len(introduced)}"] if policy["blocking"] and introduced else []
 
 
 def _detector_policies(pack: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -636,10 +690,10 @@ def _detector_policies(pack: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _structural_measurement_summary(delta: dict[str, Any]) -> dict[str, Any]:
-    unknown_required = []
-    unknown_advisory = []
-    unsupported_required = []
-    unsupported_advisory = []
+    unknown_required: list[dict[str, Any]] = []
+    unknown_advisory: list[dict[str, Any]] = []
+    unsupported_required: list[dict[str, Any]] = []
+    unsupported_advisory: list[dict[str, Any]] = []
     for name, metric in sorted(delta.items()):
         if not isinstance(metric, dict):
             continue

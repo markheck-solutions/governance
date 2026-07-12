@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import fnmatch
 import hashlib
 import json
 import os
@@ -22,6 +21,9 @@ from governance_eval.copilot_review_evidence import structured_review_errors
 from governance_eval.copilot_review_evidence import visible_review_text
 from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
+from governance_eval.receipt_validation import embedded_receipt_status_errors as _embedded_receipt_status_errors
+from governance_eval.receipt_validation import mapping as _mapping
+from governance_eval.receipt_validation import receipt_sha_errors as _receipt_sha_errors
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
 
@@ -34,8 +36,9 @@ REQUIRED_COMMAND_GATES = (
     "architecture",
     "tests",
     "compile_or_build",
+    "package_audit",
 )
-OPTIONAL_COMMAND_GATES = ("package_audit",)
+OPTIONAL_COMMAND_GATES: tuple[str, ...] = ()
 ALL_COMMAND_GATES = REQUIRED_COMMAND_GATES + OPTIONAL_COMMAND_GATES + ("sql_supportability",)
 STATUS_GREEN = "GREEN"
 STATUS_RED = "RED"
@@ -134,11 +137,32 @@ def validate_supportability_config(config: dict[str, Any]) -> list[str]:
     except SchemaValidationError as exc:
         errors.append(f"supportability config schema invalid: {exc}")
     errors.extend(_standard_errors(config.get("standard")))
+    errors.extend(_execution_errors(config.get("execution")))
     errors.extend(_required_gate_errors(config.get("required_gates")))
     errors.extend(_coverage_errors(config.get("coverage")))
     errors.extend(_ai_review_errors(config.get("ai_review")))
     errors.extend(_receipt_config_errors(config.get("receipt")))
     errors.extend(_architecture_policy_errors(config.get("architecture_policy")))
+    return errors
+
+
+def _execution_errors(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return ["execution must be an object"]
+    errors: list[str] = []
+    adapters = {"raw", "python", "node", "dotnet", "go", "rust", "java", "powershell"}
+    if value.get("adapter") not in adapters:
+        errors.append(f"execution.adapter must be one of {sorted(adapters)}")
+    setup_commands = value.get("setup_commands")
+    if (
+        not isinstance(setup_commands, list)
+        or len(setup_commands) > 8
+        or not all(isinstance(item, str) and item.strip() for item in setup_commands)
+    ):
+        errors.append("execution.setup_commands must be a list of at most 8 non-empty commands")
+    max_commands = value.get("max_commands")
+    if not isinstance(max_commands, int) or isinstance(max_commands, bool) or not 1 <= max_commands <= 32:
+        errors.append("execution.max_commands must be an integer from 1 through 32")
     return errors
 
 
@@ -176,14 +200,20 @@ def run_supportability_gate(
         command_results = _skipped_command_results(
             "revision inputs invalid or changed-file discovery failed; commands not executed without verifiable diff"
         )
+    if not command_results and command_runner is None:
+        errors.append(
+            "configured target commands require an isolated executor; plain local subprocess execution cannot produce GREEN"
+        )
+        command_results = _skipped_command_results("isolated executor unavailable; commands not executed")
     if not command_results and errors:
         command_results = _skipped_command_results("preflight supportability checks failed; commands not executed")
     if not command_results:
+        assert command_runner is not None
         command_results = _run_commands_with_revision_env(
             config,
             target_repo,
             sql_commands,
-            command_runner or _run_shell_command,
+            command_runner,
             base_sha,
             head_sha,
         )
@@ -227,7 +257,7 @@ def evaluate_copilot_review_gate(
     payload = copy.deepcopy(payload)
     payload["reviews"] = _normalized_reviews(payload.get("reviews") or [])
     payload["comments"] = _normalized_comments(payload.get("comments") or [])
-    review_config = config.get("ai_review") if isinstance(config.get("ai_review"), dict) else {}
+    review_config = _mapping(config.get("ai_review"))
     patterns = review_config.get("reviewer_login_patterns") or []
     errors.extend(_sha_errors("", head_sha))
     errors.extend(_copilot_review_errors(payload, head_sha, patterns))
@@ -279,7 +309,9 @@ def generate_delivery_receipt(
         "errors": ["architecture gate result missing"],
     }
     judge_status = _required_judge_status(gate_result, required_judges)
-    errors = _receipt_input_errors(gate_result, copilot_result, artifact_name, artifact_id, artifact_digest, architecture_result)
+    errors = _receipt_input_errors(
+        gate_result, copilot_result, artifact_name, artifact_id, artifact_digest, architecture_result
+    )
     errors.extend(_required_judge_errors(judge_status))
     if bootstrap_reason:
         errors.append(f"bootstrap receipt remains RED: {bootstrap_reason}")
@@ -418,7 +450,9 @@ def verify_delivery_receipt(
 ) -> dict[str, Any]:
     errors = _receipt_document_errors(receipt)
     if live_observations is not None:
-        errors.extend(_live_observation_errors(receipt, live_observations, allow_current_run_pending=allow_current_run_pending))
+        errors.extend(
+            _live_observation_errors(receipt, live_observations, allow_current_run_pending=allow_current_run_pending)
+        )
     result = {
         "schema_version": "1.0",
         "generated_at": _utc_now(),
@@ -438,17 +472,19 @@ def load_copilot_payload(repo: str, pr_number: int) -> dict[str, Any]:
             "--repo",
             repo,
             "--json",
-            "baseRefOid,headRefOid,reviews,comments,state,url",
+            "baseRefOid,headRefOid,state,url",
         ]
     )
     owner, name = repo.split("/", 1)
+    reviews = _gh_json_list(["api", f"repos/{owner}/{name}/pulls/{pr_number}/reviews?per_page=100"])
+    comments = _gh_json_list(["api", f"repos/{owner}/{name}/issues/{pr_number}/comments?per_page=100"])
     return {
         "url": pr.get("url"),
         "state": pr.get("state"),
         "baseRefOid": pr.get("baseRefOid"),
         "headRefOid": pr.get("headRefOid"),
-        "reviews": _normalized_reviews(pr.get("reviews") or []),
-        "comments": _normalized_comments(pr.get("comments") or []),
+        "reviews": _normalized_reviews(reviews),
+        "comments": _normalized_comments(comments),
         "reviewThreads": _load_review_threads(owner, name, pr_number),
     }
 
@@ -475,7 +511,9 @@ def load_live_receipt_observations(receipt: dict[str, Any]) -> dict[str, Any]:
 def _fresh_clone_merge_observation(errors: list[str], repository_url: str, merged_sha: str) -> bool | None:
     if not merged_sha:
         return None
-    return _safe_live("fresh clone contains merged_sha", errors, _fresh_clone_contains_commit, repository_url, merged_sha)
+    return _safe_live(
+        "fresh clone contains merged_sha", errors, _fresh_clone_contains_commit, repository_url, merged_sha
+    )
 
 
 def _live_pr_observation(errors: list[str], repo: str, pr_number: int | None) -> dict[str, Any]:
@@ -539,8 +577,39 @@ def _required_gate_errors(gates: Any) -> list[str]:
     errors = []
     for gate in REQUIRED_COMMAND_GATES:
         errors.extend(_command_list_errors(gates.get(gate), f"required_gates.{gate}", allow_empty=False))
-    errors.extend(_command_list_errors(gates.get("package_audit", []), "required_gates.package_audit", allow_empty=True))
+    errors.extend(_semantic_gate_errors(gates))
     errors.extend(_sql_config_errors(gates.get("sql_supportability")))
+    return errors
+
+
+def _semantic_gate_errors(gates: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    command_owners: dict[str, str] = {}
+    compile_only_markers = ("compileall", "py_compile")
+    no_op_patterns = (
+        re.compile(r"^(?:python(?:\.exe)?\s+-c\s+)?pass$", re.IGNORECASE),
+        re.compile(r"^(?:echo\b.*|true|exit\s+0)$", re.IGNORECASE),
+    )
+    for gate in REQUIRED_COMMAND_GATES:
+        commands = gates.get(gate)
+        if not isinstance(commands, list):
+            continue
+        for command in commands:
+            if not isinstance(command, str) or not command.strip():
+                continue
+            normalized = " ".join(command.lower().split())
+            if any(pattern.fullmatch(normalized) for pattern in no_op_patterns) or any(
+                marker in normalized for marker in compile_only_markers
+            ):
+                errors.append(f"required_gates.{gate} command does not prove its semantic capability: {command}")
+            previous_gate = command_owners.get(normalized)
+            if previous_gate and previous_gate != gate:
+                errors.append(
+                    "same command cannot satisfy distinct gate capabilities: "
+                    f"required_gates.{previous_gate} and required_gates.{gate}: {command}"
+                )
+            else:
+                command_owners[normalized] = gate
     return errors
 
 
@@ -553,11 +622,7 @@ def _coverage_errors(coverage: Any) -> list[str]:
         "forbid_gate_scope_narrowing": True,
         "forbid_threshold_weakening": True,
     }
-    return [
-        f"coverage.{key} must be {value!r}"
-        for key, value in expected.items()
-        if coverage.get(key) != value
-    ]
+    return [f"coverage.{key} must be {value!r}" for key, value in expected.items() if coverage.get(key) != value]
 
 
 def _ai_review_errors(ai_review: Any) -> list[str]:
@@ -570,6 +635,8 @@ def _ai_review_errors(ai_review: Any) -> list[str]:
     patterns = ai_review.get("reviewer_login_patterns")
     if not isinstance(patterns, list) or not patterns or not all(isinstance(item, str) and item for item in patterns):
         errors.append("ai_review.reviewer_login_patterns must contain at least one non-empty string")
+    elif any(any(character in item for character in "*?") for item in patterns):
+        errors.append("ai_review.reviewer_login_patterns must contain exact GitHub logins, not globs")
     return errors
 
 
@@ -663,7 +730,7 @@ def _schema_safe_sha(value: str) -> str:
 
 
 def _standard_hash_errors(config: dict[str, Any], target_repo: Path) -> list[str]:
-    standard = config.get("standard") if isinstance(config.get("standard"), dict) else {}
+    standard = _mapping(config.get("standard"))
     source = str(standard.get("source") or "")
     expected = str(standard.get("hash") or "")
     path = target_repo / source
@@ -696,7 +763,9 @@ def _self_modified_config_errors(
     architecture_errors = _architecture_policy_weakening_errors(base_config, head_config)
     if architecture_errors:
         return architecture_errors
-    return ["supportability config changed in this PR; merge config separately before enforcing it against code changes"]
+    return [
+        "supportability config changed in this PR; merge config separately before enforcing it against code changes"
+    ]
 
 
 def _architecture_governance_change_errors(
@@ -727,7 +796,9 @@ def _architecture_governance_change_errors(
     workflow_path = ".github/workflows/supportability-gate.yml"
     if workflow_path in changed_set:
         base_text = _git_show_text(target_repo, base_sha, workflow_path)
-        head_text = (target_repo / workflow_path).read_text(encoding="utf-8") if (target_repo / workflow_path).exists() else ""
+        head_text = (
+            (target_repo / workflow_path).read_text(encoding="utf-8") if (target_repo / workflow_path).exists() else ""
+        )
         if base_text is not None and _architecture_command_lines(base_text) != _architecture_command_lines(head_text):
             errors.append("architecture gate workflow command changed; protected baseline judge must report RED")
     return errors
@@ -751,9 +822,7 @@ def _git_show_text(target_repo: Path, base_sha: str, relative_path: str) -> str 
 
 def _architecture_command_lines(workflow_text: str) -> list[str]:
     return [
-        line.strip()
-        for line in workflow_text.splitlines()
-        if "python -m governance_eval architecture-gate" in line
+        line.strip() for line in workflow_text.splitlines() if "python -m governance_eval architecture-gate" in line
     ]
 
 
@@ -776,8 +845,16 @@ def _architecture_policy_weakening_errors(base_config: dict[str, Any], head_conf
 
 
 def _removed_or_narrowed_roots(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base_roots = {_norm_policy_path(root.get("path")): root for root in base_policy.get("governed_roots", []) if isinstance(root, dict)}
-    head_roots = {_norm_policy_path(root.get("path")): root for root in head_policy.get("governed_roots", []) if isinstance(root, dict)}
+    base_roots = {
+        _norm_policy_path(root.get("path")): root
+        for root in base_policy.get("governed_roots", [])
+        if isinstance(root, dict)
+    }
+    head_roots = {
+        _norm_policy_path(root.get("path")): root
+        for root in head_policy.get("governed_roots", [])
+        if isinstance(root, dict)
+    }
     errors = []
     for path, base_root in sorted(base_roots.items()):
         head_root = head_roots.get(path)
@@ -791,8 +868,8 @@ def _removed_or_narrowed_roots(base_policy: dict[str, Any], head_policy: dict[st
 
 
 def _runtime_relevance_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base = base_policy.get("runtime_relevance") if isinstance(base_policy.get("runtime_relevance"), dict) else {}
-    head = head_policy.get("runtime_relevance") if isinstance(head_policy.get("runtime_relevance"), dict) else {}
+    base = _mapping(base_policy.get("runtime_relevance"))
+    head = _mapping(head_policy.get("runtime_relevance"))
     errors = []
     base_prod = set(base.get("production_globs") or [])
     head_prod = set(head.get("production_globs") or [])
@@ -806,8 +883,8 @@ def _runtime_relevance_weakening_errors(base_policy: dict[str, Any], head_policy
 
 
 def _vague_name_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base = base_policy.get("vague_names") if isinstance(base_policy.get("vague_names"), dict) else {}
-    head = head_policy.get("vague_names") if isinstance(head_policy.get("vague_names"), dict) else {}
+    base = _mapping(base_policy.get("vague_names"))
+    head = _mapping(head_policy.get("vague_names"))
     base_forbidden = set(base.get("forbidden") or [])
     head_forbidden = set(head.get("forbidden") or [])
     if not base_forbidden.issubset(head_forbidden):
@@ -817,8 +894,8 @@ def _vague_name_weakening_errors(base_policy: dict[str, Any], head_policy: dict[
 
 def _module_policy_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    base_modules = base_policy.get("modules") if isinstance(base_policy.get("modules"), dict) else {}
-    head_modules = head_policy.get("modules") if isinstance(head_policy.get("modules"), dict) else {}
+    base_modules = _mapping(base_policy.get("modules"))
+    head_modules = _mapping(head_policy.get("modules"))
     for module_id, base_module in sorted(base_modules.items()):
         head_module = head_modules.get(module_id)
         if not isinstance(base_module, dict) or not isinstance(head_module, dict):
@@ -838,8 +915,8 @@ def _module_policy_weakening_errors(base_policy: dict[str, Any], head_policy: di
 
 def _limit_weakening_errors(module_id: str, base_module: dict[str, Any], head_module: dict[str, Any]) -> list[str]:
     errors = []
-    base_limits = base_module.get("limits") if isinstance(base_module.get("limits"), dict) else {}
-    head_limits = head_module.get("limits") if isinstance(head_module.get("limits"), dict) else {}
+    base_limits = _mapping(base_module.get("limits"))
+    head_limits = _mapping(head_module.get("limits"))
     for key in (
         "max_file_lines",
         "max_function_lines",
@@ -855,7 +932,9 @@ def _limit_weakening_errors(module_id: str, base_module: dict[str, Any], head_mo
 
 
 def _known_debt_policy_change_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base_debt = {_known_debt_identity(item): item for item in base_policy.get("known_debt", []) if isinstance(item, dict)}
+    base_debt = {
+        _known_debt_identity(item): item for item in base_policy.get("known_debt", []) if isinstance(item, dict)
+    }
     errors = []
     for item in head_policy.get("known_debt", []):
         if not isinstance(item, dict):
@@ -921,13 +1000,13 @@ def _is_initial_architecture_policy_adoption(base_config: dict[str, Any], head_c
 
 
 def _build_coverage_plan(config: dict[str, Any], changed: list[str], high_risk: list[str]) -> dict[str, Any]:
-    gates = config.get("required_gates") if isinstance(config.get("required_gates"), dict) else {}
+    gates = _mapping(config.get("required_gates"))
     files = _unique_paths(changed + high_risk)
     errors: list[str] = []
     gate_names = list(REQUIRED_COMMAND_GATES)
     if _sql_files(files):
         gate_names.append("sql_supportability")
-    coverage = {
+    coverage: dict[str, Any] = {
         "changed_files": {path: [] for path in changed},
         "high_risk_files": {path: [] for path in high_risk},
         "excluded_changed_files": [],
@@ -1058,7 +1137,7 @@ def _sql_gate_commands(
     changed: list[str],
     high_risk: list[str],
 ) -> tuple[list[str], list[str]]:
-    gates = config.get("required_gates") if isinstance(config.get("required_gates"), dict) else {}
+    gates = _mapping(config.get("required_gates"))
     value = gates.get("sql_supportability")
     sql_needed = bool(_sql_files(changed + high_risk) or _repo_has_sql(target_repo))
     if value == "auto":
@@ -1078,13 +1157,15 @@ def _run_configured_commands(
     sql_commands: list[str],
     runner: Callable[[str, Path], subprocess.CompletedProcess[str]],
 ) -> list[dict[str, Any]]:
-    gates = config.get("required_gates") if isinstance(config.get("required_gates"), dict) else {}
+    gates = _mapping(config.get("required_gates"))
     results: list[dict[str, Any]] = []
     for gate in REQUIRED_COMMAND_GATES + OPTIONAL_COMMAND_GATES:
         commands = _normalized_command_list(gates.get(gate))
         optional = gate in OPTIONAL_COMMAND_GATES and not commands
         results.extend(_run_gate_commands(gate, commands, target_repo, runner, optional=optional))
-    results.extend(_run_gate_commands("sql_supportability", sql_commands, target_repo, runner, optional=not sql_commands))
+    results.extend(
+        _run_gate_commands("sql_supportability", sql_commands, target_repo, runner, optional=not sql_commands)
+    )
     return results
 
 
@@ -1277,18 +1358,20 @@ def _unique_paths(paths: list[str]) -> list[str]:
 
 
 def _copilot_review_errors(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> list[str]:
+    authorized = _authorized_reviewer_payload(payload, patterns)
     errors: list[str] = []
-    errors.extend(structured_review_errors(payload, head_sha, patterns, _author_matches))
-    latest = _latest_applicable_clean_review_evidence(payload, head_sha, patterns)
+    errors.extend(structured_review_errors(authorized, head_sha, patterns, _author_matches))
+    latest = _latest_applicable_clean_review_evidence(authorized, head_sha, patterns)
     if latest is None:
         errors.append("Copilot review is missing or stale for latest head SHA")
-    errors.extend(_blocking_review_errors(payload, patterns, head_sha, latest))
+    errors.extend(_blocking_review_errors(authorized, patterns, head_sha, latest))
     return errors
 
 
 def _review_status(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> dict[str, Any]:
-    latest = _latest_applicable_clean_review_evidence(payload, head_sha, patterns)
-    structured = latest_structured_review_evidence(payload, patterns, _author_matches)
+    authorized = _authorized_reviewer_payload(payload, patterns)
+    latest = _latest_applicable_clean_review_evidence(authorized, head_sha, patterns)
+    structured = latest_structured_review_evidence(authorized, patterns, _author_matches)
     reviewed_commit_sha = ""
     verdict = ""
     open_finding_count = 0
@@ -1298,9 +1381,6 @@ def _review_status(payload: dict[str, Any], head_sha: str, patterns: list[str]) 
         verdict = str(structured.get("verdict") or "")
         open_finding_count = int(structured.get("open_finding_count") or 0)
         structured_valid = bool(structured.get("valid")) and reviewed_commit_sha == head_sha
-    elif latest is not None:
-        reviewed_commit_sha = str(latest.get("commitOid") or "")
-        verdict = "legacy_clean"
     return {
         "latest_head_reviewed": latest is not None,
         "reviewer": latest.get("author") if latest else "",
@@ -1316,55 +1396,10 @@ def _review_status(payload: dict[str, Any], head_sha: str, patterns: list[str]) 
     }
 
 
-def _latest_applicable_clean_review_evidence(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> dict[str, Any] | None:
-    reviews = [review for review in payload.get("reviews", []) if _author_matches(review.get("author"), patterns)]
-    evidence: list[dict[str, Any]] = []
-    structured = latest_clean_structured_review_evidence(payload, head_sha, patterns, _author_matches)
-    if structured is not None:
-        evidence.append(structured)
-    latest_review = _latest_applicable_clean_review(reviews, head_sha)
-    if latest_review is not None:
-        evidence.append(latest_review)
-    evidence.extend(_clean_review_comments(payload.get("comments", []), head_sha, patterns))
-    if not evidence:
-        return None
-    return max(evidence, key=lambda item: item.get("submittedAt") or "")
-
-
-def _clean_review_comments(comments: list[dict[str, Any]], head_sha: str, patterns: list[str]) -> list[dict[str, Any]]:
-    review_comments: list[dict[str, Any]] = []
-    for comment in comments:
-        body = visible_review_text(comment.get("body") or "")
-        if (
-            not comment.get("isMinimized", False)
-            and _author_matches(comment.get("author"), patterns)
-            and "reviewed commit" in body.lower()
-            and _review_matches_head(comment, head_sha)
-            and not SEVERE_RE.search(body)
-        ):
-            review_comments.append(
-                {
-                    "state": "COMMENTED",
-                    "submittedAt": comment.get("createdAt"),
-                    "commitOid": head_sha,
-                    "author": comment.get("author"),
-                    "body": body,
-                }
-            )
-    return review_comments
-
-
-def _latest_applicable_clean_review(reviews: list[dict[str, Any]], head_sha: str) -> dict[str, Any] | None:
-    clean = [review for review in reviews if _review_is_clean(review) and _review_matches_head(review, head_sha)]
-    if not clean:
-        return None
-    return max(clean, key=lambda item: item.get("submittedAt") or "")
-
-
-def _review_is_clean(review: dict[str, Any]) -> bool:
-    return review.get("state") not in {"CHANGES_REQUESTED", "DISMISSED"} and not SEVERE_RE.search(
-        visible_review_text(review.get("body") or "")
-    )
+def _latest_applicable_clean_review_evidence(
+    payload: dict[str, Any], head_sha: str, patterns: list[str]
+) -> dict[str, Any] | None:
+    return latest_clean_structured_review_evidence(payload, head_sha, patterns, _author_matches)
 
 
 def _review_matches_head(review: dict[str, Any], head_sha: str) -> bool:
@@ -1386,7 +1421,9 @@ def _blocking_review_errors(
         and _author_matches(review.get("author"), patterns)
         and _review_matches_head(review, head_sha)
     ]
-    latest_change_request = max(change_requests, key=lambda item: item.get("submittedAt") or "") if change_requests else None
+    latest_change_request = (
+        max(change_requests, key=lambda item: item.get("submittedAt") or "") if change_requests else None
+    )
     if latest_change_request is not None:
         clean_submitted_at = latest_clean.get("submittedAt") if latest_clean else ""
         change_submitted_at = latest_change_request.get("submittedAt") or ""
@@ -1428,7 +1465,9 @@ def _blocking_comments(
         if SEVERE_RE.search(visible_review_text(comment.get("body") or ""))
         and _author_matches(comment.get("author"), patterns)
         and not comment.get("isMinimized", False)
-        and not structured_comment_superseded_by_clean_evidence(comment, head_sha, latest_clean, patterns, _author_matches)
+        and not structured_comment_superseded_by_clean_evidence(
+            comment, head_sha, latest_clean, patterns, _author_matches
+        )
     ]
 
 
@@ -1443,22 +1482,38 @@ def _author_matches(author: Any, patterns: list[str]) -> bool:
     if not isinstance(author, str) or not author:
         return False
     normalized = author.lower()
-    return any(fnmatch.fnmatchcase(normalized, pattern.lower()) for pattern in patterns)
+    return any(normalized == pattern.lower() for pattern in patterns)
+
+
+def _authorized_reviewer_payload(payload: dict[str, Any], patterns: list[str]) -> dict[str, Any]:
+    authorized = copy.deepcopy(payload)
+    authorized["reviews"] = [
+        review for review in payload.get("reviews", []) if _record_has_verified_bot_identity(review, patterns)
+    ]
+    authorized["comments"] = [
+        comment for comment in payload.get("comments", []) if _record_has_verified_bot_identity(comment, patterns)
+    ]
+    return authorized
+
+
+def _record_has_verified_bot_identity(record: dict[str, Any], patterns: list[str]) -> bool:
+    return str(record.get("author_type") or "").lower() == "bot" and _author_matches(record.get("author"), patterns)
 
 
 def _normalized_reviews(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for review in reviews:
-        author = review.get("author") if isinstance(review.get("author"), dict) else {}
-        commit = review.get("commit") if isinstance(review.get("commit"), dict) else {}
+        author = _mapping(review.get("author")) or _mapping(review.get("user"))
+        commit = _mapping(review.get("commit"))
         body = str(review.get("body") or "")
         body = MARKDOWN_FENCE_BLOCK_RE.sub("", MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", body))
         normalized.append(
             {
                 "state": review.get("state"),
-                "submittedAt": review.get("submittedAt"),
-                "commitOid": review.get("commitOid") or commit.get("oid"),
+                "submittedAt": review.get("submittedAt") or review.get("submitted_at"),
+                "commitOid": review.get("commitOid") or review.get("commit_id") or commit.get("oid"),
                 "author": author.get("login") or review.get("author"),
+                "author_type": review.get("author_type") or author.get("type") or author.get("__typename"),
                 "body": body,
             }
         )
@@ -1468,14 +1523,15 @@ def _normalized_reviews(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _normalized_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for comment in comments:
-        author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+        author = _mapping(comment.get("author")) or _mapping(comment.get("user"))
         body = str(comment.get("body") or "")
         body = MARKDOWN_FENCE_BLOCK_RE.sub("", MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", body))
         normalized.append(
             {
                 "author": author.get("login") or comment.get("author"),
+                "author_type": comment.get("author_type") or author.get("type") or author.get("__typename"),
                 "body": body,
-                "createdAt": comment.get("createdAt"),
+                "createdAt": comment.get("createdAt") or comment.get("created_at"),
                 "isMinimized": comment.get("isMinimized"),
             }
         )
@@ -1489,6 +1545,7 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
         pullRequest(number: $number) {
           reviewThreads(first: 100, after: $cursor) {
             nodes {
+              id
               isResolved
               path
               comments(first: 100) {
@@ -1497,6 +1554,10 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
                   author {
                     login
                   }
+                }
+                pageInfo {
+                  hasNextPage
+                  endCursor
                 }
               }
             }
@@ -1513,8 +1574,9 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
     cursor = ""
     while True:
         payload = _gh_graphql(owner, name, pr_number, query, cursor)
-        connection = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
-        threads.extend(_normalize_threads(connection.get("nodes", [])))
+        connection = _validated_review_threads_connection(payload)
+        complete_nodes = [_complete_review_thread(node) for node in connection.get("nodes", [])]
+        threads.extend(_normalize_threads(complete_nodes))
         page = connection.get("pageInfo") or {}
         if not page.get("hasNextPage"):
             return threads
@@ -1522,6 +1584,64 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
         if not next_cursor or next_cursor == cursor:
             raise SupportabilityError("GitHub review thread pagination did not advance")
         cursor = next_cursor
+
+
+def _complete_review_thread(node: dict[str, Any]) -> dict[str, Any]:
+    thread_id = node.get("id")
+    if not isinstance(thread_id, str) or not thread_id:
+        raise SupportabilityError("GitHub review thread ID is missing")
+    complete = copy.deepcopy(node)
+    connection = _validated_thread_comments_connection(complete.get("comments"))
+    comments = list(connection["nodes"])
+    page = connection["pageInfo"]
+    cursor = str(page.get("endCursor") or "")
+    while page.get("hasNextPage"):
+        if not cursor:
+            raise SupportabilityError("GitHub review comment pagination did not return endCursor")
+        payload = _gh_thread_comments(thread_id, cursor)
+        if payload.get("errors"):
+            raise SupportabilityError("GitHub review comment GraphQL response contains errors")
+        data = payload.get("data")
+        graph_node = data.get("node") if isinstance(data, dict) else None
+        if not isinstance(graph_node, dict) or graph_node.get("id") != thread_id:
+            raise SupportabilityError("GitHub review comment page has the wrong thread identity")
+        connection = _validated_thread_comments_connection(graph_node.get("comments"))
+        comments.extend(connection["nodes"])
+        page = connection["pageInfo"]
+        next_cursor = str(page.get("endCursor") or "")
+        if page.get("hasNextPage") and (not next_cursor or next_cursor == cursor):
+            raise SupportabilityError("GitHub review comment pagination did not advance")
+        cursor = next_cursor
+    complete["comments"] = {"nodes": comments, "pageInfo": page}
+    return complete
+
+
+def _validated_review_threads_connection(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("errors"):
+        raise SupportabilityError("GitHub review thread GraphQL response contains errors")
+    try:
+        connection = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
+    except (KeyError, TypeError) as exc:
+        raise SupportabilityError("GitHub review thread GraphQL response is malformed") from exc
+    return _validated_connection(connection, "review thread")
+
+
+def _validated_thread_comments_connection(value: Any) -> dict[str, Any]:
+    return _validated_connection(value, "review comment")
+
+
+def _validated_connection(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise SupportabilityError(f"GitHub {label} connection is missing")
+    nodes = value.get("nodes")
+    page = value.get("pageInfo")
+    if not isinstance(nodes, list) or not all(isinstance(node, dict) for node in nodes):
+        raise SupportabilityError(f"GitHub {label} nodes must be a list of objects")
+    if not isinstance(page, dict) or not isinstance(page.get("hasNextPage"), bool):
+        raise SupportabilityError(f"GitHub {label} pageInfo is malformed")
+    if page["hasNextPage"] and not isinstance(page.get("endCursor"), str):
+        raise SupportabilityError(f"GitHub {label} pageInfo is missing endCursor")
+    return {"nodes": nodes, "pageInfo": page}
 
 
 def _normalize_threads(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1663,7 +1783,7 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
         errors.append("receipt owner_status must be GREEN before verification")
     errors.extend(_embedded_receipt_status_errors(receipt))
     errors.extend(_receipt_sha_errors(receipt))
-    artifact = receipt.get("artifact") if isinstance(receipt.get("artifact"), dict) else {}
+    artifact = _mapping(receipt.get("artifact"))
     if not artifact.get("name"):
         errors.append("artifact.name is required")
     artifact_id = str(artifact.get("id") or "")
@@ -1676,63 +1796,6 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
         errors.append("artifact.digest is required")
     elif not DIGEST_RE.fullmatch(artifact_digest):
         errors.append("artifact.digest must be sha256:<hex>")
-    return errors
-
-
-def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    supportability_gate = receipt.get("supportability_gate") if isinstance(receipt.get("supportability_gate"), dict) else {}
-    copilot_review = receipt.get("copilot_review") if isinstance(receipt.get("copilot_review"), dict) else {}
-    architecture = receipt.get("architecture") if isinstance(receipt.get("architecture"), dict) else {}
-    required_judges = receipt.get("required_judges") if isinstance(receipt.get("required_judges"), dict) else {}
-    bootstrap = receipt.get("bootstrap") if isinstance(receipt.get("bootstrap"), dict) else {}
-    if supportability_gate.get("owner_status") != STATUS_GREEN:
-        errors.append("receipt supportability_gate.owner_status must be GREEN")
-    if supportability_gate.get("errors"):
-        errors.append("receipt supportability_gate.errors must be empty")
-    if copilot_review.get("owner_status") != STATUS_GREEN:
-        errors.append("receipt copilot_review.owner_status must be GREEN")
-    if copilot_review.get("errors"):
-        errors.append("receipt copilot_review.errors must be empty")
-    expected_architecture = {
-        "owner_status": STATUS_GREEN,
-        "gate_implementation": "PASS",
-        "repo_architecture_supportability": "PASS",
-        "architecture_behavior_proof": "PASS",
-        "enforcement_mode": "block_all",
-    }
-    for key, value in expected_architecture.items():
-        if architecture.get(key) != value:
-            errors.append(f"receipt architecture.{key} must be {value}")
-    for key in (
-        "violation_count",
-        "new_violation_count",
-        "existing_violation_count",
-        "known_debt_applied_count",
-        "expired_known_debt_count",
-    ):
-        if architecture.get(key) not in {0, None}:
-            errors.append(f"receipt architecture.{key} must be 0")
-    for key in (LEGACY_APPLIED_DEBT_FIELD, LEGACY_EXPIRED_DEBT_FIELD, "known_debt_applied", "known_debt", "expired_known_debt"):
-        if architecture.get(key):
-            errors.append(f"receipt architecture.{key} must be empty")
-    if architecture.get("errors"):
-        errors.append("receipt architecture.errors must be empty")
-    errors.extend(_required_judge_errors(required_judges))
-    if bootstrap.get("governance_pass") is False or bootstrap.get("gate_result") == STATUS_RED or bootstrap.get("reason"):
-        errors.append("receipt bootstrap must not indicate active bootstrap RED state")
-    return errors
-
-
-def _receipt_sha_errors(receipt: dict[str, Any]) -> list[str]:
-    errors = [
-        f"{key} must be a 40-character lowercase Git SHA"
-        for key in ("base_sha", "head_sha")
-        if not SHA1_RE.fullmatch(str(receipt.get(key) or ""))
-    ]
-    merged_sha = str(receipt.get("merged_sha") or "")
-    if merged_sha and not SHA1_RE.fullmatch(merged_sha):
-        errors.append("merged_sha must be empty or a 40-character lowercase Git SHA")
     return errors
 
 
@@ -1777,7 +1840,7 @@ def _live_pr_errors(receipt: dict[str, Any], pr: dict[str, Any]) -> list[str]:
     if pr.get("baseRefOid") != receipt.get("base_sha"):
         errors.append("GitHub PR baseRefOid does not match receipt base_sha")
     if receipt.get("merged_sha"):
-        merge = pr.get("mergeCommit") if isinstance(pr.get("mergeCommit"), dict) else {}
+        merge = _mapping(pr.get("mergeCommit"))
         if pr.get("state") != "MERGED":
             errors.append("receipt claims merged_sha but GitHub PR is not MERGED")
         if merge.get("oid") != receipt.get("merged_sha"):
@@ -1806,14 +1869,14 @@ def _live_run_errors(
 
 
 def _is_current_workflow_run(receipt: dict[str, Any]) -> bool:
-    workflow = receipt.get("workflow") if isinstance(receipt.get("workflow"), dict) else {}
+    workflow = _mapping(receipt.get("workflow"))
     return bool(os.environ.get("GITHUB_RUN_ID") and str(workflow.get("run_id") or "") == os.environ["GITHUB_RUN_ID"])
 
 
 def _live_artifact_errors(receipt: dict[str, Any], artifact: dict[str, Any]) -> list[str]:
     if not artifact:
         return ["GitHub artifact proof is missing"]
-    expected = receipt.get("artifact") if isinstance(receipt.get("artifact"), dict) else {}
+    expected = _mapping(receipt.get("artifact"))
     errors = _artifact_identity_errors(artifact, expected)
     if artifact.get("expired") is True:
         errors.append("GitHub artifact is expired")
@@ -2079,7 +2142,9 @@ def _cli_copilot(args: argparse.Namespace) -> int:
 def _cli_receipt(args: argparse.Namespace) -> int:
     gate = json.loads(args.gate_result.read_text(encoding="utf-8"))
     copilot = json.loads(args.copilot_result.read_text(encoding="utf-8"))
-    architecture = json.loads(args.architecture_result.read_text(encoding="utf-8")) if args.architecture_result else None
+    architecture = (
+        json.loads(args.architecture_result.read_text(encoding="utf-8")) if args.architecture_result else None
+    )
     receipt = generate_delivery_receipt(
         gate,
         copilot,
@@ -2176,6 +2241,27 @@ def _gh_json(args: list[str]) -> dict[str, Any]:
     return json.loads(completed.stdout)
 
 
+def _gh_json_list(args: list[str]) -> list[dict[str, Any]]:
+    if not args or args[0] != "api":
+        raise SupportabilityError("paginated GitHub JSON lists require the gh api command")
+    completed = subprocess.run(
+        ["gh", "api", "--paginate", "--slurp", *args[1:]],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+    )
+    pages = json.loads(completed.stdout)
+    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+        raise SupportabilityError("paginated GitHub API response must be a list of pages")
+    records = [item for page in pages for item in page]
+    if not all(isinstance(item, dict) for item in records):
+        raise SupportabilityError("GitHub API pages must contain only objects")
+    return records
+
+
 def _gh_api_json(path: str) -> dict[str, Any]:
     return _gh_json(["api", path])
 
@@ -2206,6 +2292,25 @@ def _gh_graphql(owner: str, name: str, pr_number: int, query: str, cursor: str) 
     if cursor:
         args.extend(["-f", f"cursor={cursor}"])
     return _gh_json(args)
+
+
+def _gh_thread_comments(thread_id: str, cursor: str) -> dict[str, Any]:
+    if not thread_id:
+        raise SupportabilityError("GitHub review thread ID is missing")
+    query = """
+    query($id: ID!, $cursor: String!) {
+      node(id: $id) {
+        ... on PullRequestReviewThread {
+          id
+          comments(first: 100, after: $cursor) {
+            nodes { body author { login } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }
+    """
+    return _gh_json(["api", "graphql", "-f", f"id={thread_id}", "-f", f"cursor={cursor}", "-f", f"query={query}"])
 
 
 def _safe_live(label: str, errors: list[str], func: Callable[..., Any], *args: Any) -> Any:

@@ -4,10 +4,8 @@ import argparse
 import ast
 import fnmatch
 import hashlib
-import json
 import subprocess
 import sys
-import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
@@ -161,6 +159,7 @@ def run_architecture_gate(
     target_repo = target_repo.resolve()
     head_files = _worktree_files(target_repo)
     changed = _changed_files(target_repo, base_sha, head_sha, changed_files)
+    policy = policy if isinstance(policy, dict) else {}
     known_debt, debt_errors, expired_debt = _known_debt(policy)
     if debt_errors:
         result = _failure_result(
@@ -301,31 +300,39 @@ def _module_registry_errors(value: Any) -> list[str]:
         return ["architecture_policy.modules must be a non-empty object"]
     errors: list[str] = []
     for module_id, module in value.items():
-        if not isinstance(module_id, str) or not module_id.strip() or not isinstance(module, dict):
-            errors.append("architecture_policy.modules entries must be named objects")
-            continue
-        for key in ("path", "owner", "purpose", "classification", "domain", "test_strategy"):
-            if not isinstance(module.get(key), str) or not module[key].strip():
-                errors.append(f"architecture_policy.modules.{module_id}.{key} must be a non-empty string")
-        if module.get("classification") not in CLASSIFICATIONS:
-            errors.append(f"architecture_policy.modules.{module_id}.classification is unsupported")
-        for key in ("allowed_dependencies", "forbidden_dependencies"):
-            if not _string_list(module.get(key), allow_empty=True):
-                errors.append(f"architecture_policy.modules.{module_id}.{key} must be a list of strings")
-        limits = module.get("limits")
-        if not isinstance(limits, dict):
-            errors.append(f"architecture_policy.modules.{module_id}.limits must be an object")
-            continue
-        for key in (
-            "max_file_lines",
-            "max_function_lines",
-            "max_class_lines",
-            "max_functions_per_file",
-            "max_classes_per_file",
-        ):
-            if not isinstance(limits.get(key), int) or limits[key] < 0:
-                errors.append(f"architecture_policy.modules.{module_id}.limits.{key} must be a non-negative integer")
+        errors.extend(_module_entry_errors(module_id, module))
     return errors
+
+
+def _module_entry_errors(module_id: Any, module: Any) -> list[str]:
+    if not isinstance(module_id, str) or not module_id.strip() or not isinstance(module, dict):
+        return ["architecture_policy.modules entries must be named objects"]
+    prefix = f"architecture_policy.modules.{module_id}"
+    errors = [
+        f"{prefix}.{key} must be a non-empty string"
+        for key in ("path", "owner", "purpose", "classification", "domain", "test_strategy")
+        if not isinstance(module.get(key), str) or not module[key].strip()
+    ]
+    if module.get("classification") not in CLASSIFICATIONS:
+        errors.append(f"{prefix}.classification is unsupported")
+    errors.extend(
+        f"{prefix}.{key} must be a list of strings"
+        for key in ("allowed_dependencies", "forbidden_dependencies")
+        if not _string_list(module.get(key), allow_empty=True)
+    )
+    errors.extend(_module_limit_errors(prefix, module.get("limits")))
+    return errors
+
+
+def _module_limit_errors(prefix: str, limits: Any) -> list[str]:
+    if not isinstance(limits, dict):
+        return [f"{prefix}.limits must be an object"]
+    keys = ("max_file_lines", "max_function_lines", "max_class_lines", "max_functions_per_file", "max_classes_per_file")
+    return [
+        f"{prefix}.limits.{key} must be a non-negative integer"
+        for key in keys
+        if not isinstance(limits.get(key), int) or limits[key] < 0
+    ]
 
 
 def _known_debt_shape_errors(policy: dict[str, Any]) -> list[str]:
@@ -336,26 +343,39 @@ def _known_debt_shape_errors(policy: dict[str, Any]) -> list[str]:
         return ["architecture_policy.known_debt must be a list"]
     errors: list[str] = []
     for index, item in enumerate(value):
-        if not isinstance(item, dict):
-            errors.append(f"architecture_policy.known_debt[{index}] must be an object")
-            continue
-        for key in ("rule", "path", "owner", "reason", "expires_on"):
-            if not isinstance(item.get(key), str) or not item[key].strip():
-                errors.append(f"architecture_policy.known_debt[{index}].{key} must be a non-empty string")
-        for key in ("source_module", "target_module", "symbol_name", "detail"):
-            if not isinstance(item.get(key), str):
-                errors.append(f"architecture_policy.known_debt[{index}].{key} must be a string")
-        if not isinstance(item.get("fingerprint"), str) or not re_full_sha256(item.get("fingerprint")):
-            errors.append(f"architecture_policy.known_debt[{index}].fingerprint must be a 64-character SHA-256")
-        try:
-            date.fromisoformat(str(item.get("expires_on", "")))
-        except ValueError:
-            errors.append(f"architecture_policy.known_debt[{index}].expires_on must be YYYY-MM-DD")
+        errors.extend(_known_debt_entry_errors(item, index))
+    return errors
+
+
+def _known_debt_entry_errors(item: Any, index: int) -> list[str]:
+    prefix = f"architecture_policy.known_debt[{index}]"
+    if not isinstance(item, dict):
+        return [f"{prefix} must be an object"]
+    errors = [
+        f"{prefix}.{key} must be a non-empty string"
+        for key in ("rule", "path", "owner", "reason", "expires_on")
+        if not isinstance(item.get(key), str) or not item[key].strip()
+    ]
+    errors.extend(
+        f"{prefix}.{key} must be a string"
+        for key in ("source_module", "target_module", "symbol_name", "detail")
+        if not isinstance(item.get(key), str)
+    )
+    if not re_full_sha256(item.get("fingerprint")):
+        errors.append(f"{prefix}.fingerprint must be a 64-character SHA-256")
+    try:
+        date.fromisoformat(str(item.get("expires_on", "")))
+    except ValueError:
+        errors.append(f"{prefix}.expires_on must be YYYY-MM-DD")
     return errors
 
 
 def _string_list(value: Any, *, allow_empty: bool) -> bool:
-    return isinstance(value, list) and (allow_empty or bool(value)) and all(isinstance(item, str) and item for item in value)
+    return (
+        isinstance(value, list)
+        and (allow_empty or bool(value))
+        and all(isinstance(item, str) and item for item in value)
+    )
 
 
 def re_full_sha256(value: Any) -> bool:
@@ -463,7 +483,21 @@ def _skip_path(path: Path, root: Path) -> bool:
 
 def _skip_relative(path: str) -> bool:
     parts = set(_norm(path).split("/"))
-    return bool(parts & {".git", ".venv", ".pytest_cache", "__pycache__", "node_modules", "dist", "build", "coverage"})
+    return any(part.endswith(".egg-info") for part in parts) or bool(
+        parts
+        & {
+            ".git",
+            ".venv",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            "__pycache__",
+            "node_modules",
+            "dist",
+            "build",
+            "coverage",
+        }
+    )
 
 
 def _scan_files(policy: dict[str, Any], files: list[SourceFile], changed_files: list[str]) -> dict[str, Any]:
@@ -488,17 +522,32 @@ def _scan_files(policy: dict[str, Any], files: list[SourceFile], changed_files: 
         root = _root_for_path(file.path, roots)
         module_id = _module_for_path(file.path, modules)
         if root is None and _runtime_relevant(policy, file.path):
-            violations.append(_violation("unknown_runtime_file", file.path, "", "", "", "runtime file outside governed roots"))
+            violations.append(
+                _violation("unknown_runtime_file", file.path, "", "", "", "runtime file outside governed roots")
+            )
         if root and module_id is None and _runtime_relevant(policy, file.path):
-            violations.append(_violation("unregistered_module", file.path, "", "", "", "runtime file outside registered modules"))
+            violations.append(
+                _violation("unregistered_module", file.path, "", "", "", "runtime file outside registered modules")
+            )
         violations.extend(_vague_folder_violations(policy, file.path))
         if file.path.endswith(".py") and root and root["kind"] in PYTHON_RUNTIME_KINDS and module_id:
             violations.extend(_python_file_violations(policy, file, module_id, by_path))
     for changed in changed_files:
         if changed not in by_path:
             continue
-        if _runtime_relevant(policy, changed) and (_root_for_path(changed, roots) is None or _module_for_path(changed, modules) is None):
-            violations.append(_violation("changed_file_architecture_coverage", changed, "", "", "", "changed runtime file lacks architecture policy coverage"))
+        if _runtime_relevant(policy, changed) and (
+            _root_for_path(changed, roots) is None or _module_for_path(changed, modules) is None
+        ):
+            violations.append(
+                _violation(
+                    "changed_file_architecture_coverage",
+                    changed,
+                    "",
+                    "",
+                    "",
+                    "changed runtime file lacks architecture policy coverage",
+                )
+            )
     violations.extend(_cycle_violations(_python_dependency_graph(policy, files)))
     return {
         "violations": violations,
@@ -516,7 +565,9 @@ def _top_level_folder_violations(files: list[SourceFile], roots: list[dict[str, 
         if not top or top in registered or top in seen:
             continue
         seen.add(top)
-        violations.append(_violation("unregistered_top_level", top, "", "", top, "top-level folder lacks architecture policy entry"))
+        violations.append(
+            _violation("unregistered_top_level", top, "", "", top, "top-level folder lacks architecture policy entry")
+        )
     return violations
 
 
@@ -528,7 +579,9 @@ def _top_level(path: str) -> str:
 
 
 def _modules(policy: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {module_id: {**module, "path": _norm(module["path"])} for module_id, module in policy.get("modules", {}).items()}
+    return {
+        module_id: {**module, "path": _norm(module["path"])} for module_id, module in policy.get("modules", {}).items()
+    }
 
 
 def _roots(policy: dict[str, Any]) -> list[dict[str, Any]]:
@@ -636,7 +689,9 @@ def _parse_python(file: SourceFile, violations: list[dict[str, Any]], module_id:
         return None
 
 
-def _size_violations(file: SourceFile, tree: ast.Module, module_id: str, module: dict[str, Any]) -> list[dict[str, Any]]:
+def _size_violations(
+    file: SourceFile, tree: ast.Module, module_id: str, module: dict[str, Any]
+) -> list[dict[str, Any]]:
     limits = module["limits"]
     lines = file.text.splitlines()
     violations: list[dict[str, Any]] = []
@@ -646,7 +701,9 @@ def _size_violations(file: SourceFile, tree: ast.Module, module_id: str, module:
     classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
     if limits["max_functions_per_file"] and len(functions) > limits["max_functions_per_file"]:
         violations.append(
-            _violation("python_functions_per_file", file.path, module_id, "", "max_functions_per_file", str(len(functions)))
+            _violation(
+                "python_functions_per_file", file.path, module_id, "", "max_functions_per_file", str(len(functions))
+            )
         )
     if limits["max_classes_per_file"] and len(classes) > limits["max_classes_per_file"]:
         violations.append(
@@ -656,10 +713,10 @@ def _size_violations(file: SourceFile, tree: ast.Module, module_id: str, module:
         length = _node_length(node)
         if limits["max_function_lines"] and length > limits["max_function_lines"]:
             violations.append(_violation("python_function_lines", file.path, module_id, "", node.name, str(length)))
-    for node in classes:
-        length = _node_length(node)
+    for class_node in classes:
+        length = _node_length(class_node)
         if limits["max_class_lines"] and length > limits["max_class_lines"]:
-            violations.append(_violation("python_class_lines", file.path, module_id, "", node.name, str(length)))
+            violations.append(_violation("python_class_lines", file.path, module_id, "", class_node.name, str(length)))
     return violations
 
 
@@ -708,7 +765,13 @@ def _resolved_import(
     modules: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     if not import_name:
-        return {"dynamic": False, "target": import_name, "target_module": "", "import_string": import_string, "unresolved_internal": False}
+        return {
+            "dynamic": False,
+            "target": import_name,
+            "target_module": "",
+            "import_string": import_string,
+            "unresolved_internal": False,
+        }
     for name in _prefixes(import_name):
         if name in internal_names:
             path = internal_names[name]
@@ -811,7 +874,9 @@ def _cycle_violations(graph: dict[str, set[str]]) -> list[dict[str, Any]]:
     for start in graph:
         _walk_cycle(graph, start, start, [], cycles)
     return [
-        _violation("python_import_cycle", "", cycle[0], cycle[-1], "->".join(cycle), "python import graph contains cycle")
+        _violation(
+            "python_import_cycle", "", cycle[0], cycle[-1], "->".join(cycle), "python import graph contains cycle"
+        )
         for cycle in sorted(cycles)
     ]
 
@@ -869,7 +934,9 @@ def _matching_known_debt(violation: dict[str, Any], known_debt: list[dict[str, A
     return None
 
 
-def _blocking_violations(mode: str, violations: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _blocking_violations(
+    mode: str, violations: list[dict[str, Any]], new: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     return violations
 
 

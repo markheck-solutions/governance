@@ -11,6 +11,7 @@ from typing import Any
 
 from governance_eval.benchmark import validate_benchmark_result
 from governance_eval.cases import load_cases
+from governance_eval.copilot_review_evidence import latest_clean_structured_review_evidence
 from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
@@ -104,7 +105,7 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
             "--repo",
             repo,
             "--json",
-            "baseRefOid,commits,comments,reviews,statusCheckRollup,headRefOid,isDraft,mergeStateStatus,state,url",
+            "baseRefOid,commits,statusCheckRollup,headRefOid,isDraft,mergeStateStatus,state,url",
         ],
         check=True,
         text=True,
@@ -113,6 +114,8 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
         capture_output=True,
     )
     pr = json.loads(completed.stdout)
+    raw_reviews = _gh_paginated_json_list(f"repos/{owner}/{name}/pulls/{pr_number}/reviews?per_page=100")
+    raw_comments = _gh_paginated_json_list(f"repos/{owner}/{name}/issues/{pr_number}/comments?per_page=100")
     latest_commit = (pr.get("commits") or [{}])[-1]
     threads = _load_review_threads(owner, name, pr_number)
     contexts = []
@@ -128,28 +131,31 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
             }
         )
     reviews = []
-    for review in pr.get("reviews") or []:
-        commit = review.get("commit") if isinstance(review.get("commit"), dict) else {}
-        author = review.get("author") if isinstance(review.get("author"), dict) else {}
+    for review in raw_reviews:
+        commit_value = review.get("commit")
+        commit: dict[str, Any] = commit_value if isinstance(commit_value, dict) else {}
+        author_value = review.get("user")
+        author: dict[str, Any] = author_value if isinstance(author_value, dict) else {}
         reviews.append(
             {
                 "state": review.get("state"),
-                "submittedAt": review.get("submittedAt"),
-                "commitOid": review.get("commitOid") or commit.get("oid"),
-                "author": author.get("login") or review.get("author"),
+                "submittedAt": review.get("submitted_at"),
+                "commitOid": review.get("commit_id") or commit.get("oid"),
+                "author": author.get("login"),
                 "body": review.get("body"),
             }
         )
     comments = []
-    for comment in pr.get("comments") or []:
-        author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+    for comment in raw_comments:
+        author_value = comment.get("user")
+        author = author_value if isinstance(author_value, dict) else {}
         comments.append(
             {
-                "createdAt": comment.get("createdAt"),
-                "author": author.get("login") or comment.get("author"),
+                "createdAt": comment.get("created_at"),
+                "author": author.get("login"),
                 "body": comment.get("body"),
-                "isMinimized": comment.get("isMinimized"),
-                "minimizedReason": comment.get("minimizedReason"),
+                "isMinimized": False,
+                "minimizedReason": None,
             }
         )
     return {
@@ -167,6 +173,24 @@ def load_github_payload(repo: str, pr_number: int) -> dict[str, Any]:
     }
 
 
+def _gh_paginated_json_list(path: str) -> list[dict[str, Any]]:
+    completed = subprocess.run(
+        ["gh", "api", "--paginate", "--slurp", path],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+    )
+    pages = json.loads(completed.stdout)
+    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+        raise ValueError("paginated GitHub API response must be a list of pages")
+    records = [item for page in pages for item in page]
+    if not all(isinstance(item, dict) for item in records):
+        raise ValueError("GitHub API pages must contain only objects")
+    return records
+
+
 def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str, Any]]:
     query = """
     query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -174,12 +198,17 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
         pullRequest(number: $number) {
           reviewThreads(first: 100, after: $cursor) {
             nodes {
+              id
               isResolved
               path
               line
               comments(first: 100) {
                 nodes {
                   body
+                }
+                pageInfo {
+                  hasNextPage
+                  endCursor
                 }
               }
             }
@@ -219,7 +248,8 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
             capture_output=True,
         )
         connection = _review_threads_connection(json.loads(completed.stdout))
-        threads.extend(_unresolved_threads(connection.get("nodes", [])))
+        complete_nodes = [_complete_review_thread(node) for node in connection.get("nodes", [])]
+        threads.extend(_unresolved_threads(complete_nodes))
         page_info = connection.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
             break
@@ -229,13 +259,95 @@ def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str
     return threads
 
 
-def _review_threads_connection(payload: dict[str, Any]) -> dict[str, Any]:
-    return (
-        payload.get("data", {})
-        .get("repository", {})
-        .get("pullRequest", {})
-        .get("reviewThreads", {})
+def _complete_review_thread(node: dict[str, Any]) -> dict[str, Any]:
+    thread_id = node.get("id")
+    if not isinstance(thread_id, str) or not thread_id:
+        raise RuntimeError("GitHub review thread ID is missing")
+    complete = json.loads(json.dumps(node))
+    connection = _validated_connection(complete.get("comments"), "review comment")
+    comments = list(connection["nodes"])
+    page = connection["pageInfo"]
+    cursor = str(page.get("endCursor") or "")
+    while page.get("hasNextPage"):
+        if not cursor:
+            raise RuntimeError("GitHub review comment pagination did not return endCursor")
+        payload = _load_thread_comment_page(thread_id, cursor)
+        if payload.get("errors"):
+            raise RuntimeError("GitHub review comment GraphQL response contains errors")
+        data = payload.get("data")
+        graph_node = data.get("node") if isinstance(data, dict) else None
+        if not isinstance(graph_node, dict) or graph_node.get("id") != thread_id:
+            raise RuntimeError("GitHub review comment page has the wrong thread identity")
+        connection = _validated_connection(graph_node.get("comments"), "review comment")
+        comments.extend(connection["nodes"])
+        page = connection["pageInfo"]
+        next_cursor = str(page.get("endCursor") or "")
+        if page.get("hasNextPage") and (not next_cursor or next_cursor == cursor):
+            raise RuntimeError("GitHub review comment pagination did not advance")
+        cursor = next_cursor
+    complete["comments"] = {"nodes": comments, "pageInfo": page}
+    return complete
+
+
+def _load_thread_comment_page(thread_id: str, cursor: str) -> dict[str, Any]:
+    if not thread_id:
+        raise RuntimeError("GitHub review thread ID is missing")
+    query = """
+    query($id: ID!, $cursor: String!) {
+      node(id: $id) {
+        ... on PullRequestReviewThread {
+          id
+          comments(first: 100, after: $cursor) {
+            nodes { body }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }
+    """
+    completed = subprocess.run(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"id={thread_id}",
+            "-f",
+            f"cursor={cursor}",
+            "-f",
+            f"query={query}",
+        ],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
     )
+    return json.loads(completed.stdout)
+
+
+def _review_threads_connection(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("errors"):
+        raise RuntimeError("GitHub review thread GraphQL response contains errors")
+    try:
+        connection = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("GitHub review thread GraphQL response is malformed") from exc
+    return _validated_connection(connection, "review thread")
+
+
+def _validated_connection(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"GitHub {label} connection is missing")
+    nodes = value.get("nodes")
+    page = value.get("pageInfo")
+    if not isinstance(nodes, list) or not all(isinstance(node, dict) for node in nodes):
+        raise RuntimeError(f"GitHub {label} nodes must be a list of objects")
+    if not isinstance(page, dict) or not isinstance(page.get("hasNextPage"), bool):
+        raise RuntimeError(f"GitHub {label} pageInfo is malformed")
+    if page["hasNextPage"] and not isinstance(page.get("endCursor"), str):
+        raise RuntimeError(f"GitHub {label} pageInfo is missing endCursor")
+    return {"nodes": nodes, "pageInfo": page}
 
 
 def _unresolved_threads(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -243,10 +355,7 @@ def _unresolved_threads(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for thread in nodes:
         if thread.get("isResolved"):
             continue
-        bodies = [
-            comment.get("body", "")
-            for comment in (thread.get("comments", {}) or {}).get("nodes", [])
-        ]
+        bodies = [comment.get("body", "") for comment in (thread.get("comments", {}) or {}).get("nodes", [])]
         threads.append(
             {
                 "path": thread.get("path"),
@@ -271,39 +380,49 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fallback-quorum", help="fallback clean-room review quorum JSON path")
     parser.add_argument("--trusted-reviewer-agent", action="append", default=[])
     args = parser.parse_args(argv)
-    payload = json.loads(open(args.payload, encoding="utf-8").read()) if args.payload else load_github_payload(args.repo, args.pr)
+    payload = _payload_from_args(args)
+    result = evaluate_readiness(payload)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result["ready"] else 1
+
+
+def _payload_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    payload = (
+        json.loads(open(args.payload, encoding="utf-8").read())
+        if args.payload
+        else load_github_payload(args.repo, args.pr)
+    )
     if args.benchmark_artifact:
         payload["benchmarkEvidence"] = _read_json_or_error(Path(args.benchmark_artifact))
     if args.benchmark_artifact_digest:
         payload["benchmarkArtifactDigest"] = args.benchmark_artifact_digest
     if args.benchmark_artifact_name:
         payload["benchmarkArtifactName"] = args.benchmark_artifact_name
-    if args.benchmark_run_id or args.benchmark_artifact_id:
-        if args.benchmark_run_id and args.benchmark_artifact_id:
-            binding = _load_github_artifact_binding(
-                args.repo,
-                args.benchmark_run_id,
-                args.benchmark_artifact_id,
-                args.benchmark_artifact_name,
-            )
-            payload["benchmarkArtifactBinding"] = binding
-            if not args.benchmark_artifact_digest and isinstance(binding, dict):
-                digest = binding.get("artifact_digest")
-                if isinstance(digest, str):
-                    payload["benchmarkArtifactDigest"] = digest
-        else:
-            payload["benchmarkArtifactBinding"] = {
-                "__load_error": "--benchmark-run-id and --benchmark-artifact-id must be supplied together"
-            }
+    _add_artifact_binding(payload, args)
     if args.require_github_artifact_digest:
         payload["requireGithubArtifactDigest"] = True
     if args.fallback_quorum:
         payload["fallbackQuorum"] = _read_json_or_error(Path(args.fallback_quorum))
     if args.trusted_reviewer_agent:
         payload["trustedReviewerAgentIds"] = args.trusted_reviewer_agent
-    result = evaluate_readiness(payload)
-    print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result["ready"] else 1
+    return payload
+
+
+def _add_artifact_binding(payload: dict[str, Any], args: argparse.Namespace) -> None:
+    if not (args.benchmark_run_id or args.benchmark_artifact_id):
+        return
+    if not (args.benchmark_run_id and args.benchmark_artifact_id):
+        payload["benchmarkArtifactBinding"] = {
+            "__load_error": "--benchmark-run-id and --benchmark-artifact-id must be supplied together"
+        }
+        return
+    binding = _load_github_artifact_binding(
+        args.repo, args.benchmark_run_id, args.benchmark_artifact_id, args.benchmark_artifact_name
+    )
+    payload["benchmarkArtifactBinding"] = binding
+    digest = binding.get("artifact_digest") if isinstance(binding, dict) else None
+    if not args.benchmark_artifact_digest and isinstance(digest, str):
+        payload["benchmarkArtifactDigest"] = digest
 
 
 def _load_github_artifact_binding(repo: str, run_id: str, artifact_id: str, artifact_name: str) -> dict[str, Any]:
@@ -312,7 +431,8 @@ def _load_github_artifact_binding(repo: str, run_id: str, artifact_id: str, arti
         artifact = _gh_api_json(f"repos/{repo}/actions/artifacts/{artifact_id}")
     except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         return {"__load_error": f"{type(exc).__name__}: {exc}"}
-    artifact_run = artifact.get("workflow_run") if isinstance(artifact.get("workflow_run"), dict) else {}
+    artifact_run_value = artifact.get("workflow_run")
+    artifact_run = artifact_run_value if isinstance(artifact_run_value, dict) else {}
     binding = {
         "workflow_run_id": str(run.get("id") or ""),
         "workflow_head_sha": run.get("head_sha"),
@@ -390,30 +510,25 @@ def _review_gate_result(
 ) -> dict[str, Any]:
     reviews = payload.get("reviews") or []
     same_head_reviews = [
-        review
-        for review in reviews
-        if _review_applies_to_latest(review, latest_head_sha, latest_head_committed_at)
+        review for review in reviews if _review_applies_to_latest(review, latest_head_sha, latest_head_committed_at)
     ]
-    clean_github_reviews = [
-        review
-        for review in same_head_reviews
-        if review.get("state") not in {"CHANGES_REQUESTED", "DISMISSED"}
-        and not BLOCKING_RE.search(review.get("body") or "")
-        and review.get("author") in FINAL_REVIEW_AUTHORS
-        and _review_references_head(review, latest_head_sha)
-    ]
-    blocking_reviews = [
-        review
-        for review in same_head_reviews
-        if _review_is_blocking(review)
-    ]
+    structured_clean = latest_clean_structured_review_evidence(
+        {"reviews": same_head_reviews, "comments": []},
+        latest_head_sha,
+        sorted(FINAL_REVIEW_AUTHORS),
+        _final_review_author_matches,
+    )
+    clean_github_reviews = [structured_clean] if structured_clean is not None else []
+    blocking_reviews = [review for review in same_head_reviews if _review_is_blocking(review)]
     latest_clean = _latest_review(clean_github_reviews)
     later_blocking = [
         review
         for review in blocking_reviews
         if latest_clean is None or _dt(review["submittedAt"]) > _dt(latest_clean["submittedAt"])
     ]
-    github_final_review = latest_clean is not None and not later_blocking and not unresolved_blocking and not blocking_comments
+    github_final_review = (
+        latest_clean is not None and not later_blocking and not unresolved_blocking and not blocking_comments
+    )
     github_review_state = _github_review_state(
         payload,
         github_final_review,
@@ -435,7 +550,9 @@ def _review_gate_result(
         "review_gate": review_gate,
         "github_review_state": github_review_state,
         "github_final_review": github_final_review,
-        "final_review_timestamp": latest_clean.get("submittedAt") if github_final_review else None,
+        "final_review_timestamp": latest_clean["submittedAt"]
+        if latest_clean is not None and github_final_review
+        else None,
         "fallback_quorum_valid": fallback_result["valid"],
         "fallback_quorum_errors": fallback_result["errors"],
         "later_blocking_review_count": len(later_blocking),
@@ -452,29 +569,10 @@ def _benchmark_result(payload: dict[str, Any], latest_head_sha: str = "") -> dic
     if evidence.get("__load_error"):
         errors.append(f"benchmark evidence malformed JSON: {evidence['__load_error']}")
         return _benchmark_result_payload(False, errors, None, None, digest)
-    try:
-        validate_benchmark_result(evidence)
-    except SchemaValidationError as exc:
-        errors.append(f"benchmark schema invalid: {exc}")
+    errors.extend(_benchmark_content_errors(evidence, latest_head_sha))
     phase1_decision = evidence.get("phase1_decision")
-    if phase1_decision != "BENCHMARK_PASS":
-        errors.append(f"phase1_decision expected BENCHMARK_PASS, got {phase1_decision!r}")
-    evaluator_sha = evidence.get("governance_evaluator_git_sha")
-    if latest_head_sha and evaluator_sha != latest_head_sha:
-        errors.append(
-            "governance_evaluator_git_sha must match latest head "
-            f"{latest_head_sha}, got {evaluator_sha!r}"
-        )
-    acceptance_errors = evidence.get("acceptance_errors")
-    if acceptance_errors != []:
-        errors.append("acceptance_errors must be []")
     artifact_hash = evidence.get("artifact_content_hash")
-    if not (isinstance(artifact_hash, str) and SHA256_RE.match(artifact_hash)):
-        errors.append("artifact_content_hash must be a 64-character lowercase hex SHA-256")
-    else:
-        expected_hash = sha256_json({**evidence, "artifact_content_hash": ""})
-        if artifact_hash != expected_hash:
-            errors.append("artifact_content_hash does not match benchmark evidence content")
+    errors.extend(_artifact_content_hash_errors(evidence, artifact_hash))
     metrics = evidence.get("metrics")
     if not isinstance(metrics, dict):
         errors.append("metrics missing or malformed")
@@ -488,6 +586,31 @@ def _benchmark_result(payload: dict[str, Any], latest_head_sha: str = "") -> dic
         errors.append("github artifact digest required in sha256:<hex> format")
     errors.extend(_artifact_binding_errors(payload, artifact_digest, artifact_hash))
     return _benchmark_result_payload(not errors, errors, phase1_decision, artifact_hash, artifact_digest)
+
+
+def _benchmark_content_errors(evidence: dict[str, Any], latest_head_sha: str) -> list[str]:
+    errors: list[str] = []
+    try:
+        validate_benchmark_result(evidence)
+    except SchemaValidationError as exc:
+        errors.append(f"benchmark schema invalid: {exc}")
+    if evidence.get("phase1_decision") != "BENCHMARK_PASS":
+        errors.append(f"phase1_decision expected BENCHMARK_PASS, got {evidence.get('phase1_decision')!r}")
+    if latest_head_sha and evidence.get("governance_evaluator_git_sha") != latest_head_sha:
+        errors.append(
+            f"governance_evaluator_git_sha must match latest head {latest_head_sha}, got {evidence.get('governance_evaluator_git_sha')!r}"
+        )
+    if evidence.get("acceptance_errors") != []:
+        errors.append("acceptance_errors must be []")
+    return errors
+
+
+def _artifact_content_hash_errors(evidence: dict[str, Any], artifact_hash: Any) -> list[str]:
+    if not (isinstance(artifact_hash, str) and SHA256_RE.match(artifact_hash)):
+        return ["artifact_content_hash must be a 64-character lowercase hex SHA-256"]
+    if artifact_hash != sha256_json({**evidence, "artifact_content_hash": ""}):
+        return ["artifact_content_hash does not match benchmark evidence content"]
+    return []
 
 
 def _benchmark_result_payload(
@@ -533,20 +656,32 @@ def _metric_errors(metrics: dict[str, Any]) -> list[str]:
             errors.append(f"metrics.{name} missing or not a number")
     if errors:
         return errors
-    if metrics["execution_duration_seconds"] < 0:
-        errors.append("metrics.execution_duration_seconds must be nonnegative")
-    positive_denominators = ("case_count", "critical_defect_count", "negative_control_count", "verified_safe_count")
-    for name in positive_denominators:
-        if metrics[name] <= 0:
-            errors.append(f"metrics.{name} must be greater than zero")
-    bounded_pairs = (
+    errors.extend(_metric_range_errors(metrics))
+    errors.extend(_metric_acceptance_errors(metrics))
+    return errors
+
+
+def _metric_range_errors(metrics: dict[str, Any]) -> list[str]:
+    errors = (
+        ["metrics.execution_duration_seconds must be nonnegative"] if metrics["execution_duration_seconds"] < 0 else []
+    )
+    errors.extend(
+        f"metrics.{name} must be greater than zero"
+        for name in ("case_count", "critical_defect_count", "negative_control_count", "verified_safe_count")
+        if metrics[name] <= 0
+    )
+    for numerator, denominator in (
         ("critical_defects_blocked", "critical_defect_count"),
         ("negative_controls_blocked", "negative_control_count"),
         ("false_blocks", "verified_safe_count"),
-    )
-    for numerator, denominator in bounded_pairs:
+    ):
         if metrics[numerator] < 0 or metrics[numerator] > metrics[denominator]:
             errors.append(f"metrics.{numerator} must be between 0 and metrics.{denominator}")
+    return errors
+
+
+def _metric_acceptance_errors(metrics: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
     if metrics["critical_defects_blocked"] != metrics["critical_defect_count"]:
         errors.append("metrics.critical_defects_blocked must equal metrics.critical_defect_count")
     if metrics["negative_controls_blocked"] != metrics["negative_control_count"]:
@@ -561,7 +696,7 @@ def _metric_errors(metrics: dict[str, Any]) -> list[str]:
         "deterministic_flake_rate": 0.0,
     }
     for name, expected in scalar_expectations.items():
-        if name in metrics and metrics[name] != expected:
+        if metrics[name] != expected:
             errors.append(f"metrics.{name} expected {expected}, got {metrics[name]!r}")
     return errors
 
@@ -583,58 +718,84 @@ def _case_evidence_errors(evidence: dict[str, Any], metrics: dict[str, Any]) -> 
         "verified_safe_count": 0,
     }
     for index, case in enumerate(cases):
-        if not isinstance(case, dict):
-            errors.append(f"cases[{index}] malformed")
-            continue
-        expected = case.get("expected_decision")
-        decision = case.get("decision")
-        actual = decision.get("decision") if isinstance(decision, dict) else None
-        if actual != expected:
-            errors.append(f"cases[{index}].decision expected {expected!r}, got {actual!r}")
-        case_evidence = case.get("evidence")
-        if not isinstance(case_evidence, list) or not case_evidence:
-            errors.append(f"cases[{index}].evidence must contain detector evidence")
-            evidence_ids: set[str] = set()
-        else:
-            evidence_ids = {
-                item.get("evidence_id")
-                for item in case_evidence
-                if isinstance(item, dict) and isinstance(item.get("evidence_id"), str)
-            }
-            if len(evidence_ids) != len(case_evidence):
-                errors.append(f"cases[{index}].evidence entries must have unique evidence_id values")
-            for evidence_index, item in enumerate(case_evidence):
-                if not isinstance(item, dict):
-                    errors.append(f"cases[{index}].evidence[{evidence_index}] malformed")
-                    continue
-                if item.get("case_id") != case.get("id"):
-                    errors.append(f"cases[{index}].evidence[{evidence_index}].case_id must match case id")
-        evidence_refs = decision.get("evidence_refs") if isinstance(decision, dict) else None
-        if not isinstance(evidence_refs, list) or not evidence_refs:
-            errors.append(f"cases[{index}].decision.evidence_refs must cite detector evidence")
-        elif not set(evidence_refs).issubset(evidence_ids):
-            errors.append(f"cases[{index}].decision.evidence_refs must match detector evidence ids")
-        label = case.get("label")
-        category = case.get("category")
-        if case.get("critical") is True and label == "REPRODUCED_BAD":
-            recomputed["critical_defect_count"] += 1
-            if actual == "BLOCK_TECHNICAL":
-                recomputed["critical_defects_blocked"] += 1
-        if category == "synthetic_structural" and label == "REPRODUCED_BAD":
-            recomputed["negative_control_count"] += 1
-            if actual == "BLOCK_TECHNICAL":
-                recomputed["negative_controls_blocked"] += 1
-        if label == "VERIFIED_SAFE":
-            recomputed["verified_safe_count"] += 1
-            if actual == "BLOCK_TECHNICAL":
-                recomputed["false_blocks"] += 1
+        case_errors, counts = _single_case_evidence(case, index)
+        errors.extend(case_errors)
+        for name, value in counts.items():
+            recomputed[name] += value
     for name, value in recomputed.items():
         if metrics.get(name) != value:
             errors.append(f"metrics.{name} expected recomputed value {value}, got {metrics.get(name)!r}")
     return errors
 
 
-def _artifact_binding_errors(payload: dict[str, Any], artifact_digest: str | None, artifact_hash: str | None) -> list[str]:
+def _single_case_evidence(case: Any, index: int) -> tuple[list[str], dict[str, int]]:
+    counts = {
+        name: 0
+        for name in (
+            "critical_defects_blocked",
+            "critical_defect_count",
+            "negative_controls_blocked",
+            "negative_control_count",
+            "false_blocks",
+            "verified_safe_count",
+        )
+    }
+    if not isinstance(case, dict):
+        return [f"cases[{index}] malformed"], counts
+    decision = case.get("decision")
+    actual = decision.get("decision") if isinstance(decision, dict) else None
+    errors = (
+        [f"cases[{index}].decision expected {case.get('expected_decision')!r}, got {actual!r}"]
+        if actual != case.get("expected_decision")
+        else []
+    )
+    evidence_ids, evidence_errors = _detector_evidence_ids(case, index)
+    errors.extend(evidence_errors)
+    refs = decision.get("evidence_refs") if isinstance(decision, dict) else None
+    if not isinstance(refs, list) or not refs:
+        errors.append(f"cases[{index}].decision.evidence_refs must cite detector evidence")
+    elif not set(refs).issubset(evidence_ids):
+        errors.append(f"cases[{index}].decision.evidence_refs must match detector evidence ids")
+    _increment_case_counts(case, actual, counts)
+    return errors, counts
+
+
+def _detector_evidence_ids(case: dict[str, Any], index: int) -> tuple[set[str], list[str]]:
+    evidence = case.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return set(), [f"cases[{index}].evidence must contain detector evidence"]
+    ids = {
+        str(item["evidence_id"])
+        for item in evidence
+        if isinstance(item, dict) and isinstance(item.get("evidence_id"), str)
+    }
+    errors = (
+        [f"cases[{index}].evidence entries must have unique evidence_id values"] if len(ids) != len(evidence) else []
+    )
+    for evidence_index, item in enumerate(evidence):
+        if not isinstance(item, dict):
+            errors.append(f"cases[{index}].evidence[{evidence_index}] malformed")
+        elif item.get("case_id") != case.get("id"):
+            errors.append(f"cases[{index}].evidence[{evidence_index}].case_id must match case id")
+    return ids, errors
+
+
+def _increment_case_counts(case: dict[str, Any], actual: Any, counts: dict[str, int]) -> None:
+    label = case.get("label")
+    if case.get("critical") is True and label == "REPRODUCED_BAD":
+        counts["critical_defect_count"] += 1
+        counts["critical_defects_blocked"] += actual == "BLOCK_TECHNICAL"
+    if case.get("category") == "synthetic_structural" and label == "REPRODUCED_BAD":
+        counts["negative_control_count"] += 1
+        counts["negative_controls_blocked"] += actual == "BLOCK_TECHNICAL"
+    if label == "VERIFIED_SAFE":
+        counts["verified_safe_count"] += 1
+        counts["false_blocks"] += actual == "BLOCK_TECHNICAL"
+
+
+def _artifact_binding_errors(
+    payload: dict[str, Any], artifact_digest: str | None, artifact_hash: str | None
+) -> list[str]:
     binding = payload.get("benchmarkArtifactBinding")
     if not payload.get("requireGithubArtifactDigest") and not isinstance(binding, dict):
         return []
@@ -649,36 +810,69 @@ def _artifact_binding_errors(payload: dict[str, Any], artifact_digest: str | Non
     run_id = str(binding.get("workflow_run_id") or "")
     artifact_run_id = str(binding.get("artifact_workflow_run_id") or "")
     artifact_id = str(binding.get("artifact_id") or "")
-    if not run_id:
-        errors.append("github artifact binding workflow_run_id missing")
-    if not artifact_id:
-        errors.append("github artifact binding artifact_id missing")
-    if artifact_run_id and run_id and artifact_run_id != run_id:
-        errors.append("github artifact binding artifact workflow_run_id does not match workflow_run_id")
-    if binding.get("workflow_status") != "completed":
-        errors.append("github artifact binding workflow_status must be completed")
-    if binding.get("workflow_conclusion") != "success":
-        errors.append("github artifact binding workflow_conclusion must be success")
-    if binding.get("workflow_head_sha") != expected_head:
-        errors.append("github artifact binding workflow_head_sha does not match latest head")
-    artifact_head = binding.get("artifact_workflow_head_sha")
-    if artifact_head and artifact_head != expected_head:
-        errors.append("github artifact binding artifact_workflow_head_sha does not match latest head")
-    if binding.get("artifact_name") != expected_name:
-        errors.append(f"github artifact binding artifact_name must be {expected_name}")
-    if binding.get("artifact_expired") is True:
-        errors.append("github artifact binding artifact is expired")
-    if binding.get("artifact_digest") != artifact_digest:
-        errors.append("github artifact binding artifact_digest does not match supplied digest")
-    if not (isinstance(binding.get("artifact_digest"), str) and DIGEST_RE.match(binding["artifact_digest"])):
-        errors.append("github artifact binding artifact_digest must be sha256:<hex>")
-    if binding.get("artifact_evidence_error"):
-        errors.append(f"github artifact evidence could not be loaded: {binding['artifact_evidence_error']}")
-    if binding.get("artifact_evidence_content_hash") != artifact_hash:
-        errors.append("github artifact evidence content hash does not match supplied benchmark JSON")
-    if binding.get("artifact_evidence_phase1_decision") != "BENCHMARK_PASS":
-        errors.append("github artifact evidence phase1_decision must be BENCHMARK_PASS")
+    errors.extend(_artifact_identity_errors(binding, run_id, artifact_run_id, artifact_id, expected_head))
+    errors.extend(
+        _artifact_evidence_binding_errors(binding, artifact_digest, artifact_hash, expected_head, expected_name)
+    )
     return errors
+
+
+def _artifact_evidence_binding_errors(
+    binding: dict[str, Any], digest: str | None, content_hash: str | None, head: str, name: str
+) -> list[str]:
+    artifact_head = binding.get("artifact_workflow_head_sha")
+    checks = (
+        (
+            bool(artifact_head and artifact_head != head),
+            "github artifact binding artifact_workflow_head_sha does not match latest head",
+        ),
+        (binding.get("artifact_name") != name, f"github artifact binding artifact_name must be {name}"),
+        (binding.get("artifact_expired") is True, "github artifact binding artifact is expired"),
+        (
+            binding.get("artifact_digest") != digest,
+            "github artifact binding artifact_digest does not match supplied digest",
+        ),
+        (
+            not (isinstance(binding.get("artifact_digest"), str) and DIGEST_RE.match(binding["artifact_digest"])),
+            "github artifact binding artifact_digest must be sha256:<hex>",
+        ),
+        (
+            bool(binding.get("artifact_evidence_error")),
+            f"github artifact evidence could not be loaded: {binding.get('artifact_evidence_error')}",
+        ),
+        (
+            binding.get("artifact_evidence_content_hash") != content_hash,
+            "github artifact evidence content hash does not match supplied benchmark JSON",
+        ),
+        (
+            binding.get("artifact_evidence_phase1_decision") != "BENCHMARK_PASS",
+            "github artifact evidence phase1_decision must be BENCHMARK_PASS",
+        ),
+    )
+    return [message for failed, message in checks if failed]
+
+
+def _artifact_identity_errors(
+    binding: dict[str, Any], run_id: str, artifact_run_id: str, artifact_id: str, expected_head: str
+) -> list[str]:
+    checks = (
+        (not run_id, "github artifact binding workflow_run_id missing"),
+        (not artifact_id, "github artifact binding artifact_id missing"),
+        (
+            bool(artifact_run_id and run_id and artifact_run_id != run_id),
+            "github artifact binding artifact workflow_run_id does not match workflow_run_id",
+        ),
+        (binding.get("workflow_status") != "completed", "github artifact binding workflow_status must be completed"),
+        (
+            binding.get("workflow_conclusion") != "success",
+            "github artifact binding workflow_conclusion must be success",
+        ),
+        (
+            binding.get("workflow_head_sha") != expected_head,
+            "github artifact binding workflow_head_sha does not match latest head",
+        ),
+    )
+    return [message for failed, message in checks if failed]
 
 
 def _case_manifest_errors(cases: list[Any]) -> list[str]:
@@ -690,9 +884,7 @@ def _case_manifest_errors(cases: list[Any]) -> list[str]:
     manifest_fields = ("id", "title", "category", "label", "critical", "expected_decision")
     expected_manifest = [{field: case.get(field) for field in manifest_fields} for case in manifest_cases]
     actual_manifest = [
-        {field: case.get(field) for field in manifest_fields}
-        for case in cases
-        if isinstance(case, dict)
+        {field: case.get(field) for field in manifest_fields} for case in cases if isinstance(case, dict)
     ]
     if actual_manifest == expected_manifest:
         return []
@@ -741,51 +933,83 @@ def _fallback_quorum_result(quorum: Any, expected_base_sha: str, expected_head_s
     reviewer_ids: set[str] = set()
     reviewer_agent_ids: set[str] = set()
     for index, reviewer in enumerate(reviewers):
-        if not isinstance(reviewer, dict):
-            errors.append(f"reviewers[{index}] malformed")
-            continue
-        reviewer_id = reviewer.get("reviewer_id")
-        if not isinstance(reviewer_id, str) or not reviewer_id:
-            errors.append(f"reviewers[{index}].reviewer_id missing")
-        elif reviewer_id in reviewer_ids:
-            errors.append(f"reviewers[{index}].reviewer_id duplicated")
-        else:
-            reviewer_ids.add(reviewer_id)
-        if isinstance(reviewer_id, str) and reviewer_id:
-            output = provenance_outputs["by_reviewer"].get(reviewer_id)
-            if output is None:
-                errors.append(f"reviewers[{index}].reviewer_id missing from provenance reviewer_outputs")
-            else:
-                if not isinstance(output.get("agent_id"), str) or not output["agent_id"]:
-                    errors.append(f"reviewers[{index}] provenance agent_id missing")
-                elif isinstance(trusted_agents, set) and output["agent_id"] not in trusted_agents:
-                    errors.append(f"reviewers[{index}] provenance agent_id is not trusted")
-                elif output["agent_id"] in reviewer_agent_ids:
-                    errors.append(f"reviewers[{index}] provenance agent_id duplicated")
-                else:
-                    reviewer_agent_ids.add(output["agent_id"])
-                response_hash = output.get("response_sha256")
-                if not (isinstance(response_hash, str) and SHA256_RE.match(response_hash)):
-                    errors.append(f"reviewers[{index}] provenance response_sha256 invalid")
-                elif response_hash != sha256_json(reviewer):
-                    errors.append(f"reviewers[{index}] provenance response_sha256 does not match reviewer JSON")
-        reviewed_head = reviewer.get("reviewed_head_sha") or quorum.get("reviewed_head_sha")
-        reviewed_base = reviewer.get("reviewed_base_sha") or quorum.get("reviewed_base_sha")
-        if reviewed_head != expected_head_sha:
-            errors.append(f"reviewers[{index}].reviewed_head_sha does not match latest head")
-        if expected_base_sha and reviewed_base != expected_base_sha:
-            errors.append(f"reviewers[{index}].reviewed_base_sha does not match base")
-        if reviewer.get("final_verdict") != "CLEAN":
-            errors.append(f"reviewers[{index}].final_verdict must be CLEAN")
-        findings = reviewer.get("findings") or []
-        if not isinstance(findings, list):
-            errors.append(f"reviewers[{index}].findings malformed")
-            continue
-        for finding_index, finding in enumerate(findings):
-            severity = finding.get("severity") if isinstance(finding, dict) else None
-            if severity in {"P0", "P1", "P2"}:
-                errors.append(f"reviewers[{index}].findings[{finding_index}] reports blocking {severity}")
+        errors.extend(
+            _reviewer_errors(
+                reviewer,
+                index,
+                quorum,
+                expected_base_sha,
+                expected_head_sha,
+                trusted_agents,
+                provenance_outputs["by_reviewer"],
+                reviewer_ids,
+                reviewer_agent_ids,
+            )
+        )
     return {"valid": not errors, "errors": errors}
+
+
+def _reviewer_errors(
+    reviewer: Any,
+    index: int,
+    quorum: dict[str, Any],
+    base: str,
+    head: str,
+    trusted: Any,
+    outputs: dict[str, Any],
+    reviewer_ids: set[str],
+    agent_ids: set[str],
+) -> list[str]:
+    if not isinstance(reviewer, dict):
+        return [f"reviewers[{index}] malformed"]
+    errors: list[str] = []
+    reviewer_id = reviewer.get("reviewer_id")
+    if not isinstance(reviewer_id, str) or not reviewer_id:
+        errors.append(f"reviewers[{index}].reviewer_id missing")
+    elif reviewer_id in reviewer_ids:
+        errors.append(f"reviewers[{index}].reviewer_id duplicated")
+    else:
+        reviewer_ids.add(reviewer_id)
+        errors.extend(_reviewer_provenance_errors(reviewer, index, outputs.get(reviewer_id), trusted, agent_ids))
+    if (reviewer.get("reviewed_head_sha") or quorum.get("reviewed_head_sha")) != head:
+        errors.append(f"reviewers[{index}].reviewed_head_sha does not match latest head")
+    if base and (reviewer.get("reviewed_base_sha") or quorum.get("reviewed_base_sha")) != base:
+        errors.append(f"reviewers[{index}].reviewed_base_sha does not match base")
+    if reviewer.get("final_verdict") != "CLEAN":
+        errors.append(f"reviewers[{index}].final_verdict must be CLEAN")
+    findings = reviewer.get("findings") or []
+    if not isinstance(findings, list):
+        errors.append(f"reviewers[{index}].findings malformed")
+    else:
+        errors.extend(
+            f"reviewers[{index}].findings[{position}] reports blocking {finding.get('severity')}"
+            for position, finding in enumerate(findings)
+            if isinstance(finding, dict) and finding.get("severity") in {"P0", "P1", "P2"}
+        )
+    return errors
+
+
+def _reviewer_provenance_errors(
+    reviewer: dict[str, Any], index: int, output: Any, trusted: Any, agent_ids: set[str]
+) -> list[str]:
+    if not isinstance(output, dict):
+        return [f"reviewers[{index}].reviewer_id missing from provenance reviewer_outputs"]
+    agent_id = output.get("agent_id")
+    errors: list[str] = []
+    if not isinstance(agent_id, str) or not agent_id:
+        errors.append(f"reviewers[{index}] provenance agent_id missing")
+    elif isinstance(trusted, set) and agent_id not in trusted:
+        errors.append(f"reviewers[{index}] provenance agent_id is not trusted")
+    elif agent_id in agent_ids:
+        errors.append(f"reviewers[{index}] provenance agent_id duplicated")
+    else:
+        agent_ids.add(agent_id)
+    response_hash = output.get("response_sha256")
+    if not (isinstance(response_hash, str) and SHA256_RE.match(response_hash)):
+        errors.append(f"reviewers[{index}] provenance response_sha256 invalid")
+    elif response_hash != sha256_json(reviewer):
+        errors.append(f"reviewers[{index}] provenance response_sha256 does not match reviewer JSON")
+    return errors
 
 
 def validate_review_quorum_document(
@@ -834,21 +1058,25 @@ def _quorum_provenance_outputs(
         errors.append("fallback quorum provenance requires at least two reviewer_outputs")
         return {"errors": errors, "by_reviewer": by_reviewer}
     for index, output in enumerate(outputs):
-        if not isinstance(output, dict):
-            errors.append(f"provenance.reviewer_outputs[{index}] malformed")
-            continue
-        reviewer_id = output.get("reviewer_id")
-        if not isinstance(reviewer_id, str) or not reviewer_id:
-            errors.append(f"provenance.reviewer_outputs[{index}].reviewer_id missing")
-            continue
-        if reviewer_id in by_reviewer:
-            errors.append(f"provenance.reviewer_outputs[{index}].reviewer_id duplicated")
-            continue
-        agent_id = output.get("agent_id")
-        if isinstance(trusted_agents, set) and isinstance(agent_id, str) and agent_id not in trusted_agents:
-            errors.append(f"provenance.reviewer_outputs[{index}].agent_id is not trusted")
-        by_reviewer[reviewer_id] = output
+        errors.extend(_provenance_output_errors(output, index, trusted_agents, by_reviewer))
     return {"errors": errors, "by_reviewer": by_reviewer}
+
+
+def _provenance_output_errors(
+    output: Any, index: int, trusted: Any, by_reviewer: dict[str, dict[str, Any]]
+) -> list[str]:
+    if not isinstance(output, dict):
+        return [f"provenance.reviewer_outputs[{index}] malformed"]
+    reviewer_id = output.get("reviewer_id")
+    if not isinstance(reviewer_id, str) or not reviewer_id:
+        return [f"provenance.reviewer_outputs[{index}].reviewer_id missing"]
+    if reviewer_id in by_reviewer:
+        return [f"provenance.reviewer_outputs[{index}].reviewer_id duplicated"]
+    by_reviewer[reviewer_id] = output
+    agent_id = output.get("agent_id")
+    if isinstance(trusted, set) and isinstance(agent_id, str) and agent_id not in trusted:
+        return [f"provenance.reviewer_outputs[{index}].agent_id is not trusted"]
+    return []
 
 
 def _github_review_state(
@@ -874,7 +1102,9 @@ def _read_json_or_error(path: Path) -> dict[str, Any]:
         return {"__load_error": str(exc)}
 
 
-def _review_is_on_latest_after_commit(review: dict[str, Any], latest_head_sha: str, latest_head_committed_at: str) -> bool:
+def _review_is_on_latest_after_commit(
+    review: dict[str, Any], latest_head_sha: str, latest_head_committed_at: str
+) -> bool:
     return bool(
         review.get("submittedAt")
         and review.get("commitOid") == latest_head_sha
@@ -903,6 +1133,10 @@ def _review_is_blocking(review: dict[str, Any]) -> bool:
 def _review_references_head(review: dict[str, Any], latest_head_sha: str) -> bool:
     body = review.get("body") or ""
     return latest_head_sha in body or latest_head_sha[:10] in body
+
+
+def _final_review_author_matches(author: Any, approved: list[str]) -> bool:
+    return isinstance(author, str) and author in approved
 
 
 def _latest_review(reviews: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -961,10 +1195,7 @@ def _is_executed_success_context(item: dict[str, Any]) -> bool:
 
 
 def _is_governance_context(item: dict[str, Any]) -> bool:
-    text = " ".join(
-        str(item.get(field) or "")
-        for field in ("name", "workflowName", "context")
-    )
+    text = " ".join(str(item.get(field) or "") for field in ("name", "workflowName", "context"))
     return bool(GOVERNANCE_CONTEXT_RE.search(text))
 
 

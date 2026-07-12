@@ -184,7 +184,7 @@ D: reviewer findings converted into reproducible tests before decision
 E: full proposed orchestrator
 ```
 
-Run every variant against the same calibration and holdout cases.
+Run every variant against the same versioned benchmark cases.
 
 Record:
 
@@ -199,7 +199,7 @@ duration
 
 Do not assume GPT-5.5 xhigh, two agents, or a longer skill is better. Require the benchmark to prove it.
 
-Keep approximately 20% of cases as a holdout set. The agents receive the code and requirements but not the expected decision. This reduces prompt-fitting and compliance theater.
+Keep benchmark expectations out of reviewer prompts. Reviewers receive the code and requirements, while deterministic evaluator code owns expected decisions. This reduces prompt-fitting and compliance theater without creating a private model-specific runtime dependency.
 
 ## 6. Promote automation in stages
 
@@ -311,7 +311,7 @@ Every blocking governance rule must have:
 - a machine-readable detector or executable behavior case
 - at least one negative control that must fail
 - at least one positive control that must pass
-- benchmark results against historical and holdout cases
+- benchmark results against historical, defective, safe, and evasion cases
 - measured false-negative and false-block rates
 ```
 
@@ -335,7 +335,7 @@ Use a central protected governance repository or immutable action containing:
 decision engine
 schemas
 common structural detectors
-holdout cases
+versioned benchmark cases
 benchmark runner
 reusable GitHub workflow
 ```

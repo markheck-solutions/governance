@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from governance_eval.models import DetectorEvidence, EvidenceStatus, ReviewFinding
-from governance_eval.lock import read_spaghetti_lock, validate_spaghetti_lock
+from governance_eval.lock import read_target_lock, validate_target_lock
 from governance_eval.paths import repo_root
 
 Detector = Callable[[dict[str, Any], Path], DetectorEvidence]
@@ -87,26 +87,27 @@ def detect_route_interleaving(case: dict[str, Any], fixture_path: Path) -> Detec
     )
 
 
-def detect_spaghetti_lock(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
+def detect_target_lock(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
     root = repo_root(fixture_path)
-    lock_path = root / "targets" / "spaghetti.lock.toml"
-    problems = validate_spaghetti_lock(lock_path)
+    lock_path = root / case["target_lock_path"]
+    pack_path = root / case["target_pack_path"]
+    problems = validate_target_lock(lock_path, pack_path, root=root)
     if problems:
         return DetectorEvidence(
-            evidence_id=_evidence_id(case, "spaghetti_lock"),
+            evidence_id=_evidence_id(case, "target_lock"),
             case_id=case["id"],
-            detector_id="spaghetti_lock",
+            detector_id="target_lock",
             status=EvidenceStatus.UNVERIFIABLE,
-            message="Spaghetti lock invalid",
+            message="target lock invalid",
             observed={"problems": problems, "path": str(lock_path)},
         )
-    lock = read_spaghetti_lock(lock_path)
+    lock = read_target_lock(lock_path)
     return DetectorEvidence(
-        evidence_id=_evidence_id(case, "spaghetti_lock"),
+        evidence_id=_evidence_id(case, "target_lock"),
         case_id=case["id"],
-        detector_id="spaghetti_lock",
+        detector_id="target_lock",
         status=EvidenceStatus.PASS,
-        message="Spaghetti PR #141 evidence pinned to exact SHAs",
+        message="target evidence pinned to exact immutable revisions",
         observed=lock.to_json(),
     )
 
@@ -134,9 +135,11 @@ def detect_private_reexport(case: dict[str, Any], fixture_path: Path) -> Detecto
         if path.stem.startswith("_") and path.name != "__init__.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        exported_private = _exported_private_names(tree)
+        exported_names = _exported_names(tree)
         private_imports = _imports_from_private_modules(tree)
-        for name in sorted(exported_private | private_imports):
+        explicit_private_exports = exported_names & set(private_imports)
+        package_exports = set(private_imports) if path.name == "__init__.py" else set()
+        for name in sorted(explicit_private_exports | package_exports):
             findings.append(_finding(case, "private_reexport", "P2", "private_helper_reexport", path, name))
     return _structural_evidence(case, "private_reexport", findings, "public API exports no private helpers")
 
@@ -150,11 +153,15 @@ def detect_private_test_dependency(case: dict[str, Any], fixture_path: Path) -> 
                 module = node.module or ""
                 imported = {alias.name for alias in node.names}
                 if "._" in f".{module}" or any(name.startswith("_") for name in imported):
-                    findings.append(_finding(case, "private_test_dependency", "P2", "test_private_dependency", path, module))
+                    findings.append(
+                        _finding(case, "private_test_dependency", "P2", "test_private_dependency", path, module)
+                    )
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     if "._" in f".{alias.name}":
-                        findings.append(_finding(case, "private_test_dependency", "P2", "test_private_dependency", path, alias.name))
+                        findings.append(
+                            _finding(case, "private_test_dependency", "P2", "test_private_dependency", path, alias.name)
+                        )
     return _structural_evidence(case, "private_test_dependency", findings, "tests use public production API only")
 
 
@@ -182,9 +189,18 @@ def detect_untyped_dict_boundary(case: dict[str, Any], fixture_path: Path) -> De
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
-                if _is_raw_dict_annotation(node.returns) or any(_is_raw_dict_annotation(arg.annotation) for arg in node.args.args):
-                    findings.append(_finding(case, "untyped_public_dict", "P2", "untyped_public_boundary", path, node.name))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
+                arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+                if node.args.vararg:
+                    arguments.append(node.args.vararg)
+                if node.args.kwarg:
+                    arguments.append(node.args.kwarg)
+                if _is_raw_dict_annotation(node.returns) or any(
+                    _is_raw_dict_annotation(arg.annotation) for arg in arguments
+                ):
+                    findings.append(
+                        _finding(case, "untyped_public_dict", "P2", "untyped_public_boundary", path, node.name)
+                    )
     return _structural_evidence(case, "untyped_public_dict", findings, "public API avoids raw dict boundaries")
 
 
@@ -192,19 +208,35 @@ def detect_gate_scope(case: dict[str, Any], fixture_path: Path) -> DetectorEvide
     data = _read_json(fixture_path / "governance_gates.json")
     gates = data["gates"]
     required_files = sorted(set(data["changed_files"] + data["high_risk_files"]))
-    uncovered = [path for path in required_files if not _covered_by_any_gate(path, gates)]
+    required_gate_names = data.get("required_gate_names") or [gate.get("name") for gate in gates]
+    gates_by_name = {gate.get("name"): gate for gate in gates if isinstance(gate.get("name"), str)}
+    missing_coverage = [
+        {"path": path, "gate": gate_name}
+        for path in required_files
+        for gate_name in required_gate_names
+        if gate_name not in gates_by_name or not _covered_by_gate(path, gates_by_name[gate_name])
+    ]
+    uncovered = sorted({item["path"] for item in missing_coverage})
     findings = [
         ReviewFinding(
             id=f"{case['id']}-gate_scope-{index:03d}",
             severity="P1",
             category="narrowed_validation_scope",
-            message=f"required file not covered by any gate: {path}",
+            message=f"required file not covered by applicable gate {item['gate']}: {item['path']}",
             evidence_id=_evidence_id(case, "gate_scope"),
         )
-        for index, path in enumerate(uncovered, start=1)
+        for index, item in enumerate(missing_coverage, start=1)
     ]
-    observed = {"required_files": required_files, "uncovered_files": uncovered, "gates": gates}
-    return _structural_evidence(case, "gate_scope", findings, "all changed and high-risk files covered by gates", observed)
+    observed = {
+        "required_files": required_files,
+        "required_gate_names": required_gate_names,
+        "missing_gate_coverage": missing_coverage,
+        "uncovered_files": uncovered,
+        "gates": gates,
+    }
+    return _structural_evidence(
+        case, "gate_scope", findings, "all changed and high-risk files covered by gates", observed
+    )
 
 
 def detect_thresholds(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
@@ -228,7 +260,9 @@ def detect_thresholds(case: dict[str, Any], fixture_path: Path) -> DetectorEvide
         )
         for index, item in enumerate(weakened, start=1)
     ]
-    return _structural_evidence(case, "thresholds", findings, "validation thresholds not weakened", {"weakened": weakened})
+    return _structural_evidence(
+        case, "thresholds", findings, "validation thresholds not weakened", {"weakened": weakened}
+    )
 
 
 def detect_required_evidence(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
@@ -303,7 +337,9 @@ def _structural_evidence(
     )
 
 
-def _finding(case: dict[str, Any], detector_id: str, severity: str, category: str, path: Path, detail: str) -> ReviewFinding:
+def _finding(
+    case: dict[str, Any], detector_id: str, severity: str, category: str, path: Path, detail: str
+) -> ReviewFinding:
     digest = hashlib.sha256(f"{case['id']}|{detector_id}|{path.as_posix()}|{detail}".encode("utf-8")).hexdigest()[:12]
     return ReviewFinding(
         id=f"{case['id']}-{detector_id}-{digest}",
@@ -326,27 +362,27 @@ def _python_files(path: Path) -> list[Path]:
     return sorted(candidate for candidate in path.rglob("*.py") if candidate.is_file())
 
 
-def _exported_private_names(tree: ast.AST) -> set[str]:
+def _exported_names(tree: ast.AST) -> set[str]:
     exported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
                 if isinstance(node.value, (ast.List, ast.Tuple)):
                     for item in node.value.elts:
-                        if isinstance(item, ast.Constant) and isinstance(item.value, str) and item.value.startswith("_"):
+                        if isinstance(item, ast.Constant) and isinstance(item.value, str):
                             exported.add(item.value)
     return exported
 
 
-def _imports_from_private_modules(tree: ast.AST) -> set[str]:
-    imported: set[str] = set()
+def _imports_from_private_modules(tree: ast.AST) -> dict[str, str]:
+    imported: dict[str, str] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
         module = node.module or ""
         if module.startswith("_") or "._" in f".{module}":
             for alias in node.names:
-                imported.add(alias.asname or alias.name)
+                imported[alias.asname or alias.name] = alias.name
     return imported
 
 
@@ -356,22 +392,28 @@ def _import_graph(package_path: Path) -> dict[str, list[str]]:
     graph: dict[str, set[str]] = defaultdict(set)
     for path in sorted(package_path.rglob("*.py")):
         relative = path.relative_to(package_path).with_suffix("")
-        if relative.name == "__init__":
-            continue
-        module_name = ".".join(relative.parts)
+        module_name = (
+            "__init__" if relative.name == "__init__" and len(relative.parts) == 1 else ".".join(relative.parts)
+        )
         graph.setdefault(module_name, set())
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                if node.module and node.module.startswith("app."):
-                    graph[module_name].add(".".join(node.module.split(".")[1:]))
-                elif node.level == 1 and node.module:
-                    graph[module_name].add(node.module.split(".")[0])
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.startswith("app."):
-                        graph[module_name].add(".".join(alias.name.split(".")[1:]))
+            graph[module_name].update(_detector_import_targets(node))
     return {key: sorted(value) for key, value in sorted(graph.items())}
+
+
+def _detector_import_targets(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Import):
+        return {".".join(alias.name.split(".")[1:]) for alias in node.names if alias.name.startswith("app.")}
+    if not isinstance(node, ast.ImportFrom):
+        return set()
+    if node.module == "app":
+        return {"__init__"}
+    if node.module and node.module.startswith("app."):
+        return {".".join(node.module.split(".")[1:])}
+    if node.level == 1 and node.module:
+        return {node.module.split(".")[0]}
+    return set()
 
 
 def _find_cycle(graph: dict[str, list[str]]) -> list[str]:
@@ -413,11 +455,11 @@ def _is_raw_dict_annotation(node: ast.AST | None) -> bool:
 
 
 def _covered_by_any_gate(path: str, gates: list[dict[str, Any]]) -> bool:
-    for gate in gates:
-        for pattern in gate.get("scope", []):
-            if _scope_match(path, pattern):
-                return True
-    return False
+    return any(_covered_by_gate(path, gate) for gate in gates)
+
+
+def _covered_by_gate(path: str, gate: dict[str, Any]) -> bool:
+    return any(_scope_match(path, pattern) for pattern in gate.get("scope", []))
 
 
 def _scope_match(path: str, pattern: str) -> bool:
@@ -429,7 +471,9 @@ def _scope_match(path: str, pattern: str) -> bool:
             return path_index == len(path_parts)
         token = pattern_parts[pattern_index]
         if token == "**":
-            return any(match_parts(next_index, pattern_index + 1) for next_index in range(path_index, len(path_parts) + 1))
+            return any(
+                match_parts(next_index, pattern_index + 1) for next_index in range(path_index, len(path_parts) + 1)
+            )
         if path_index >= len(path_parts):
             return False
         if not fnmatch.fnmatchcase(path_parts[path_index], token):
@@ -440,7 +484,7 @@ def _scope_match(path: str, pattern: str) -> bool:
 
 
 DETECTORS: dict[str, Detector] = {
-    "spaghetti_lock": detect_spaghetti_lock,
+    "target_lock": detect_target_lock,
     "route_interleaving": detect_route_interleaving,
     "private_reexport": detect_private_reexport,
     "private_test_dependency": detect_private_test_dependency,

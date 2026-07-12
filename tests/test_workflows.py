@@ -44,10 +44,44 @@ class WorkflowTests(unittest.TestCase):
                         violations.append(f"{path.relative_to(self.root).as_posix()}:{line_number}:{line.strip()}")
         self.assertEqual(violations, [])
 
+    def test_supportability_workflow_separates_untrusted_execution_from_judge(self) -> None:
+        workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(encoding="utf-8")
+        self.assertNotIn("governance-ref:", workflow.split("jobs:", 1)[0])
+        self.assertIn("  plan:", workflow)
+        self.assertIn("  execute:", workflow)
+        self.assertIn("  judge:", workflow)
+        self.assertIn("repository: ${{ job.workflow_repository }}", workflow)
+        self.assertIn("ref: ${{ job.workflow_sha }}", workflow)
+        execute_block = workflow.split("  execute:", 1)[1].split("  judge:", 1)[0]
+        self.assertNotIn("job.workflow_repository", execute_block)
+        self.assertNotIn("governance_eval", execute_block)
+        self.assertIn("target only; no evaluator checkout", execute_block)
+        self.assertIn("needs.execute.result", workflow)
+        self.assertIn("$RUNNER_TEMP", workflow)
+
+    def test_target_workflow_separates_untrusted_execution_from_decision(self) -> None:
+        workflow = (self.root / ".github/workflows/governance-evaluate.yml").read_text(encoding="utf-8")
+        execute = workflow.split("  execute:", 1)[1].split("  judge:", 1)[0]
+        judge = workflow.split("  judge:", 1)[1]
+        self.assertIn("target only; no evaluator checkout", execute)
+        self.assertNotIn("governance_eval", execute)
+        self.assertNotIn("expected_decision", execute)
+        self.assertNotIn("real_target_shadow_decision", execute)
+        self.assertIn('"--cap-drop", "ALL"', execute)
+        self.assertIn("f\"{os.environ['GITHUB_WORKSPACE']}:/target:ro\"", execute)
+        self.assertIn('f"{reproducer}:/trusted/reproducer.py:ro"', execute)
+        self.assertIn('["docker", "network", "disconnect"', execute)
+        self.assertLess(execute.index('["docker", "rm", "-f", container]'), execute.index("raw/raw-result.json"))
+        plan = workflow.split("  plan:", 1)[1].split("  execute:", 1)[0]
+        self.assertNotIn("cp -R target_packs", plan)
+        self.assertIn('source = pathlib.Path(item["reproducer"])', plan)
+        self.assertIn("target-workflow finalize", judge)
+        self.assertIn("job.workflow_repository", judge)
+        self.assertIn("job.workflow_sha", judge)
+
     def test_governance_workflows_are_read_only_nonblocking_and_retained(self) -> None:
         workflows = {
-            path.name: path.read_text(encoding="utf-8")
-            for path in (self.root / ".github/workflows").glob("*.yml")
+            path.name: path.read_text(encoding="utf-8") for path in (self.root / ".github/workflows").glob("*.yml")
         }
         self.assertIn("governance-shadow.yml", workflows)
         self.assertIn("governance-evaluate.yml", workflows)
@@ -58,14 +92,21 @@ class WorkflowTests(unittest.TestCase):
             self.assertNotIn("pull_request_target", text)
             self.assertIn("contents: read", text)
             self.assertNotIn("secrets: inherit", text)
-        for name in ("governance-shadow.yml", "governance-evaluate.yml", "supportability-gate.yml", "delivery-receipt.yml"):
+        for name in (
+            "governance-shadow.yml",
+            "governance-evaluate.yml",
+            "supportability-gate.yml",
+            "delivery-receipt.yml",
+        ):
             self.assertIn("retention-days: 90", workflows[name])
         self.assertIn("workflow_call:", workflows["governance-evaluate.yml"])
-        self.assertIn("governance-ref:", workflows["governance-evaluate.yml"])
+        self.assertNotIn("governance-ref:", workflows["governance-evaluate.yml"])
         self.assertIn("revision-mode:", workflows["governance-evaluate.yml"])
         self.assertIn("target-pr-number:", workflows["governance-evaluate.yml"])
-        self.assertIn("GOVERNANCE_CHECKOUT_REF", workflows["governance-evaluate.yml"])
-        self.assertIn("validate-target-request", workflows["governance-evaluate.yml"])
+        self.assertIn("job.workflow_repository", workflows["governance-evaluate.yml"])
+        self.assertIn("job.workflow_sha", workflows["governance-evaluate.yml"])
+        self.assertIn("target-workflow plan", workflows["governance-evaluate.yml"])
+        self.assertIn("target-workflow finalize", workflows["governance-evaluate.yml"])
         self.assertNotIn("allowed = {", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-digest", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-id", workflows["governance-evaluate.yml"])
@@ -74,28 +115,29 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("review-quorum-json:", workflows["governance-shadow.yml"])
         self.assertIn("validate-review-quorum", workflows["governance-shadow.yml"])
         self.assertIn("steps.validate_quorum.conclusion == 'success'", workflows["governance-shadow.yml"])
-        self.assertIn("if: success() && steps.validate_quorum.conclusion == 'success'", workflows["governance-shadow.yml"])
+        self.assertIn(
+            "if: success() && steps.validate_quorum.conclusion == 'success'", workflows["governance-shadow.yml"]
+        )
         self.assertIn("governance-review-quorum-json", workflows["governance-shadow.yml"])
         self.assertIn("Review quorum digest", workflows["governance-shadow.yml"])
         self.assertIn("workflow_call:", workflows["supportability-gate.yml"])
         self.assertIn("Supportability Gate", workflows["supportability-gate.yml"])
-        self.assertIn("supportability-config", workflows["supportability-gate.yml"])
-        self.assertIn("Validate supportability config", workflows["supportability-gate.yml"])
+        self.assertIn("trusted-workflow plan", workflows["supportability-gate.yml"])
+        self.assertIn("trusted-workflow finalize", workflows["supportability-gate.yml"])
         self.assertIn("continue-on-error: true", workflows["supportability-gate.yml"])
-        self.assertIn("supportability-gate", workflows["supportability-gate.yml"])
-        self.assertIn("Run approved architecture fitness gate", workflows["supportability-gate.yml"])
+        self.assertIn("Create trusted supportability execution plan", workflows["supportability-gate.yml"])
+        self.assertIn("Run trusted architecture fitness analysis", workflows["supportability-gate.yml"])
         self.assertIn("python -m governance_eval architecture-gate", workflows["supportability-gate.yml"])
         self.assertIn("architecture-gate-result.json", workflows["supportability-gate.yml"])
-        self.assertIn("architecture-gate-result.md", workflows["supportability-gate.yml"])
+        self.assertIn('architecture-gate-result."*', workflows["supportability-gate.yml"])
         self.assertIn("copilot-review-gate", workflows["supportability-gate.yml"])
-        self.assertRegex(
-            workflows["supportability-gate.yml"],
-            r"(?s)- name: Run configured supportability gates.*?env:\s+GH_TOKEN: \"\".*?python -m governance_eval supportability-gate",
-        )
-        self.assertIn('replace("\\r", " ").replace("\\n", " ")', workflows["supportability-gate.yml"])
+        self.assertIn("Execute untrusted target command", workflows["supportability-gate.yml"])
+        self.assertIn('GH_TOKEN: ""', workflows["supportability-gate.yml"])
         self.assertIn("pull-requests: read", workflows["supportability-gate.yml"])
         self.assertIn("artifact-digest", workflows["supportability-gate.yml"])
-        self.assertIn("artifact-digest: ${{ steps.upload.outputs.artifact-digest }}", workflows["supportability-gate.yml"])
+        self.assertIn(
+            "artifact-digest: ${{ steps.upload.outputs.artifact-digest }}", workflows["supportability-gate.yml"]
+        )
         self.assertNotIn("steps.upload.outputs.digest", workflows["supportability-gate.yml"])
         self.assertIn("Fail closed on RED supportability evidence", workflows["supportability-gate.yml"])
         enforcement = workflows["supportability-enforcement.yml"]
@@ -131,8 +173,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("allowed_bot_author", enforcement)
         self.assertIn('"copilot" in author', enforcement)
         self.assertIn('if user_type != "Bot" or not allowed_bot_author:', enforcement)
-        self.assertIn('if not pr_number:', enforcement)
-        self.assertIn('pulls/{pr_number}', enforcement)
+        self.assertIn("if not pr_number:", enforcement)
+        self.assertIn("pulls/{pr_number}", enforcement)
         self.assertNotIn("pulls/{issue['number']}", enforcement)
         self.assertIn("head_sha={head_sha}&per_page=100", enforcement)
         self.assertIn("runs?head_sha={head_sha}&per_page=100", enforcement)
@@ -169,17 +211,32 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertIn("uses: ./.github/workflows/supportability-gate.yml", workflows["supportability-enforcement.yml"])
         self.assertNotIn("uses: ./.github/workflows/delivery-receipt.yml", workflows["supportability-enforcement.yml"])
-        self.assertIn("artifact-name: baseline-supportability-gate-evidence", workflows["supportability-enforcement.yml"])
-        self.assertIn("supportability-artifact-name: baseline-supportability-gate-evidence", workflows["supportability-enforcement.yml"])
-        self.assertIn("needs['baseline-supportability'].outputs['artifact-id']", workflows["supportability-enforcement.yml"])
-        self.assertIn("needs['baseline-supportability'].outputs['artifact-digest']", workflows["supportability-enforcement.yml"])
-        self.assertIn("needs['candidate-supportability'].outputs['artifact-id']", workflows["supportability-enforcement.yml"])
-        self.assertIn("needs['candidate-supportability'].outputs['artifact-digest']", workflows["supportability-enforcement.yml"])
+        self.assertIn(
+            "artifact-name: baseline-supportability-gate-evidence", workflows["supportability-enforcement.yml"]
+        )
+        self.assertIn(
+            "supportability-artifact-name: baseline-supportability-gate-evidence",
+            workflows["supportability-enforcement.yml"],
+        )
+        self.assertIn(
+            "needs['baseline-supportability'].outputs['artifact-id']", workflows["supportability-enforcement.yml"]
+        )
+        self.assertIn(
+            "needs['baseline-supportability'].outputs['artifact-digest']", workflows["supportability-enforcement.yml"]
+        )
+        self.assertIn(
+            "needs['candidate-supportability'].outputs['artifact-id']", workflows["supportability-enforcement.yml"]
+        )
+        self.assertIn(
+            "needs['candidate-supportability'].outputs['artifact-digest']", workflows["supportability-enforcement.yml"]
+        )
         self.assertIn("missing-baseline-supportability-artifact-id", workflows["supportability-enforcement.yml"])
         self.assertIn("missing-baseline-supportability-artifact-digest", workflows["supportability-enforcement.yml"])
         self.assertIn("missing-candidate-supportability-artifact-id", workflows["supportability-enforcement.yml"])
         self.assertIn("missing-candidate-supportability-artifact-digest", workflows["supportability-enforcement.yml"])
-        baseline_block, candidate_block = workflows["supportability-enforcement.yml"].split("  candidate-supportability:", 1)
+        baseline_block, candidate_block = workflows["supportability-enforcement.yml"].split(
+            "  candidate-supportability:", 1
+        )
         candidate_block, delivery_block = candidate_block.split("  delivery-receipt:", 1)
         self.assertNotIn("uses: ./.github/workflows/supportability-gate.yml", baseline_block)
         self.assertIn("target-base-sha: ${{ github.event.pull_request.base.sha }}", baseline_block)
@@ -188,7 +245,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("governance-ref: ${{ github.event.pull_request.base.sha }}", baseline_block)
         self.assertIn("uses: ./.github/workflows/supportability-gate.yml", candidate_block)
         self.assertIn("target-head-sha: ${{ github.event.pull_request.head.sha }}", candidate_block)
-        self.assertIn("governance-ref: ${{ github.event.pull_request.head.sha }}", candidate_block)
+        self.assertNotIn("governance-ref:", candidate_block)
         self.assertIn("supportability-artifact-id", delivery_block)
         self.assertIn("supportability-artifact-digest", delivery_block)
         self.assertIn("candidate-supportability-artifact-id", delivery_block)
@@ -202,17 +259,15 @@ class WorkflowTests(unittest.TestCase):
             "if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
             workflows["supportability-enforcement.yml"],
         )
-        self.assertIn("architecture_violation_count", workflows["supportability-gate.yml"])
-        self.assertIn("architecture_known_debt_applied_count", workflows["supportability-gate.yml"])
-        self.assertIn("architecture_expired_known_debt_count", workflows["supportability-gate.yml"])
-        self.assertIn("copilot_structured_evidence_present", workflows["supportability-gate.yml"])
-        self.assertIn("copilot_structured_evidence_valid", workflows["supportability-gate.yml"])
-        self.assertIn("copilot_review_prompt", workflows["supportability-gate.yml"])
-        self.assertIn("Structured Copilot evidence present", workflows["supportability-gate.yml"])
-        self.assertIn("Copilot review request", workflows["supportability-gate.yml"])
+        self.assertIn(
+            "execution_identity", (self.root / "schemas/v1/supportability_gate_result.schema.json").read_text()
+        )
         self.assertIn("workflow_call:", workflows["delivery-receipt.yml"])
         self.assertIn("Delivery Receipt", workflows["delivery-receipt.yml"])
-        self.assertIn("gh api \"repos/${TARGET_REPOSITORY}/actions/artifacts/${SUPPORTABILITY_ARTIFACT_ID}/zip\"", workflows["delivery-receipt.yml"])
+        self.assertIn(
+            'gh api "repos/${TARGET_REPOSITORY}/actions/artifacts/${SUPPORTABILITY_ARTIFACT_ID}/zip"',
+            workflows["delivery-receipt.yml"],
+        )
         self.assertIn('replace("\\r", " ").replace("\\n", " ")', workflows["delivery-receipt.yml"])
         self.assertIn("Record supportability artifact metadata", workflows["delivery-receipt.yml"])
         self.assertIn("id: supportability_artifact", workflows["delivery-receipt.yml"])
@@ -222,14 +277,23 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("CANDIDATE_SUPPORTABILITY_ARTIFACT_NAME", workflows["delivery-receipt.yml"])
         self.assertIn("Download candidate supportability evidence", workflows["delivery-receipt.yml"])
         self.assertIn("/actions/artifacts/${SUPPORTABILITY_ARTIFACT_ID}/zip", workflows["delivery-receipt.yml"])
-        self.assertIn("/actions/artifacts/${CANDIDATE_SUPPORTABILITY_ARTIFACT_ID}/zip", workflows["delivery-receipt.yml"])
-        self.assertIn("repos/{os.environ['TARGET_REPOSITORY']}/actions/artifacts/{artifact_id}", workflows["delivery-receipt.yml"])
+        self.assertIn(
+            "/actions/artifacts/${CANDIDATE_SUPPORTABILITY_ARTIFACT_ID}/zip", workflows["delivery-receipt.yml"]
+        )
+        self.assertIn(
+            "repos/{os.environ['TARGET_REPOSITORY']}/actions/artifacts/{artifact_id}", workflows["delivery-receipt.yml"]
+        )
         self.assertIn("evidence_present(root)", workflows["delivery-receipt.yml"])
         self.assertIn('str(run.get("id") or "") == os.environ["GITHUB_RUN_ID"]', workflows["delivery-receipt.yml"])
         self.assertIn("archive_digest(archive_path) == expected_digest", workflows["delivery-receipt.yml"])
         self.assertIn("proof_flags=()", workflows["delivery-receipt.yml"])
-        self.assertIn("proof_flags+=(--protected-baseline-judge-ran --baseline-receipt-produced)", workflows["delivery-receipt.yml"])
-        self.assertIn("proof_flags+=(--candidate-judge-ran --candidate-receipt-produced)", workflows["delivery-receipt.yml"])
+        self.assertIn(
+            "proof_flags+=(--protected-baseline-judge-ran --baseline-receipt-produced)",
+            workflows["delivery-receipt.yml"],
+        )
+        self.assertIn(
+            "proof_flags+=(--candidate-judge-ran --candidate-receipt-produced)", workflows["delivery-receipt.yml"]
+        )
         self.assertIn('"${proof_flags[@]}"', workflows["delivery-receipt.yml"])
         self.assertIn("candidate-supportability-gate-evidence", workflows["supportability-enforcement.yml"])
         self.assertIn('digest="sha256:${digest}"', workflows["delivery-receipt.yml"])
@@ -248,23 +312,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("review_status.structured_evidence_present", docs)
 
     def test_private_repository_receipt_auth_is_active_and_fail_closed(self) -> None:
-        receipt_workflow = (self.root / ".github/workflows/delivery-receipt.yml").read_text(
-            encoding="utf-8"
-        )
+        receipt_workflow = (self.root / ".github/workflows/delivery-receipt.yml").read_text(encoding="utf-8")
         auth_command = "gh auth setup-git --force --hostname github.com"
         receipt_job = receipt_workflow.split("  receipt:\n", 1)[1]
         receipt_job_env = receipt_job.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
         checkout_block = receipt_workflow.split(
-            "      - name: Checkout governance evaluator", 1
+            "      - name: Checkout trusted evaluator from reusable workflow identity", 1
         )[1].split("      - name: Set up Python", 1)[0]
         verify_block = receipt_workflow.split("      - name: Verify delivery receipt", 1)[1].split(
             "      - name: Read delivery summary", 1
         )[0]
         verify_script = verify_block.split("        run: |\n", 1)[1]
         verify_commands = [
-            line[10:]
-            for line in verify_script.splitlines()
-            if line.startswith("          ") and line.strip()
+            line[10:] for line in verify_script.splitlines() if line.startswith("          ") and line.strip()
         ]
         self.assertEqual(
             verify_commands[:3],
@@ -276,24 +336,20 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("|| true", verify_block)
         self.assertIn("\n      GH_TOKEN: ${{ github.token }}\n", receipt_job_env)
-        self.assertIn(
-            'expected_url = f"https://github.com/{repository}.git"', receipt_workflow
-        )
+        self.assertIn('expected_url = f"https://github.com/{repository}.git"', receipt_workflow)
         self.assertIn('os.environ["TARGET_REPOSITORY_URL"] != expected_url', receipt_workflow)
         self.assertNotIn("x-access-token", receipt_workflow)
         self.assertIn("\n          persist-credentials: false\n", checkout_block)
+        self.assertIn("repository: ${{ job.workflow_repository }}", checkout_block)
+        self.assertIn("ref: ${{ job.workflow_sha }}", checkout_block)
         self.assertNotIn("persist-credentials: true", receipt_workflow)
         self.assertNotIn("secrets: inherit", receipt_workflow)
         self.assertNotIn("--skip-live", receipt_workflow)
 
-        fail_closed_block = receipt_workflow.split(
-            "      - name: Fail closed on RED delivery receipt", 1
-        )[1]
+        fail_closed_block = receipt_workflow.split("      - name: Fail closed on RED delivery receipt", 1)[1]
         fail_closed_header, fail_closed_script = fail_closed_block.split("        run: |\n", 1)
         fail_closed_commands = [
-            line[10:]
-            for line in fail_closed_script.splitlines()
-            if line.startswith("          ") and line.strip()
+            line[10:] for line in fail_closed_script.splitlines() if line.startswith("          ") and line.strip()
         ]
         self.assertIn(
             "\n        if: always() && steps.summary.outputs.owner_status != 'GREEN'\n",
@@ -301,7 +357,7 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertEqual(
             fail_closed_commands,
-            ["echo \"Delivery receipt is RED\"", "exit 1"],
+            ['echo "Delivery receipt is RED"', "exit 1"],
         )
 
 

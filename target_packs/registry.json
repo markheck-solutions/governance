@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "packs": [
+    {
+      "path": "target_packs/command_only/v1/pack.json",
+      "lock_path": null,
+      "required_real_evaluation": false,
+      "verification_runs": []
+    },
+    {
+      "path": "target_packs/spaghetti/v1/pack.json",
+      "lock_path": "targets/spaghetti.lock.toml",
+      "required_real_evaluation": true,
+      "verification_runs": [
+        {"revision_mode": "HISTORICAL_FIXED", "expected_decision": "SHADOW_BLOCK_TECHNICAL"},
+        {"revision_mode": "SAFE_FIXED", "expected_decision": "SHADOW_MERGE"}
+      ]
+    }
+  ]
+}

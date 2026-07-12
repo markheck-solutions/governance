@@ -26,6 +26,7 @@
     "high_risk_files": {"type": "array", "items": {"type": "string"}},
     "coverage": {"type": "object"},
     "commands": {"type": "array", "items": {"type": "object"}},
+    "execution_identity": {"type": "object"},
     "errors": {"type": "array", "items": {"type": "string"}}
   },
   "additionalProperties": false
