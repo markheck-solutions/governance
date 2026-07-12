@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import fnmatch
 import hashlib
 import json
 import os
@@ -20,16 +19,13 @@ from governance_eval.architecture_policy import (
 from governance_eval.architecture_policy import (
     architecture_policy_weakening_errors as _architecture_policy_weakening_errors,
 )
-from governance_eval.copilot_review_evidence import copilot_review_prompt
 from governance_eval.copilot_review_evidence import (
-    latest_clean_structured_review_evidence,
+    NATIVE_COPILOT_REVIEWER,
+    STRUCTURED_COPILOT_COMMENTER,
+    copilot_review_prompt,
+    evaluate_review_evidence,
 )
-from governance_eval.copilot_review_evidence import latest_structured_review_evidence
-from governance_eval.copilot_review_evidence import (
-    structured_comment_superseded_by_clean_evidence,
-)
-from governance_eval.copilot_review_evidence import structured_review_errors
-from governance_eval.copilot_review_evidence import visible_review_text
+from governance_eval.github_review_client import load_copilot_payload
 from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
@@ -56,12 +52,6 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
 LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
-SEVERE_RE = re.compile(r"\bP[0-2]\b|\[P[0-2]\]|severity:\s*P[0-2]", re.IGNORECASE)
-MARKDOWN_BLOCKQUOTE_LINE_RE = re.compile(r"(?m)^[ \t]*>.*(?:\n|$)")
-MARKDOWN_FENCE_BLOCK_RE = re.compile(
-    r"(?ms)^[ \t]*(?P<backtick_fence>`{3,})[^\n]*\n.*?^[ \t]*(?P=backtick_fence)`*[ \t]*(?:\n|$)"
-    r"|^[ \t]*(?P<tilde_fence>~{3,})[^\n]*\n.*?^[ \t]*(?P=tilde_fence)~*[ \t]*(?:\n|$)"
-)
 PRODUCTION_SUFFIXES = {
     ".py",
     ".js",
@@ -231,14 +221,18 @@ def evaluate_copilot_review_gate(
     if payload is None:
         if not repo or pr_number is None:
             raise SupportabilityError("repo and pr_number are required when payload is not supplied")
-        payload = load_copilot_payload(repo, pr_number)
+        try:
+            payload = load_copilot_payload(repo, pr_number)
+        except Exception as exc:
+            errors.append(f"GitHub review evidence load failed: {type(exc).__name__}: {exc}")
+            payload = {"reviews": [], "comments": [], "reviewThreads": []}
     payload = copy.deepcopy(payload)
-    payload["reviews"] = _normalized_reviews(payload.get("reviews") or [])
-    payload["comments"] = _normalized_comments(payload.get("comments") or [])
-    review_config = config.get("ai_review") if isinstance(config.get("ai_review"), dict) else {}
+    raw_review_config = config.get("ai_review")
+    review_config: dict[str, Any] = raw_review_config if isinstance(raw_review_config, dict) else {}
     patterns = review_config.get("reviewer_login_patterns") or []
     errors.extend(_sha_errors("", head_sha))
-    errors.extend(_copilot_review_errors(payload, head_sha, patterns))
+    evidence = evaluate_review_evidence(payload, head_sha)
+    errors.extend(evidence["errors"])
     result = {
         "schema_version": "1.0",
         "generated_at": _utc_now(),
@@ -247,7 +241,7 @@ def evaluate_copilot_review_gate(
         "pull_request_number": pr_number,
         "head_sha": _schema_safe_sha(head_sha),
         "reviewer_login_patterns": patterns,
-        "review_status": _review_status(payload, head_sha, patterns),
+        "review_status": evidence["review_status"],
         "review_request": {"prompt": copilot_review_prompt(head_sha)},
         "errors": errors,
     }
@@ -451,30 +445,6 @@ def verify_delivery_receipt(
         "errors": errors,
     }
     return result
-
-
-def load_copilot_payload(repo: str, pr_number: int) -> dict[str, Any]:
-    pr = _gh_json(
-        [
-            "pr",
-            "view",
-            str(pr_number),
-            "--repo",
-            repo,
-            "--json",
-            "baseRefOid,headRefOid,reviews,comments,state,url",
-        ]
-    )
-    owner, name = repo.split("/", 1)
-    return {
-        "url": pr.get("url"),
-        "state": pr.get("state"),
-        "baseRefOid": pr.get("baseRefOid"),
-        "headRefOid": pr.get("headRefOid"),
-        "reviews": _normalized_reviews(pr.get("reviews") or []),
-        "comments": _normalized_comments(pr.get("comments") or []),
-        "reviewThreads": _load_review_threads(owner, name, pr_number),
-    }
 
 
 def load_live_receipt_observations(receipt: dict[str, Any]) -> dict[str, Any]:
@@ -808,10 +778,7 @@ def _ai_review_change_errors(base_config: dict[str, Any], head_config: dict[str,
         return ["ai_review must remain an object"]
     errors = _ai_review_errors(head)
     head_patterns = [str(item) for item in head.get("reviewer_login_patterns") or []]
-    approved = {
-        "copilot-pull-request-reviewer[bot]",
-        "github-copilot[bot]",
-    }
+    approved = {NATIVE_COPILOT_REVIEWER, STRUCTURED_COPILOT_COMMENTER}
     for pattern in head_patterns:
         if "*" in pattern or "?" in pattern:
             errors.append(f"ai_review reviewer identity must be exact after config change: {pattern}")
@@ -1375,252 +1342,6 @@ def _unique_paths(paths: list[str]) -> list[str]:
             unique.append(normalized)
             seen.add(normalized)
     return unique
-
-
-def _copilot_review_errors(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> list[str]:
-    errors: list[str] = []
-    errors.extend(structured_review_errors(payload, head_sha, patterns, _author_matches))
-    latest = _latest_applicable_clean_review_evidence(payload, head_sha, patterns)
-    if latest is None:
-        errors.append("Copilot review is missing or stale for latest head SHA")
-    errors.extend(_blocking_review_errors(payload, patterns, head_sha, latest))
-    return errors
-
-
-def _review_status(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> dict[str, Any]:
-    latest = _latest_applicable_clean_review_evidence(payload, head_sha, patterns)
-    structured = latest_structured_review_evidence(payload, patterns, _author_matches)
-    reviewed_commit_sha = ""
-    verdict = ""
-    open_finding_count = 0
-    structured_valid = False
-    if structured is not None:
-        reviewed_commit_sha = str(structured.get("reviewed_commit_sha") or "")
-        verdict = str(structured.get("verdict") or "")
-        open_finding_count = int(structured.get("open_finding_count") or 0)
-        structured_valid = bool(structured.get("valid")) and reviewed_commit_sha == head_sha
-    elif latest is not None:
-        reviewed_commit_sha = str(latest.get("commitOid") or "")
-        verdict = "legacy_clean"
-    return {
-        "latest_head_reviewed": latest is not None,
-        "reviewer": latest.get("author") if latest else "",
-        "submitted_at": latest.get("submittedAt") if latest else "",
-        "commit_oid": latest.get("commitOid") if latest else "",
-        "structured_evidence_present": structured is not None,
-        "structured_evidence_valid": structured_valid,
-        "reviewed_commit_sha": reviewed_commit_sha,
-        "verdict": verdict,
-        "open_finding_count": open_finding_count,
-        "blocking_thread_count": len(_blocking_threads(payload.get("reviewThreads", []), patterns)),
-        "blocking_comment_count": len(_blocking_comments(payload.get("comments", []), patterns, head_sha, latest)),
-    }
-
-
-def _latest_applicable_clean_review_evidence(payload: dict[str, Any], head_sha: str, patterns: list[str]) -> dict[str, Any] | None:
-    reviews = [review for review in payload.get("reviews", []) if _author_matches(review.get("author"), patterns)]
-    evidence: list[dict[str, Any]] = []
-    structured = latest_clean_structured_review_evidence(payload, head_sha, patterns, _author_matches)
-    if structured is not None:
-        evidence.append(structured)
-    latest_review = _latest_applicable_clean_review(reviews, head_sha)
-    if latest_review is not None:
-        evidence.append(latest_review)
-    evidence.extend(_clean_review_comments(payload.get("comments", []), head_sha, patterns))
-    if not evidence:
-        return None
-    return max(evidence, key=lambda item: item.get("submittedAt") or "")
-
-
-def _clean_review_comments(comments: list[dict[str, Any]], head_sha: str, patterns: list[str]) -> list[dict[str, Any]]:
-    review_comments: list[dict[str, Any]] = []
-    for comment in comments:
-        body = visible_review_text(comment.get("body") or "")
-        if not comment.get("isMinimized", False) and _author_matches(comment.get("author"), patterns) and "reviewed commit" in body.lower() and _review_matches_head(comment, head_sha) and not SEVERE_RE.search(body):
-            review_comments.append(
-                {
-                    "state": "COMMENTED",
-                    "submittedAt": comment.get("createdAt"),
-                    "commitOid": head_sha,
-                    "author": comment.get("author"),
-                    "body": body,
-                }
-            )
-    return review_comments
-
-
-def _latest_applicable_clean_review(reviews: list[dict[str, Any]], head_sha: str) -> dict[str, Any] | None:
-    clean = [review for review in reviews if _review_is_clean(review) and _review_matches_head(review, head_sha)]
-    if not clean:
-        return None
-    return max(clean, key=lambda item: item.get("submittedAt") or "")
-
-
-def _review_is_clean(review: dict[str, Any]) -> bool:
-    return review.get("state") not in {
-        "CHANGES_REQUESTED",
-        "DISMISSED",
-    } and not SEVERE_RE.search(visible_review_text(review.get("body") or ""))
-
-
-def _review_matches_head(review: dict[str, Any], head_sha: str) -> bool:
-    body = visible_review_text(review.get("body") or "")
-    return review.get("commitOid") == head_sha or head_sha in body or head_sha[:10] in body
-
-
-def _blocking_review_errors(
-    payload: dict[str, Any],
-    patterns: list[str],
-    head_sha: str,
-    latest_clean: dict[str, Any] | None,
-) -> list[str]:
-    errors = []
-    change_requests = [review for review in payload.get("reviews", []) if review.get("state") == "CHANGES_REQUESTED" and _author_matches(review.get("author"), patterns) and _review_matches_head(review, head_sha)]
-    latest_change_request = max(change_requests, key=lambda item: item.get("submittedAt") or "") if change_requests else None
-    if latest_change_request is not None:
-        clean_submitted_at = latest_clean.get("submittedAt") if latest_clean else ""
-        change_submitted_at = latest_change_request.get("submittedAt") or ""
-        if not clean_submitted_at or change_submitted_at >= clean_submitted_at:
-            errors.append(f"AI review CHANGES_REQUESTED remains from {latest_change_request.get('author', '')}")
-    for thread in _blocking_threads(payload.get("reviewThreads", []), patterns):
-        errors.append(f"unresolved severe AI review thread remains: {thread.get('path', '')}")
-    for comment in _blocking_comments(payload.get("comments", []), patterns, head_sha, latest_clean):
-        errors.append(f"unresolved severe AI review comment remains from {comment.get('author', '')}")
-    return errors
-
-
-def _blocking_threads(threads: list[dict[str, Any]], patterns: list[str]) -> list[dict[str, Any]]:
-    return [
-        thread
-        for thread in threads
-        if not thread.get("isResolved", False)
-        and SEVERE_RE.search(
-            visible_review_text(
-                MARKDOWN_FENCE_BLOCK_RE.sub(
-                    "",
-                    MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", str(thread.get("body") or "")),
-                )
-            )
-        )
-        and _thread_author_matches(thread, patterns)
-    ]
-
-
-def _blocking_comments(
-    comments: list[dict[str, Any]],
-    patterns: list[str],
-    head_sha: str,
-    latest_clean: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    return [comment for comment in comments if SEVERE_RE.search(visible_review_text(comment.get("body") or "")) and _author_matches(comment.get("author"), patterns) and not comment.get("isMinimized", False) and not structured_comment_superseded_by_clean_evidence(comment, head_sha, latest_clean, patterns, _author_matches)]
-
-
-def _thread_author_matches(thread: dict[str, Any], patterns: list[str]) -> bool:
-    authors = thread.get("authors")
-    if not authors:
-        return True
-    return any(_author_matches(author, patterns) for author in authors)
-
-
-def _author_matches(author: Any, patterns: list[str]) -> bool:
-    if not isinstance(author, str) or not author:
-        return False
-    normalized = author.lower()
-    return any(fnmatch.fnmatchcase(normalized, pattern.lower()) for pattern in patterns)
-
-
-def _normalized_reviews(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized = []
-    for review in reviews:
-        author = review.get("author") if isinstance(review.get("author"), dict) else {}
-        commit = review.get("commit") if isinstance(review.get("commit"), dict) else {}
-        body = str(review.get("body") or "")
-        body = MARKDOWN_FENCE_BLOCK_RE.sub("", MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", body))
-        normalized.append(
-            {
-                "state": review.get("state"),
-                "submittedAt": review.get("submittedAt"),
-                "commitOid": review.get("commitOid") or commit.get("oid"),
-                "author": author.get("login") or review.get("author"),
-                "body": body,
-            }
-        )
-    return normalized
-
-
-def _normalized_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized = []
-    for comment in comments:
-        author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
-        body = str(comment.get("body") or "")
-        body = MARKDOWN_FENCE_BLOCK_RE.sub("", MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", body))
-        normalized.append(
-            {
-                "author": author.get("login") or comment.get("author"),
-                "body": body,
-                "createdAt": comment.get("createdAt"),
-                "isMinimized": comment.get("isMinimized"),
-            }
-        )
-    return normalized
-
-
-def _load_review_threads(owner: str, name: str, pr_number: int) -> list[dict[str, Any]]:
-    query = """
-    query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
-      repository(owner: $owner, name: $name) {
-        pullRequest(number: $number) {
-          reviewThreads(first: 100, after: $cursor) {
-            nodes {
-              isResolved
-              path
-              comments(first: 100) {
-                nodes {
-                  body
-                  author {
-                    login
-                  }
-                }
-              }
-            }
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-          }
-        }
-      }
-    }
-    """
-    threads: list[dict[str, Any]] = []
-    cursor = ""
-    while True:
-        payload = _gh_graphql(owner, name, pr_number, query, cursor)
-        connection = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
-        threads.extend(_normalize_threads(connection.get("nodes", [])))
-        page = connection.get("pageInfo") or {}
-        if not page.get("hasNextPage"):
-            return threads
-        next_cursor = page.get("endCursor") or ""
-        if not next_cursor or next_cursor == cursor:
-            raise SupportabilityError("GitHub review thread pagination did not advance")
-        cursor = next_cursor
-
-
-def _normalize_threads(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    threads: list[dict[str, Any]] = []
-    for node in nodes:
-        comments = (node.get("comments") or {}).get("nodes") or []
-        authors = [(comment.get("author") or {}).get("login") for comment in comments if (comment.get("author") or {}).get("login")]
-        threads.append(
-            {
-                "isResolved": node.get("isResolved"),
-                "path": node.get("path"),
-                "body": "\n".join(comment.get("body") or "" for comment in comments),
-                "authors": authors,
-            }
-        )
-    return threads
 
 
 def _receipt_input_errors(
@@ -2289,24 +2010,6 @@ def _gh_api_bytes(path: str) -> bytes:
         timeout=GIT_NETWORK_TIMEOUT_SECONDS,
     )
     return completed.stdout
-
-
-def _gh_graphql(owner: str, name: str, pr_number: int, query: str, cursor: str) -> dict[str, Any]:
-    args = [
-        "api",
-        "graphql",
-        "-f",
-        f"owner={owner}",
-        "-f",
-        f"name={name}",
-        "-F",
-        f"number={pr_number}",
-        "-f",
-        f"query={query}",
-    ]
-    if cursor:
-        args.extend(["-f", f"cursor={cursor}"])
-    return _gh_json(args)
 
 
 def _safe_live(label: str, errors: list[str], func: Callable[..., Any], *args: Any) -> Any:
