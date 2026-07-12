@@ -21,6 +21,8 @@ SCHEMA_FILES = {
     "supportability_gate_result": "supportability_gate_result.schema.json",
     "architecture_gate_result": "architecture_gate_result.schema.json",
     "copilot_review_gate_result": "copilot_review_gate_result.schema.json",
+    "judge_evidence_bundle": "judge_evidence_bundle.schema.json",
+    "judge_evidence_pair": "judge_evidence_pair.schema.json",
     "delivery_receipt": "delivery_receipt.schema.json",
 }
 
