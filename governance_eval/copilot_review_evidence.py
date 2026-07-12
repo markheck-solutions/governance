@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any, Callable
 
 
@@ -13,7 +14,17 @@ STRUCTURED_REVIEW_BLOCK_RE = re.compile(
 )
 STRUCTURED_REVIEW_VERDICTS = {"clean", "blocked", "ambiguous"}
 STRUCTURED_REVIEW_SEVERITIES = {"P0", "P1", "P2", "P3"}
+NATIVE_REVIEW_STATES = {
+    "APPROVED",
+    "CHANGES_REQUESTED",
+    "COMMENTED",
+    "DISMISSED",
+    "PENDING",
+}
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
+GITHUB_DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
+)
 NATIVE_COPILOT_REVIEWER = "copilot-pull-request-reviewer"
 NATIVE_COPILOT_REVIEWER_ALIASES = {
     NATIVE_COPILOT_REVIEWER,
@@ -93,6 +104,11 @@ def _evidence_shape_errors(payload: dict[str, Any]) -> list[str]:
             errors.append(f"review payload {field} must be a list")
         elif not all(isinstance(item, dict) for item in value):
             errors.append(f"review payload {field} must contain objects")
+    for review in _payload_objects(payload, "reviews"):
+        raw_author = review.get("author")
+        author = raw_author.get("login") if isinstance(raw_author, dict) else raw_author
+        if native_review_author_matches(author):
+            errors.extend(_native_review_shape_errors(review))
     for comment in _payload_objects(payload, "comments"):
         author = comment.get("author")
         login = author.get("login") if isinstance(author, dict) else author
@@ -106,6 +122,20 @@ def _evidence_shape_errors(payload: dict[str, Any]) -> list[str]:
             errors.append("structured Copilot comment body must be a string")
     for thread in _payload_objects(payload, "reviewThreads"):
         errors.extend(_review_thread_shape_errors(thread))
+    return errors
+
+
+def _native_review_shape_errors(review: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if review.get("state") not in NATIVE_REVIEW_STATES:
+        errors.append("native Copilot review state is invalid")
+    if not _is_github_datetime(review.get("submittedAt")):
+        errors.append("native Copilot review submittedAt must be a GitHub UTC DateTime")
+    commit_oid = _review_commit_oid(review)
+    if not isinstance(commit_oid, str) or not SHA1_RE.fullmatch(commit_oid):
+        errors.append("native Copilot review commitOid must be a full lowercase Git SHA")
+    if not isinstance(review.get("body"), str):
+        errors.append("native Copilot review body must be a string")
     return errors
 
 
@@ -486,13 +516,11 @@ def _payload_objects(payload: dict[str, Any], field: str) -> list[dict[str, Any]
 
 def _normalized_review(review: dict[str, Any]) -> dict[str, Any]:
     raw_author = review.get("author")
-    raw_commit = review.get("commit")
     author: dict[str, Any] = raw_author if isinstance(raw_author, dict) else {}
-    commit: dict[str, Any] = raw_commit if isinstance(raw_commit, dict) else {}
     return {
         "state": review.get("state"),
         "submittedAt": review.get("submittedAt"),
-        "commitOid": review.get("commitOid") or commit.get("oid"),
+        "commitOid": _review_commit_oid(review),
         "author": canonical_ai_author(author.get("login") or review.get("author")),
         "body": _normalized_body(review.get("body")),
     }
@@ -521,6 +549,22 @@ def _normalized_thread(thread: dict[str, Any]) -> dict[str, Any]:
 def _normalized_body(body: Any) -> str:
     text = str(body or "")
     return MARKDOWN_FENCE_BLOCK_RE.sub("", MARKDOWN_BLOCKQUOTE_LINE_RE.sub("", text))
+
+
+def _review_commit_oid(review: dict[str, Any]) -> Any:
+    raw_commit = review.get("commit")
+    commit: dict[str, Any] = raw_commit if isinstance(raw_commit, dict) else {}
+    return review.get("commitOid") or commit.get("oid")
+
+
+def _is_github_datetime(value: Any) -> bool:
+    if not isinstance(value, str) or not GITHUB_DATETIME_RE.fullmatch(value):
+        return False
+    try:
+        datetime.fromisoformat(f"{value[:-1]}+00:00")
+    except ValueError:
+        return False
+    return True
 
 
 def _latest_applicable_clean_evidence(
@@ -554,8 +598,9 @@ def _latest_clean_native_review(
         review
         for review in reviews
         if native_review_author_matches(review.get("author"))
-        and review.get("state") == "APPROVED"
+        and review.get("state") == "COMMENTED"
         and review.get("commitOid") == head_sha
+        and _is_github_datetime(review.get("submittedAt"))
     ]
     return max(clean, key=lambda item: item.get("submittedAt") or "") if clean else None
 

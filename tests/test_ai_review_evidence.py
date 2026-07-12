@@ -106,15 +106,15 @@ class NativeReviewEvidenceTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("headRefOid" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_rejects_commented_native_review_as_clean_attestation(
+    def test_copilot_review_gate_rejects_approved_native_review_as_clean_attestation(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _review_repo(Path(tmp), self.root)
             head = "c" * 40
             review = _review(head)
-            review["state"] = "COMMENTED"
-            review["body"] = "P1: still broken"
+            review["state"] = "APPROVED"
+            review["body"] = "Clean."
 
             result = evaluate_copilot_review_gate(
                 repo / ".github/governance/supportability.yml",
@@ -126,6 +126,44 @@ class NativeReviewEvidenceTests(unittest.TestCase):
             self.assertTrue(
                 any("missing or stale" in error for error in result["errors"])
             )
+
+    def test_copilot_review_gate_returns_red_for_malformed_native_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _review_repo(Path(tmp), self.root)
+            head = "c" * 40
+            malformed_reviews = (
+                {**_review(head), "state": "UNKNOWN"},
+                {**_review(head), "submittedAt": None},
+                {**_review(head), "submittedAt": "not-a-date"},
+                {**_review(head), "submittedAt": "   "},
+                {**_review(head), "submittedAt": "2026-06-25T10:05:00"},
+                {**_review(head), "commitOid": head[:10]},
+            )
+            for review in malformed_reviews:
+                with self.subTest(review=review):
+                    result = evaluate_copilot_review_gate(
+                        repo / ".github/governance/supportability.yml",
+                        head,
+                        payload=_copilot_payload(head, reviews=[review]),
+                    )
+
+                    self.assertEqual(result["owner_status"], STATUS_RED)
+                    self.assertTrue(any("native Copilot review" in error for error in result["errors"]))
+
+    def test_copilot_review_gate_accepts_raw_graphql_commit_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _review_repo(Path(tmp), self.root)
+            head = "c" * 40
+            review = _review(head)
+            review["commit"] = {"oid": review.pop("commitOid")}
+
+            result = evaluate_copilot_review_gate(
+                repo / ".github/governance/supportability.yml",
+                head,
+                payload=_copilot_payload(head, reviews=[review]),
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
 
     def test_copilot_review_gate_returns_red_for_non_list_evidence_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1359,7 +1397,7 @@ def _copilot_payload(
 
 def _review(head_sha: str) -> dict:
     return {
-        "state": "APPROVED",
+        "state": "COMMENTED",
         "submittedAt": "2026-06-25T10:05:00Z",
         "commitOid": head_sha,
         "author": "copilot-pull-request-reviewer[bot]",

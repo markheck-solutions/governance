@@ -627,7 +627,7 @@ class CopilotReviewGateIntegrationTests(unittest.TestCase):
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "c" * 40
             review = {
-                "state": "APPROVED",
+                "state": "COMMENTED",
                 "submittedAt": "2026-06-25T10:05:00Z",
                 "commitOid": head,
                 "author": "copilot-pull-request-reviewer[bot]",
