@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -96,6 +97,51 @@ class ArchitectureGateTests(unittest.TestCase):
             self.assertEqual(code, EXIT_CONFIG)
             self.assertEqual(result["gate_implementation"], "FAIL")
             self.assertTrue(any("architecture_policy" in error for error in result["errors"]))
+
+    def test_root_tool_caches_skip_but_nested_exact_names_and_lookalikes_are_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(Path(tmp), self.root, mode="block_all")
+            subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            for cache in (".mypy_cache", ".ruff_cache"):
+                (repo / cache).mkdir()
+                (repo / cache / "cache.py").write_text("x = 1\n", encoding="utf-8")
+            scanned_files = {
+                ".mypy_cache/evil.py",
+                ".ruff_cache/evil.py",
+                "src/.mypy_cache_like.py",
+                "src/.mypy_cache/evil.py",
+                "src/.ruff_cache/evil.py",
+                "src/build/evil.py",
+                "src/coverage/evil.py",
+                "src/dist/evil.py",
+            }
+            for relative_path in scanned_files:
+                source = repo / relative_path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(
+                    "\n".join(f"value_{index} = {index}" for index in range(51)),
+                    encoding="utf-8",
+                )
+            subprocess.run(
+                ["git", "add", "--force", "--", *sorted(scanned_files)],
+                cwd=repo,
+                check=True,
+            )
+
+            result, code = run_architecture_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=sorted(scanned_files),
+            )
+
+            self.assertEqual(code, EXIT_BLOCKED)
+            violation_paths = {item["path"] for item in result["violations"]}
+            self.assertNotIn(".mypy_cache/cache.py", violation_paths)
+            self.assertNotIn(".ruff_cache/cache.py", violation_paths)
+            self.assertTrue(scanned_files <= violation_paths)
 
     def test_structured_known_debt_records_debt_but_remains_red(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

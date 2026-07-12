@@ -4,10 +4,8 @@ import argparse
 import ast
 import fnmatch
 import hashlib
-import json
 import subprocess
 import sys
-import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
@@ -159,8 +157,8 @@ def run_architecture_gate(
         return _finalize_result(result, EXIT_CONFIG, output_dir)
 
     target_repo = target_repo.resolve()
-    head_files = _worktree_files(target_repo)
     changed = _changed_files(target_repo, base_sha, head_sha, changed_files)
+    head_files = _worktree_files(target_repo, changed)
     known_debt, debt_errors, expired_debt = _known_debt(policy)
     if debt_errors:
         result = _failure_result(
@@ -392,18 +390,39 @@ def _sha_errors(base_sha: str, head_sha: str) -> list[str]:
     return errors
 
 
-def _worktree_files(root: Path) -> list[SourceFile]:
+def _worktree_files(root: Path, changed_files: list[str]) -> list[SourceFile]:
     files: list[SourceFile] = []
+    tracked_paths = _tracked_paths(root)
+    protected_paths = (tracked_paths or set()) | set(changed_files)
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or _skip_path(path, root):
+        if not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
+        if _skip_relative(rel) and tracked_paths is not None and rel not in protected_paths:
+            continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         files.append(SourceFile(rel, text))
     return files
+
+
+def _tracked_paths(root: Path) -> set[str] | None:
+    try:
+        completed = subprocess.run(
+            ["git", "ls-files", "--cached"],
+            cwd=root,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=60,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    return {_norm(line) for line in completed.stdout.splitlines() if line.strip()}
 
 
 def _base_tree_files(root: Path, base_sha: str) -> tuple[list[SourceFile], list[str]]:
@@ -420,8 +439,6 @@ def _base_tree_files(root: Path, base_sha: str) -> tuple[list[SourceFile], list[
         )
         files: list[SourceFile] = []
         for rel in [line for line in completed.stdout.splitlines() if line]:
-            if _skip_relative(rel):
-                continue
             content = subprocess.run(
                 ["git", "show", f"{base_sha}:{rel}"],
                 cwd=root,
@@ -457,13 +474,14 @@ def _changed_files(root: Path, base_sha: str, head_sha: str, changed_files: list
     return sorted({_norm(line) for line in completed.stdout.splitlines() if line.strip()})
 
 
-def _skip_path(path: Path, root: Path) -> bool:
-    return _skip_relative(path.relative_to(root).as_posix())
-
-
 def _skip_relative(path: str) -> bool:
-    parts = set(_norm(path).split("/"))
-    return bool(parts & {".git", ".venv", ".pytest_cache", "__pycache__", "node_modules", "dist", "build", "coverage"})
+    path_parts = _norm(path).split("/")
+    root_tool_cache = bool(path_parts) and path_parts[0] in {".mypy_cache", ".ruff_cache"}
+    general_skip = bool(
+        set(path_parts)
+        & {".git", ".venv", ".pytest_cache", "__pycache__", "node_modules", "dist", "build", "coverage"}
+    )
+    return root_tool_cache or general_skip
 
 
 def _scan_files(policy: dict[str, Any], files: list[SourceFile], changed_files: list[str]) -> dict[str, Any]:
