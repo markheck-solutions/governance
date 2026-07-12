@@ -132,6 +132,9 @@
   },
   "gate_contract": {
     "required_files": ["pyproject.toml", ".github/workflows"],
+    "approved_reusable_workflows": [
+      "markheck-solutions/governance/.github/workflows/supportability-gate.yml"
+    ],
     "required_commands": [
       "python -m ruff check src scripts tests",
       "python -m ruff format --check src scripts tests",

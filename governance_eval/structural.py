@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from governance_eval.hashing import sha256_json
+from governance_eval.simple_yaml import parse_simple_yaml
 
 
 DEFAULT_THRESHOLDS = {
@@ -477,8 +478,12 @@ def _gate_config(root: Path, pack: dict[str, Any] | None) -> dict[str, Any]:
                 "required_files": required_files,
                 "governed_roots": list(contract.get("governed_roots") or []),
                 "required_commands": list(contract.get("required_commands") or []),
+                "approved_reusable_workflows": list(contract.get("approved_reusable_workflows") or []),
                 "pyproject": _parse_pyproject(root / "pyproject.toml"),
                 "workflows": _parse_workflows(root / ".github" / "workflows"),
+                "supportability_commands": _parse_supportability_commands(
+                    root / ".github" / "governance" / "supportability.yml"
+                ),
                 "files": {
                     relative: (root / relative).exists() for relative in required_files if not relative.endswith("/")
                 },
@@ -523,6 +528,7 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
             "disabled_jobs": set(),
             "steps": set(),
             "run_commands": set(),
+            "reusable_calls": set(),
             "continue_on_error": set(),
             "paths": set(),
             "paths_ignore": set(),
@@ -531,6 +537,7 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
     disabled_jobs: set[str] = set()
     steps: set[str] = set()
     run_commands: set[str] = set()
+    reusable_calls: set[str] = set()
     continue_on_error: set[str] = set()
     paths: set[str] = set()
     paths_ignore: set[str] = set()
@@ -541,6 +548,7 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
             (disabled_jobs, "disabled_jobs"),
             (steps, "steps"),
             (run_commands, "run_commands"),
+            (reusable_calls, "reusable_calls"),
             (continue_on_error, "continue_on_error"),
             (paths, "paths"),
             (paths_ignore, "paths_ignore"),
@@ -552,6 +560,7 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
         "disabled_jobs": disabled_jobs,
         "steps": steps,
         "run_commands": run_commands,
+        "reusable_calls": reusable_calls,
         "continue_on_error": continue_on_error,
         "paths": paths,
         "paths_ignore": paths_ignore,
@@ -561,7 +570,8 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
 def _parse_workflow_file(file: Path) -> dict[str, set[str]]:
     lines = file.read_text(encoding="utf-8", errors="ignore").splitlines()
     result: dict[str, set[str]] = {
-        key: set() for key in ("jobs", "steps", "run_commands", "continue_on_error", "paths", "paths_ignore")
+        key: set()
+        for key in ("jobs", "steps", "run_commands", "reusable_calls", "continue_on_error", "paths", "paths_ignore")
     }
     result["disabled_jobs"] = _workflow_disabled_jobs(file.name, lines)
     current_job = ""
@@ -582,6 +592,9 @@ def _collect_workflow_line(result: dict[str, set[str]], file_name: str, job: str
     line = lines[index]
     if step := re.search(r"name:\s*['\"]?([^'\"]+?)['\"]?\s*$", line):
         result["steps"].add(f"{file_name}:{job}:{step.group(1).strip()}")
+    active_job = f"{file_name}:{job}" not in result["disabled_jobs"]
+    if active_job and (reusable := re.match(r"^\s*uses:\s*['\"]?([^'\"\s]+)['\"]?\s*$", _workflow_semantic_line(line))):
+        result["reusable_calls"].add(f"{file_name}:{job}:{reusable.group(1)}")
     semantic = _workflow_semantic_line(line)
     command = _workflow_run_command(lines, index)
     if command and f"{file_name}:{job}" not in result["disabled_jobs"] and not _workflow_step_disabled(lines, index):
@@ -772,12 +785,15 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
     after_wf = head.get("workflows") or {}
     introduced |= _removed_items("workflow.job", before_wf.get("jobs"), after_wf.get("jobs"))
     introduced |= _removed_items("workflow.step", before_wf.get("steps"), after_wf.get("steps"))
+    introduced |= _removed_items(
+        "workflow.reusable-call", before_wf.get("reusable_calls"), after_wf.get("reusable_calls")
+    )
     introduced |= _added_items(
         "workflow.continue-on-error", before_wf.get("continue_on_error"), after_wf.get("continue_on_error")
     )
     introduced |= _workflow_paths_narrowing(before_wf.get("paths"), after_wf.get("paths"))
     introduced |= _added_items("workflow.paths-ignore", before_wf.get("paths_ignore"), after_wf.get("paths_ignore"))
-    executable_commands = _workflow_command_lines(after_wf)
+    executable_commands = _gate_executable_commands(head, after_wf)
     executable_command_text = "\n".join(executable_commands)
     gate_target_text = "\n".join([executable_command_text, _pyproject_gate_target_text(after_py)])
     for command in head.get("required_commands") or []:
@@ -804,6 +820,13 @@ def _workflow_command_text(workflows: dict[str, Any]) -> str:
     return "\n".join(_workflow_command_lines(workflows))
 
 
+def _gate_executable_commands(gate: dict[str, Any], workflows: dict[str, Any]) -> list[str]:
+    commands = _workflow_command_lines(workflows)
+    approved = gate.get("approved_reusable_workflows") or []
+    declared = (gate.get("supportability_commands") or []) if _invokes_supportability_gate(workflows, approved) else []
+    return [*commands, *(str(command) for command in declared)]
+
+
 def _workflow_command_lines(workflows: dict[str, Any]) -> list[str]:
     commands: list[str] = []
     for item in sorted(workflows.get("run_commands") or []):
@@ -811,6 +834,32 @@ def _workflow_command_lines(workflows: dict[str, Any]) -> list[str]:
         text = parts[2] if len(parts) == 3 else str(item)
         commands.extend(_workflow_executable_lines(text))
     return commands
+
+
+def _parse_supportability_commands(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    config = parse_simple_yaml(path.read_text(encoding="utf-8"))
+    gates = config.get("required_gates") if isinstance(config, dict) else None
+    if not isinstance(gates, dict):
+        return set()
+    return {
+        str(command)
+        for commands in gates.values()
+        if isinstance(commands, list)
+        for command in commands
+        if isinstance(command, str) and command.strip()
+    }
+
+
+def _invokes_supportability_gate(workflows: dict[str, Any], approved: list[str]) -> bool:
+    return any(_trusted_supportability_call(str(call), approved) for call in workflows.get("reusable_calls") or [])
+
+
+def _trusted_supportability_call(call: str, approved: list[str]) -> bool:
+    target = call.split(":", 2)[-1]
+    match = re.fullmatch(r"([^@\s]+/\.github/workflows/supportability-gate\.yml)@([0-9a-f]{40})", target)
+    return bool(match and match.group(1) in approved)
 
 
 def _workflow_executable_lines(text: str) -> list[str]:

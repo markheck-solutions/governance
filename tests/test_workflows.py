@@ -102,6 +102,11 @@ class WorkflowTests(unittest.TestCase):
         ):
             self.assertIn("retention-days: 90", workflows[name])
         self.assertIn("workflow_call:", workflows["governance-evaluate.yml"])
+        self.assertIn(
+            "ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}",
+            workflows["governance-shadow.yml"],
+        )
+        self.assertIn("fetch-depth: 0", workflows["governance-shadow.yml"])
         self.assertNotIn("governance-ref:", workflows["governance-evaluate.yml"])
         self.assertIn("revision-mode:", workflows["governance-evaluate.yml"])
         self.assertIn("target-pr-number:", workflows["governance-evaluate.yml"])

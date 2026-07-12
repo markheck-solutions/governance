@@ -33,6 +33,25 @@ class SchemaAndLockTests(unittest.TestCase):
         self.assertEqual(violations, [])
         self.assertIn("target_packs/command_only/v1/pack.json", pack_paths)
 
+    def test_required_real_target_is_governance_self_check_not_historical_spaghetti(self) -> None:
+        registry = load_target_registry(root=self.root)
+        entries = {entry["path"]: entry for entry in registry["packs"]}
+        spaghetti = entries["target_packs/spaghetti/v1/pack.json"]
+        governance = entries["target_packs/governance/v1/pack.json"]
+        self.assertFalse(spaghetti["required_real_evaluation"])
+        self.assertEqual(spaghetti["verification_runs"], [])
+        self.assertTrue(governance["required_real_evaluation"])
+        self.assertEqual(
+            governance["verification_runs"],
+            [{"revision_mode": "EXACT_PUBLISHED", "expected_decision": "SHADOW_MERGE"}],
+        )
+
+    def test_governance_self_target_uses_runtime_published_head_without_static_lock(self) -> None:
+        registry = load_target_registry(root=self.root)
+        entry = next(item for item in registry["packs"] if item["path"] == "target_packs/governance/v1/pack.json")
+        self.assertIsNone(entry["lock_path"])
+        self.assertFalse((self.root / "targets/governance.lock.toml").exists())
+
     def test_evidence_finding_and_decision_schemas_accept_model_output(self) -> None:
         finding = ReviewFinding(
             id="FINDING-001",

@@ -39,6 +39,7 @@ class TargetPackAndShadowTests(unittest.TestCase):
     def test_target_packs_are_schema_valid_and_policy_driven(self) -> None:
         for relative in [
             "target_packs/spaghetti/v1/pack.json",
+            "target_packs/governance/v1/pack.json",
             "target_packs/synthetic_clean/v1/pack.json",
             "target_packs/synthetic_evasion/v1/pack.json",
         ]:

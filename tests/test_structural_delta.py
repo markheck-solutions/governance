@@ -310,6 +310,123 @@ files = ["src", "tests"]
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
 
+    def test_required_command_in_invoked_supportability_config_satisfies_contract(self) -> None:
+        pack = _pack()
+        command = "python -m mypy src scripts tests"
+        pack["gate_contract"]["required_commands"] = [command]
+        pack["gate_contract"]["governed_roots"] = ["src", "scripts", "tests"]
+        pack["gate_contract"]["approved_reusable_workflows"] = [
+            "owner/governance/.github/workflows/supportability-gate.yml"
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for revision in (root / "base", root / "head"):
+                _write(
+                    revision / ".github/workflows/governed.yml",
+                    "jobs:\n  supportability:\n    uses: owner/governance/.github/workflows/supportability-gate.yml@"
+                    + "a" * 40
+                    + "\n",
+                )
+                _write(
+                    revision / ".github/governance/supportability.yml",
+                    "required_gates:\n  typecheck:\n    - python -m mypy src scripts tests\n",
+                )
+            delta = structural_delta(
+                scan_structural_metrics(root / "base", pack=pack),
+                scan_structural_metrics(root / "head", pack=pack),
+                pack,
+            )
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertNotIn(f"required_command_missing:{command}", introduced)
+        self.assertFalse(any(item.startswith("governed_root_missing_from_gates:") for item in introduced))
+
+    def test_uninvoked_supportability_config_does_not_satisfy_contract(self) -> None:
+        pack = _pack()
+        command = "python -m mypy src scripts tests"
+        pack["gate_contract"]["required_commands"] = [command]
+        pack["gate_contract"]["governed_roots"] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for revision in (root / "base", root / "head"):
+                _write(
+                    revision / ".github/workflows/docs.yml",
+                    "jobs:\n  docs:\n    uses: owner/docs/.github/workflows/build.yml@main\n",
+                )
+                _write(
+                    revision / ".github/governance/supportability.yml",
+                    "required_gates:\n  typecheck:\n    - python -m mypy src scripts tests\n",
+                )
+            delta = structural_delta(
+                scan_structural_metrics(root / "base", pack=pack),
+                scan_structural_metrics(root / "head", pack=pack),
+                pack,
+            )
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertIn(f"required_command_missing:{command}", introduced)
+
+    def test_unpinned_external_supportability_call_does_not_satisfy_contract(self) -> None:
+        pack = _pack()
+        command = "python -m mypy src scripts tests"
+        pack["gate_contract"]["required_commands"] = [command]
+        pack["gate_contract"]["governed_roots"] = []
+        pack["gate_contract"]["approved_reusable_workflows"] = [
+            "owner/governance/.github/workflows/supportability-gate.yml"
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for revision in (root / "base", root / "head"):
+                _write(
+                    revision / ".github/workflows/governed.yml",
+                    "jobs:\n  supportability:\n    uses: owner/governance/.github/workflows/supportability-gate.yml@main\n",
+                )
+                _write(
+                    revision / ".github/governance/supportability.yml",
+                    "required_gates:\n  typecheck:\n    - python -m mypy src scripts tests\n",
+                )
+            delta = structural_delta(
+                scan_structural_metrics(root / "base", pack=pack),
+                scan_structural_metrics(root / "head", pack=pack),
+                pack,
+            )
+
+        introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+        self.assertIn(f"required_command_missing:{command}", introduced)
+
+    def test_disabled_or_unapproved_supportability_call_does_not_satisfy_contract(self) -> None:
+        pack = _pack()
+        command = "python -m mypy src scripts tests"
+        pack["gate_contract"]["required_commands"] = [command]
+        pack["gate_contract"]["governed_roots"] = []
+        pack["gate_contract"]["approved_reusable_workflows"] = [
+            "owner/governance/.github/workflows/supportability-gate.yml"
+        ]
+        cases = (
+            "if: false\n    uses: owner/governance/.github/workflows/supportability-gate.yml@" + "a" * 40,
+            "uses: attacker/fake/.github/workflows/supportability-gate.yml@" + "a" * 40,
+            "uses: ./.github/workflows/supportability-gate.yml",
+        )
+        for use_block in cases:
+            with self.subTest(use_block=use_block), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for revision in (root / "base", root / "head"):
+                    _write(
+                        revision / ".github/workflows/governed.yml",
+                        f"jobs:\n  supportability:\n    {use_block}\n",
+                    )
+                    _write(
+                        revision / ".github/governance/supportability.yml",
+                        "required_gates:\n  typecheck:\n    - python -m mypy src scripts tests\n",
+                    )
+                delta = structural_delta(
+                    scan_structural_metrics(root / "base", pack=pack),
+                    scan_structural_metrics(root / "head", pack=pack),
+                    pack,
+                )
+            introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
+            self.assertIn(f"required_command_missing:{command}", introduced)
+
     def test_required_command_shorthand_run_step_satisfies_gate_contract(self) -> None:
         pack = _pack()
         pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
