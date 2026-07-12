@@ -179,6 +179,8 @@ jobs:
         env:
           SETUP_COMMANDS_JSON: ${{ needs.plan.outputs.setup-commands }}
           TARGET_COMMAND: ${{ matrix.command }}
+          TARGET_BASE_SHA: ${{ inputs.target-base-sha }}
+          TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
           GH_TOKEN: ""
         run: |
           python - <<'PY'

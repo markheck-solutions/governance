@@ -56,6 +56,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("job.workflow_repository", execute_block)
         self.assertNotIn("governance_eval", execute_block)
         self.assertIn("target only; no evaluator checkout", execute_block)
+        self.assertIn("TARGET_BASE_SHA: ${{ inputs.target-base-sha }}", execute_block)
+        self.assertIn("TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}", execute_block)
         self.assertIn("needs.execute.result", workflow)
         self.assertIn("$RUNNER_TEMP", workflow)
 
