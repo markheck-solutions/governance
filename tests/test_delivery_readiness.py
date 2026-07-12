@@ -376,6 +376,8 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         self.assertEqual(result["blocking_pr_comment_count"], 0)
 
+
+class DeliveryReadinessEvidenceTests(unittest.TestCase):
     def test_green_workflow_but_missing_benchmark_artifact_blocks(self) -> None:
         sha = "6" * 40
         payload = _payload(sha, reviews=[_clean_review(sha)], benchmark_evidence=None)
