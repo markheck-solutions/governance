@@ -1,12 +1,10 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
 from governance_eval.paths import repo_root
-
-
-PROTECTED_GOVERNANCE_REF = "a6ab7d7ddb2418cd8588a33d306162ed59532558"
 
 
 def _legacy_startup_receipt_strings() -> tuple[str, ...]:
@@ -155,16 +153,18 @@ class WorkflowTests(unittest.TestCase):
                 self.assertNotIn(blocked_text, workflows[name])
             self.assertNotIn(blocked_text, Path(__file__).read_text(encoding="utf-8"))
             self.assertNotIn(blocked_text, enforcement_docs)
-        self.assertIn(
-            f"uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@{PROTECTED_GOVERNANCE_REF}",
+        protected_refs = re.findall(
+            r"(?m)^    uses: markheck-solutions/governance/\.github/workflows/(supportability-gate|delivery-receipt)\.yml@([0-9a-f]{40})$",
             workflows["supportability-enforcement.yml"],
         )
+        self.assertEqual(len(protected_refs), 2)
+        self.assertEqual(
+            {name for name, _ in protected_refs},
+            {"supportability-gate", "delivery-receipt"},
+        )
+        self.assertEqual(len({sha for _, sha in protected_refs}), 1)
         self.assertNotIn(
             "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@main",
-            workflows["supportability-enforcement.yml"],
-        )
-        self.assertIn(
-            f"uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@{PROTECTED_GOVERNANCE_REF}",
             workflows["supportability-enforcement.yml"],
         )
         self.assertIn("uses: ./.github/workflows/supportability-gate.yml", workflows["supportability-enforcement.yml"])
