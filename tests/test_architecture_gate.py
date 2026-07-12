@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+from governance_eval.architecture_policy import architecture_policy_weakening_errors
 from governance_eval.architecture_gate import (
     EXIT_BLOCKED,
     EXIT_CONFIG,
@@ -23,6 +24,18 @@ from governance_eval.supportability import load_supportability_config
 class ArchitectureGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
+
+    def test_architecture_policy_comparison_rejects_limit_increase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(Path(tmp), self.root, mode="block_all")
+            config = load_supportability_config(repo / ".github/governance/supportability.yml")
+        base = {"architecture_policy": config["architecture_policy"]}
+        head = json.loads(json.dumps(base))
+        head["architecture_policy"]["modules"]["src"]["limits"]["max_file_lines"] += 1
+
+        errors = architecture_policy_weakening_errors(base, head)
+
+        self.assertTrue(any("max_file_lines increased" in error for error in errors))
 
     def test_registered_python_module_passes_and_writes_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -221,16 +234,14 @@ class ArchitectureGateTests(unittest.TestCase):
             self.assertEqual(code, EXIT_BLOCKED)
             self.assertTrue(any(item["rule_id"] == "python_parse_failure" for item in result["violations"]))
 
-    def test_python_dependency_direction_cycle_dynamic_parse_and_size_rules(self) -> None:
+    def test_python_dependency_direction_cycle_dynamic_parse_and_size_rules(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
             (repo / "tests/leak.py").write_text("import src.app\n", encoding="utf-8")
             (repo / "src/app.py").write_text(
-                "import tests.leak\n"
-                "import importlib\n"
-                "importlib.import_module('src.runtime')\n"
-                "class Oversized:\n"
-                + "    x = 1\n" * 10,
+                "import tests.leak\nimport importlib\nimportlib.import_module('src.runtime')\nclass Oversized:\n" + "    x = 1\n" * 10,
                 encoding="utf-8",
             )
 
@@ -299,7 +310,11 @@ class ArchitectureGateTests(unittest.TestCase):
 
             with mock.patch(
                 "governance_eval.architecture_gate._architecture_behavior_fixtures",
-                return_value={"status": "FAIL", "fixtures": [{"name": "theater", "status": "FAIL"}], "errors": ["fixture failed"]},
+                return_value={
+                    "status": "FAIL",
+                    "fixtures": [{"name": "theater", "status": "FAIL"}],
+                    "errors": ["fixture failed"],
+                },
             ):
                 result, code = run_architecture_gate(
                     repo / ".github/governance/supportability.yml",
@@ -318,7 +333,11 @@ class ArchitectureGateTests(unittest.TestCase):
             repo = _repo(Path(tmp), self.root, mode="block_all")
 
             def fake_scan(policy: dict, files: list, changed_files: list) -> dict:
-                return {"violations": [], "rules_checked": set(), "python_file_count": len(files)}
+                return {
+                    "violations": [],
+                    "rules_checked": set(),
+                    "python_file_count": len(files),
+                }
 
             with mock.patch("governance_eval.architecture_gate._scan_files", side_effect=fake_scan):
                 result, code = run_architecture_gate(

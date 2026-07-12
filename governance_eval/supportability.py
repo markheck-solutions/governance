@@ -14,10 +14,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from governance_eval.architecture_policy import (
+    architecture_command_lines as _architecture_command_lines,
+)
+from governance_eval.architecture_policy import (
+    architecture_policy_weakening_errors as _architecture_policy_weakening_errors,
+)
 from governance_eval.copilot_review_evidence import copilot_review_prompt
-from governance_eval.copilot_review_evidence import latest_clean_structured_review_evidence
+from governance_eval.copilot_review_evidence import (
+    latest_clean_structured_review_evidence,
+)
 from governance_eval.copilot_review_evidence import latest_structured_review_evidence
-from governance_eval.copilot_review_evidence import structured_comment_superseded_by_clean_evidence
+from governance_eval.copilot_review_evidence import (
+    structured_comment_superseded_by_clean_evidence,
+)
 from governance_eval.copilot_review_evidence import structured_review_errors
 from governance_eval.copilot_review_evidence import visible_review_text
 from governance_eval.hashing import sha256_file
@@ -162,25 +172,23 @@ def run_supportability_gate(
     changed = _changed_files_or_empty(target_repo, base_sha, head_sha, changed_files, errors)
     changed_discovery_errors = errors[changed_error_start:]
     high_risk = _high_risk_files(target_repo, changed)
-    config_change_errors = _self_modified_config_errors(config_path, target_repo, changed, base_sha, config)
+    trusted_config, config_change_errors = _trusted_execution_config(config_path, target_repo, changed, base_sha, config)
     errors.extend(config_change_errors)
     architecture_governance_errors = _architecture_governance_change_errors(target_repo, changed, base_sha, config_path)
     errors.extend(architecture_governance_errors)
     errors.extend(_standard_hash_errors(config, target_repo))
-    coverage_plan = _build_coverage_plan(config, changed, high_risk)
+    coverage_plan = _build_coverage_plan(trusted_config, changed, high_risk)
     errors.extend(coverage_plan["errors"])
-    sql_commands, sql_errors = _sql_gate_commands(config, target_repo, changed, high_risk)
+    sql_commands, sql_errors = _sql_gate_commands(trusted_config, target_repo, changed, high_risk)
     errors.extend(sql_errors)
     command_results = _protected_command_results(config_change_errors + architecture_governance_errors)
     if not command_results and (revision_errors or changed_discovery_errors):
-        command_results = _skipped_command_results(
-            "revision inputs invalid or changed-file discovery failed; commands not executed without verifiable diff"
-        )
+        command_results = _skipped_command_results("revision inputs invalid or changed-file discovery failed; commands not executed without verifiable diff")
     if not command_results and errors:
         command_results = _skipped_command_results("preflight supportability checks failed; commands not executed")
     if not command_results:
         command_results = _run_commands_with_revision_env(
-            config,
+            trusted_config,
             target_repo,
             sql_commands,
             command_runner or _run_shell_command,
@@ -279,7 +287,14 @@ def generate_delivery_receipt(
         "errors": ["architecture gate result missing"],
     }
     judge_status = _required_judge_status(gate_result, required_judges)
-    errors = _receipt_input_errors(gate_result, copilot_result, artifact_name, artifact_id, artifact_digest, architecture_result)
+    errors = _receipt_input_errors(
+        gate_result,
+        copilot_result,
+        artifact_name,
+        artifact_id,
+        artifact_digest,
+        architecture_result,
+    )
     errors.extend(_required_judge_errors(judge_status))
     if bootstrap_reason:
         errors.append(f"bootstrap receipt remains RED: {bootstrap_reason}")
@@ -360,7 +375,10 @@ def generate_delivery_receipt(
     _validate_if_schema_exists("delivery_receipt", receipt)
     if output_dir is not None:
         _write_json(output_dir / "supportability-delivery-receipt.json", receipt)
-        _write_markdown(output_dir / "supportability-delivery-receipt.md", _receipt_markdown(receipt))
+        _write_markdown(
+            output_dir / "supportability-delivery-receipt.md",
+            _receipt_markdown(receipt),
+        )
     return receipt
 
 
@@ -418,7 +436,13 @@ def verify_delivery_receipt(
 ) -> dict[str, Any]:
     errors = _receipt_document_errors(receipt)
     if live_observations is not None:
-        errors.extend(_live_observation_errors(receipt, live_observations, allow_current_run_pending=allow_current_run_pending))
+        errors.extend(
+            _live_observation_errors(
+                receipt,
+                live_observations,
+                allow_current_run_pending=allow_current_run_pending,
+            )
+        )
     result = {
         "schema_version": "1.0",
         "generated_at": _utc_now(),
@@ -475,7 +499,13 @@ def load_live_receipt_observations(receipt: dict[str, Any]) -> dict[str, Any]:
 def _fresh_clone_merge_observation(errors: list[str], repository_url: str, merged_sha: str) -> bool | None:
     if not merged_sha:
         return None
-    return _safe_live("fresh clone contains merged_sha", errors, _fresh_clone_contains_commit, repository_url, merged_sha)
+    return _safe_live(
+        "fresh clone contains merged_sha",
+        errors,
+        _fresh_clone_contains_commit,
+        repository_url,
+        merged_sha,
+    )
 
 
 def _live_pr_observation(errors: list[str], repo: str, pr_number: int | None) -> dict[str, Any]:
@@ -539,7 +569,13 @@ def _required_gate_errors(gates: Any) -> list[str]:
     errors = []
     for gate in REQUIRED_COMMAND_GATES:
         errors.extend(_command_list_errors(gates.get(gate), f"required_gates.{gate}", allow_empty=False))
-    errors.extend(_command_list_errors(gates.get("package_audit", []), "required_gates.package_audit", allow_empty=True))
+    errors.extend(
+        _command_list_errors(
+            gates.get("package_audit", []),
+            "required_gates.package_audit",
+            allow_empty=True,
+        )
+    )
     errors.extend(_sql_config_errors(gates.get("sql_supportability")))
     return errors
 
@@ -553,18 +589,18 @@ def _coverage_errors(coverage: Any) -> list[str]:
         "forbid_gate_scope_narrowing": True,
         "forbid_threshold_weakening": True,
     }
-    return [
-        f"coverage.{key} must be {value!r}"
-        for key, value in expected.items()
-        if coverage.get(key) != value
-    ]
+    return [f"coverage.{key} must be {value!r}" for key, value in expected.items() if coverage.get(key) != value]
 
 
 def _ai_review_errors(ai_review: Any) -> list[str]:
     if not isinstance(ai_review, dict):
         return ["ai_review must be an object"]
     errors = []
-    for key in ("copilot_required", "latest_head_required", "unresolved_p0_p1_p2_blocks"):
+    for key in (
+        "copilot_required",
+        "latest_head_required",
+        "unresolved_p0_p1_p2_blocks",
+    ):
         if ai_review.get(key) is not True:
             errors.append(f"ai_review.{key} must be true")
     patterns = ai_review.get("reviewer_login_patterns")
@@ -675,28 +711,122 @@ def _standard_hash_errors(config: dict[str, Any], target_repo: Path) -> list[str
     return []
 
 
-def _self_modified_config_errors(
+def _trusted_execution_config(
     config_path: Path,
     target_repo: Path,
     changed: list[str],
     base_sha: str,
     head_config: dict[str, Any],
-) -> list[str]:
+) -> tuple[dict[str, Any], list[str]]:
     try:
         relative = config_path.resolve().relative_to(target_repo.resolve()).as_posix()
     except ValueError:
         relative = config_path.as_posix()
     if relative not in {path.replace("\\", "/") for path in changed}:
-        return []
+        return head_config, []
+    companion_changes = sorted(
+        path.replace("\\", "/")
+        for path in changed
+        if path.replace("\\", "/") != relative
+    )
+    if companion_changes:
+        return head_config, [
+            "supportability config change must be isolated from all other files: "
+            + ", ".join(companion_changes)
+        ]
     base_config, errors = _base_supportability_config(target_repo, base_sha, relative, config_path.suffix)
     if errors:
-        return errors
+        return head_config, errors
     if base_config is None:
-        return []
-    architecture_errors = _architecture_policy_weakening_errors(base_config, head_config)
-    if architecture_errors:
-        return architecture_errors
-    return ["supportability config changed in this PR; merge config separately before enforcing it against code changes"]
+        return head_config, ["supportability config changed but trusted base config is missing"]
+    weakening_errors = _supportability_config_weakening_errors(base_config, head_config)
+    return base_config, weakening_errors
+
+
+def _supportability_config_weakening_errors(base_config: dict[str, Any], head_config: dict[str, Any]) -> list[str]:
+    errors = _architecture_policy_weakening_errors(base_config, head_config)
+    for field in ("standard", "coverage", "receipt"):
+        if head_config.get(field) != base_config.get(field):
+            errors.append(f"{field} changed; protected baseline cannot classify this change as non-weakening")
+    errors.extend(_required_gate_change_errors(base_config, head_config))
+    errors.extend(_ai_review_change_errors(base_config, head_config))
+    unknown = sorted(set(head_config) - set(base_config))
+    errors.extend(f"unclassified supportability config key added: {key}" for key in unknown)
+    return errors
+
+
+def _required_gate_change_errors(base_config: dict[str, Any], head_config: dict[str, Any]) -> list[str]:
+    base_gates = base_config.get("required_gates")
+    gates = head_config.get("required_gates")
+    errors = _required_gate_errors(gates)
+    if not isinstance(gates, dict):
+        return errors
+    commands = [command for gate in ALL_COMMAND_GATES for command in _command_list(gates.get(gate))]
+    duplicates = sorted({command for command in commands if commands.count(command) > 1})
+    errors.extend(f"required gate command duplicated across capabilities: {command}" for command in duplicates)
+    runner = r"(?:(?:uv|poetry|pipenv)\s+run\s+)?"
+    js_runner = r"(?:npx\s+|pnpm\s+(?:exec\s+)?|yarn\s+)?"
+    required_semantics = {
+        "lint": (runner + r"(?:python\s+-m\s+)?ruff\s+check\b", runner + js_runner + r"(?:eslint|biome\s+check)\b", r"(?:golangci-lint|cargo\s+clippy|dotnet\s+format)\b", r"(?:mvn|gradle)\b.*\bcheckstyle\b"),
+        "format_check": (runner + r"(?:python\s+-m\s+)?(?:ruff\s+format|black)\s+--check\b", runner + js_runner + r"(?:prettier\s+--check|biome\s+format)\b", r"(?:cargo\s+fmt|gofmt|dotnet\s+format\s+--verify-no-changes)\b"),
+        "typecheck": (runner + r"(?:python\s+-m\s+)?(?:mypy|pyright)\b", runner + js_runner + r"tsc\s+--noemit\b", r"(?:cargo\s+check|go\s+vet|dotnet\s+build)\b", r"(?:mvn|gradle)\b.*\bcompile\b"),
+        "complexity": (runner + r"(?:python\s+-m\s+)?ruff\s+check\b.*(?:--select(?:=|\s+)C901|--extend-select(?:=|\s+)C901)", runner + r"(?:python\s+-m\s+)?radon\b", r"(?:lizard|gocyclo|cognitive-complexity)\b", runner + js_runner + r"eslint\b.*\bcomplexity\b"),
+        "architecture": (runner + r"python\s+-m\s+governance_eval\s+architecture-gate\b",),
+        "tests": (runner + r"python\s+-m\s+(?:pytest|unittest)\b", runner + r"pytest\b", r"(?:npm|pnpm|yarn)\s+(?:run\s+)?test\b", js_runner + r"(?:vitest|jest)\b", r"(?:go|cargo|dotnet|mvn|gradle)\s+test\b"),
+        "compile_or_build": (runner + r"python\s+-m\s+build\b", r"(?:npm|pnpm|yarn)\s+(?:run\s+)?build\b", r"(?:go|cargo|dotnet)\s+build\b", r"mvn\b.*\bpackage\b", r"gradle\b.*\bbuild\b"),
+    }
+    for gate, markers in required_semantics.items():
+        gate_commands = _command_list(gates.get(gate))
+        base_commands = _command_list(base_gates.get(gate)) if isinstance(base_gates, dict) else []
+        if gate_commands != base_commands and gate_commands and not any(_command_invokes_capability(command, markers) for command in gate_commands):
+            errors.append(f"required_gates.{gate} lacks required capability semantics")
+    package_commands = _command_list(gates.get("package_audit"))
+    base_package_commands = _command_list(base_gates.get("package_audit")) if isinstance(base_gates, dict) else []
+    audit_markers = (runner + r"(?:python\s+-m\s+)?pip\s+check\b", r"(?:npm|pnpm|yarn|cargo)\s+audit\b", r"(?:govulncheck|osv-scanner)\b", r"dotnet\s+list\b.*\bpackage\b")
+    if package_commands != base_package_commands and package_commands and not any(_command_invokes_capability(command, audit_markers) for command in package_commands):
+        errors.append("required_gates.package_audit lacks required capability semantics")
+    for command in commands:
+        lowered = command.lower()
+        tokens = {token.lower() for token in _split_command(command)}
+        if any(marker in command for marker in (";", "|", ">", "<", "&", "`", "$(", "\n", "\r")):
+            errors.append(f"required gate command contains shell control syntax: {command}")
+        if tokens & {"--help", "-h", "--version", "--collect-only", "--list", "--list-tests", "--dry-run", "--no-run"}:
+            errors.append(f"required gate command uses non-execution mode: {command}")
+        if any(marker in lowered for marker in NON_BLOCKING_MARKERS):
+            errors.append(f"required gate command is non-blocking: {command}")
+        if any(marker in lowered for marker in SCOPE_NARROWING_MARKERS):
+            errors.append(f"required gate command narrows scope: {command}")
+        if any(marker in lowered for marker in THRESHOLD_WEAKENING_MARKERS):
+            errors.append(f"required gate command weakens thresholds: {command}")
+    return errors
+
+
+def _ai_review_change_errors(base_config: dict[str, Any], head_config: dict[str, Any]) -> list[str]:
+    base = base_config.get("ai_review")
+    head = head_config.get("ai_review")
+    if not isinstance(base, dict) or not isinstance(head, dict):
+        return ["ai_review must remain an object"]
+    errors = _ai_review_errors(head)
+    head_patterns = [str(item) for item in head.get("reviewer_login_patterns") or []]
+    approved = {
+        "copilot-pull-request-reviewer[bot]",
+        "github-copilot[bot]",
+    }
+    for pattern in head_patterns:
+        if "*" in pattern or "?" in pattern:
+            errors.append(f"ai_review reviewer identity must be exact after config change: {pattern}")
+        elif pattern not in approved:
+            errors.append(f"ai_review reviewer identity is not approved: {pattern}")
+    return errors
+
+
+def _command_list(value: Any) -> list[str]:
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _command_invokes_capability(command: str, patterns: tuple[str, ...]) -> bool:
+    normalized = command.strip()
+    return any(re.match(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns)
 
 
 def _architecture_governance_change_errors(
@@ -708,6 +838,8 @@ def _architecture_governance_change_errors(
     changed_set = {path.replace("\\", "/") for path in changed}
     errors: list[str] = []
     checker_paths = {
+        "governance_eval/supportability.py",
+        "governance_eval/architecture_policy.py",
         "governance_eval/architecture_gate.py",
         "schemas/v1/architecture_gate_result.schema.json",
         "schemas/v1/supportability_config.schema.json",
@@ -715,21 +847,105 @@ def _architecture_governance_change_errors(
     future_checker_paths = {
         "governance_eval/copilot_review_evidence.py",
     }
-    existing_future_checkers = {
-        path for path in changed_set & future_checker_paths if _git_show_text(target_repo, base_sha, path) is not None
-    }
+    existing_future_checkers = {path for path in changed_set & future_checker_paths if _git_show_text(target_repo, base_sha, path) is not None}
     touched_checkers = sorted((changed_set & checker_paths) | existing_future_checkers)
+    enforcement_path = ".github/workflows/supportability-enforcement.yml"
     if touched_checkers:
-        errors.append(
-            "protected governance/architecture checker files changed; protected baseline judge must report RED for self-judging change: "
-            + ", ".join(touched_checkers)
-        )
+        required_tests = {
+            "tests/test_architecture_gate.py",
+            "tests/test_supportability.py",
+        }
+        if not required_tests.issubset(changed_set):
+            missing = sorted(required_tests - changed_set)
+            errors.append("protected checker change " + ", ".join(touched_checkers) + " missing independent regression tests: " + ", ".join(missing))
+        errors.extend(_protected_delivery_chain_errors(target_repo))
+        if enforcement_path in changed_set:
+            errors.append("protected checker and enforcement workflow cannot change in the same PR")
+    if enforcement_path in changed_set:
+        errors.extend(_protected_enforcement_change_errors(target_repo, base_sha, enforcement_path))
     workflow_path = ".github/workflows/supportability-gate.yml"
     if workflow_path in changed_set:
         base_text = _git_show_text(target_repo, base_sha, workflow_path)
         head_text = (target_repo / workflow_path).read_text(encoding="utf-8") if (target_repo / workflow_path).exists() else ""
         if base_text is not None and _architecture_command_lines(base_text) != _architecture_command_lines(head_text):
             errors.append("architecture gate workflow command changed; protected baseline judge must report RED")
+    return errors
+
+
+def _protected_delivery_chain_errors(target_repo: Path) -> list[str]:
+    path = target_repo / ".github" / "workflows" / "supportability-enforcement.yml"
+    if not path.exists():
+        return ["protected supportability enforcement workflow is missing"]
+    text = path.read_text(encoding="utf-8")
+    jobs = {
+        name: _workflow_job_block(text, name)
+        for name in (
+            "baseline-supportability",
+            "candidate-supportability",
+            "delivery-receipt",
+        )
+    }
+    errors = [f"protected delivery chain missing {name}:" for name, block in jobs.items() if not block]
+    expected_conditions = {
+        "baseline-supportability": "${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
+        "candidate-supportability": "${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
+        "delivery-receipt": "${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
+    }
+    for name, expected in expected_conditions.items():
+        if jobs[name] and _job_condition(jobs[name]) != expected:
+            errors.append(f"protected {name} workflow condition is missing or changed")
+    pinned_workflows = {
+        "baseline-supportability": "supportability-gate.yml",
+        "delivery-receipt": "delivery-receipt.yml",
+    }
+    for name, workflow in pinned_workflows.items():
+        exact_use = re.compile(rf"(?m)^\s{{4}}uses:\s+markheck-solutions/governance/\.github/workflows/{re.escape(workflow)}@[0-9a-f]{{40}}\s*$")
+        if jobs[name] and not exact_use.search(jobs[name]):
+            errors.append(f"protected {name} workflow must use exact {workflow} at a full immutable SHA")
+    if jobs["candidate-supportability"] and not re.search(
+        r"(?m)^\s+uses:\s+\./\.github/workflows/supportability-gate\.yml\s*$",
+        jobs["candidate-supportability"],
+    ):
+        errors.append("candidate supportability workflow is missing")
+    delivery = jobs["delivery-receipt"]
+    if delivery and not all(_job_needs(delivery, dependency) for dependency in ("baseline-supportability", "candidate-supportability")):
+        errors.append("delivery-receipt must need baseline-supportability and candidate-supportability")
+    return errors
+
+
+def _workflow_job_block(workflow_text: str, job_name: str) -> str:
+    match = re.search(rf"(?m)^  {re.escape(job_name)}:\s*$", workflow_text)
+    if not match:
+        return ""
+    following = re.search(r"(?m)^  [A-Za-z0-9_-]+:\s*$", workflow_text[match.end() :])
+    end = match.end() + following.start() if following else len(workflow_text)
+    return workflow_text[match.start() : end]
+
+
+def _job_needs(job_block: str, dependency: str) -> bool:
+    list_item = rf"(?m)^\s{{6}}-\s+{re.escape(dependency)}\s*$"
+    inline = rf"(?m)^\s{{4}}needs:\s*\[[^\]]*\b{re.escape(dependency)}\b[^\]]*\]\s*$"
+    return bool(re.search(list_item, job_block) or re.search(inline, job_block))
+
+
+def _job_condition(job_block: str) -> str:
+    match = re.search(r"(?m)^\s{4}if:\s*(.+?)\s*$", job_block)
+    return match.group(1) if match else ""
+
+
+def _protected_enforcement_change_errors(target_repo: Path, base_sha: str, relative: str) -> list[str]:
+    base_text = _git_show_text(target_repo, base_sha, relative)
+    path = target_repo / relative
+    if base_text is None or not path.exists():
+        return ["protected enforcement workflow base or head is missing"]
+    head_text = path.read_text(encoding="utf-8")
+    sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
+    if sha_ref.sub("<PIN>", base_text) != sha_ref.sub("<PIN>", head_text):
+        return ["protected enforcement workflow change is not an exact SHA pin rotation"]
+    errors = _protected_delivery_chain_errors(target_repo)
+    replacement_pins = sha_ref.findall(head_text)
+    if not replacement_pins or any(pin != base_sha for pin in replacement_pins):
+        errors.append("protected enforcement workflow pins must equal trusted base SHA")
     return errors
 
 
@@ -749,143 +965,6 @@ def _git_show_text(target_repo: Path, base_sha: str, relative_path: str) -> str 
         return None
 
 
-def _architecture_command_lines(workflow_text: str) -> list[str]:
-    return [
-        line.strip()
-        for line in workflow_text.splitlines()
-        if "python -m governance_eval architecture-gate" in line
-    ]
-
-
-def _architecture_policy_weakening_errors(base_config: dict[str, Any], head_config: dict[str, Any]) -> list[str]:
-    base_policy = base_config.get("architecture_policy")
-    head_policy = head_config.get("architecture_policy")
-    if not isinstance(base_policy, dict):
-        return []
-    if not isinstance(head_policy, dict):
-        return ["architecture_policy deleted; protected baseline judge must report RED"]
-    errors: list[str] = []
-    if head_policy.get("enforcement_mode") != "block_all":
-        errors.append("architecture_policy.enforcement_mode changed away from block_all")
-    errors.extend(_removed_or_narrowed_roots(base_policy, head_policy))
-    errors.extend(_runtime_relevance_weakening_errors(base_policy, head_policy))
-    errors.extend(_vague_name_weakening_errors(base_policy, head_policy))
-    errors.extend(_module_policy_weakening_errors(base_policy, head_policy))
-    errors.extend(_known_debt_policy_change_errors(base_policy, head_policy))
-    return errors
-
-
-def _removed_or_narrowed_roots(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base_roots = {_norm_policy_path(root.get("path")): root for root in base_policy.get("governed_roots", []) if isinstance(root, dict)}
-    head_roots = {_norm_policy_path(root.get("path")): root for root in head_policy.get("governed_roots", []) if isinstance(root, dict)}
-    errors = []
-    for path, base_root in sorted(base_roots.items()):
-        head_root = head_roots.get(path)
-        if head_root is None:
-            errors.append(f"architecture_policy.governed_roots removed: {path}")
-            continue
-        for key in ("kind", "owner", "purpose"):
-            if head_root.get(key) != base_root.get(key):
-                errors.append(f"architecture_policy.governed_roots narrowed or changed for {path}: {key}")
-    return errors
-
-
-def _runtime_relevance_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base = base_policy.get("runtime_relevance") if isinstance(base_policy.get("runtime_relevance"), dict) else {}
-    head = head_policy.get("runtime_relevance") if isinstance(head_policy.get("runtime_relevance"), dict) else {}
-    errors = []
-    base_prod = set(base.get("production_globs") or [])
-    head_prod = set(head.get("production_globs") or [])
-    if not base_prod.issubset(head_prod):
-        errors.append("architecture_policy.runtime_relevance.production_globs narrowed")
-    base_non_runtime = set(base.get("non_runtime_globs") or [])
-    head_non_runtime = set(head.get("non_runtime_globs") or [])
-    if not head_non_runtime.issubset(base_non_runtime):
-        errors.append("architecture_policy.runtime_relevance.non_runtime_globs broadened")
-    return errors
-
-
-def _vague_name_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base = base_policy.get("vague_names") if isinstance(base_policy.get("vague_names"), dict) else {}
-    head = head_policy.get("vague_names") if isinstance(head_policy.get("vague_names"), dict) else {}
-    base_forbidden = set(base.get("forbidden") or [])
-    head_forbidden = set(head.get("forbidden") or [])
-    if not base_forbidden.issubset(head_forbidden):
-        return ["architecture_policy.vague_names.forbidden narrowed"]
-    return []
-
-
-def _module_policy_weakening_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    base_modules = base_policy.get("modules") if isinstance(base_policy.get("modules"), dict) else {}
-    head_modules = head_policy.get("modules") if isinstance(head_policy.get("modules"), dict) else {}
-    for module_id, base_module in sorted(base_modules.items()):
-        head_module = head_modules.get(module_id)
-        if not isinstance(base_module, dict) or not isinstance(head_module, dict):
-            errors.append(f"architecture_policy.modules.{module_id} removed")
-            continue
-        base_allowed = set(base_module.get("allowed_dependencies") or [])
-        head_allowed = set(head_module.get("allowed_dependencies") or [])
-        if not head_allowed.issubset(base_allowed):
-            errors.append(f"architecture_policy.modules.{module_id}.allowed_dependencies broadened")
-        base_forbidden = set(base_module.get("forbidden_dependencies") or [])
-        head_forbidden = set(head_module.get("forbidden_dependencies") or [])
-        if not base_forbidden.issubset(head_forbidden):
-            errors.append(f"architecture_policy.modules.{module_id}.forbidden_dependencies narrowed")
-        errors.extend(_limit_weakening_errors(module_id, base_module, head_module))
-    return errors
-
-
-def _limit_weakening_errors(module_id: str, base_module: dict[str, Any], head_module: dict[str, Any]) -> list[str]:
-    errors = []
-    base_limits = base_module.get("limits") if isinstance(base_module.get("limits"), dict) else {}
-    head_limits = head_module.get("limits") if isinstance(head_module.get("limits"), dict) else {}
-    for key in (
-        "max_file_lines",
-        "max_function_lines",
-        "max_class_lines",
-        "max_functions_per_file",
-        "max_classes_per_file",
-    ):
-        base_value = base_limits.get(key)
-        head_value = head_limits.get(key)
-        if isinstance(base_value, int) and isinstance(head_value, int) and head_value > base_value:
-            errors.append(f"architecture_policy.modules.{module_id}.limits.{key} increased")
-    return errors
-
-
-def _known_debt_policy_change_errors(base_policy: dict[str, Any], head_policy: dict[str, Any]) -> list[str]:
-    base_debt = {_known_debt_identity(item): item for item in base_policy.get("known_debt", []) if isinstance(item, dict)}
-    errors = []
-    for item in head_policy.get("known_debt", []):
-        if not isinstance(item, dict):
-            continue
-        identity = _known_debt_identity(item)
-        base_item = base_debt.get(identity)
-        if base_item is None:
-            errors.append("architecture_policy.known_debt added or changed")
-            continue
-        if str(item.get("expires_on") or "") > str(base_item.get("expires_on") or ""):
-            errors.append("architecture_policy.known_debt extended")
-    return errors
-
-
-def _known_debt_identity(item: dict[str, Any]) -> tuple[Any, ...]:
-    return (
-        item.get("rule"),
-        _norm_policy_path(item.get("path")),
-        item.get("source_module", ""),
-        item.get("target_module", ""),
-        item.get("symbol_name", ""),
-        item.get("detail", ""),
-        item.get("fingerprint", ""),
-    )
-
-
-def _norm_policy_path(value: Any) -> str:
-    return str(value or "").replace("\\", "/").strip("/")
-
-
 def _base_supportability_config(
     target_repo: Path,
     base_sha: str,
@@ -896,7 +975,13 @@ def _base_supportability_config(
         return {}, ["supportability config changed in this PR; base config cannot be verified"]
     try:
         completed = subprocess.run(
-            ["git", "-C", str(target_repo), "show", f"{base_sha}:{relative_config_path}"],
+            [
+                "git",
+                "-C",
+                str(target_repo),
+                "show",
+                f"{base_sha}:{relative_config_path}",
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -1044,7 +1129,10 @@ def _mark_files_covered(file_map: dict[str, list[str]], gate: str) -> None:
 
 def _coverage_gap_errors(coverage: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    for label, key in (("changed file", "changed_files"), ("high-risk file", "high_risk_files")):
+    for label, key in (
+        ("changed file", "changed_files"),
+        ("high-risk file", "high_risk_files"),
+    ):
         for path, gates in coverage[key].items():
             if not gates:
                 coverage[f"excluded_{key}"].append(path)
@@ -1084,7 +1172,15 @@ def _run_configured_commands(
         commands = _normalized_command_list(gates.get(gate))
         optional = gate in OPTIONAL_COMMAND_GATES and not commands
         results.extend(_run_gate_commands(gate, commands, target_repo, runner, optional=optional))
-    results.extend(_run_gate_commands("sql_supportability", sql_commands, target_repo, runner, optional=not sql_commands))
+    results.extend(
+        _run_gate_commands(
+            "sql_supportability",
+            sql_commands,
+            target_repo,
+            runner,
+            optional=not sql_commands,
+        )
+    )
     return results
 
 
@@ -1151,7 +1247,16 @@ def _run_gate_commands(
     optional: bool,
 ) -> list[dict[str, Any]]:
     if optional:
-        return [{"gate": gate, "command": "", "status": "SKIPPED", "exit_code": None, "stdout": "", "stderr": ""}]
+        return [
+            {
+                "gate": gate,
+                "command": "",
+                "status": "SKIPPED",
+                "exit_code": None,
+                "stdout": "",
+                "stderr": "",
+            }
+        ]
     return [_run_one_command(gate, command, target_repo, runner) for command in commands]
 
 
@@ -1173,11 +1278,7 @@ def _run_one_command(
 
 
 def _command_result_errors(results: list[dict[str, Any]]) -> list[str]:
-    return [
-        f"{result['gate']}: command failed with exit code {result['exit_code']}: {result['command']}"
-        for result in results
-        if result.get("status") == "FAIL"
-    ]
+    return [f"{result['gate']}: command failed with exit code {result['exit_code']}: {result['command']}" for result in results if result.get("status") == "FAIL"]
 
 
 def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -1335,13 +1436,7 @@ def _clean_review_comments(comments: list[dict[str, Any]], head_sha: str, patter
     review_comments: list[dict[str, Any]] = []
     for comment in comments:
         body = visible_review_text(comment.get("body") or "")
-        if (
-            not comment.get("isMinimized", False)
-            and _author_matches(comment.get("author"), patterns)
-            and "reviewed commit" in body.lower()
-            and _review_matches_head(comment, head_sha)
-            and not SEVERE_RE.search(body)
-        ):
+        if not comment.get("isMinimized", False) and _author_matches(comment.get("author"), patterns) and "reviewed commit" in body.lower() and _review_matches_head(comment, head_sha) and not SEVERE_RE.search(body):
             review_comments.append(
                 {
                     "state": "COMMENTED",
@@ -1362,9 +1457,10 @@ def _latest_applicable_clean_review(reviews: list[dict[str, Any]], head_sha: str
 
 
 def _review_is_clean(review: dict[str, Any]) -> bool:
-    return review.get("state") not in {"CHANGES_REQUESTED", "DISMISSED"} and not SEVERE_RE.search(
-        visible_review_text(review.get("body") or "")
-    )
+    return review.get("state") not in {
+        "CHANGES_REQUESTED",
+        "DISMISSED",
+    } and not SEVERE_RE.search(visible_review_text(review.get("body") or ""))
 
 
 def _review_matches_head(review: dict[str, Any], head_sha: str) -> bool:
@@ -1379,13 +1475,7 @@ def _blocking_review_errors(
     latest_clean: dict[str, Any] | None,
 ) -> list[str]:
     errors = []
-    change_requests = [
-        review
-        for review in payload.get("reviews", [])
-        if review.get("state") == "CHANGES_REQUESTED"
-        and _author_matches(review.get("author"), patterns)
-        and _review_matches_head(review, head_sha)
-    ]
+    change_requests = [review for review in payload.get("reviews", []) if review.get("state") == "CHANGES_REQUESTED" and _author_matches(review.get("author"), patterns) and _review_matches_head(review, head_sha)]
     latest_change_request = max(change_requests, key=lambda item: item.get("submittedAt") or "") if change_requests else None
     if latest_change_request is not None:
         clean_submitted_at = latest_clean.get("submittedAt") if latest_clean else ""
@@ -1422,14 +1512,7 @@ def _blocking_comments(
     head_sha: str,
     latest_clean: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    return [
-        comment
-        for comment in comments
-        if SEVERE_RE.search(visible_review_text(comment.get("body") or ""))
-        and _author_matches(comment.get("author"), patterns)
-        and not comment.get("isMinimized", False)
-        and not structured_comment_superseded_by_clean_evidence(comment, head_sha, latest_clean, patterns, _author_matches)
-    ]
+    return [comment for comment in comments if SEVERE_RE.search(visible_review_text(comment.get("body") or "")) and _author_matches(comment.get("author"), patterns) and not comment.get("isMinimized", False) and not structured_comment_superseded_by_clean_evidence(comment, head_sha, latest_clean, patterns, _author_matches)]
 
 
 def _thread_author_matches(thread: dict[str, Any], patterns: list[str]) -> bool:
@@ -1528,11 +1611,7 @@ def _normalize_threads(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     threads: list[dict[str, Any]] = []
     for node in nodes:
         comments = (node.get("comments") or {}).get("nodes") or []
-        authors = [
-            (comment.get("author") or {}).get("login")
-            for comment in comments
-            if (comment.get("author") or {}).get("login")
-        ]
+        authors = [(comment.get("author") or {}).get("login") for comment in comments if (comment.get("author") or {}).get("login")]
         threads.append(
             {
                 "isResolved": node.get("isResolved"),
@@ -1598,7 +1677,9 @@ def _required_judge_errors(required_judges: dict[str, bool]) -> list[str]:
     return errors
 
 
-def _architecture_receipt_input_errors(architecture_result: dict[str, Any]) -> list[str]:
+def _architecture_receipt_input_errors(
+    architecture_result: dict[str, Any],
+) -> list[str]:
     errors = []
     expected = {
         "owner_status": STATUS_GREEN,
@@ -1713,7 +1794,13 @@ def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
     ):
         if architecture.get(key) not in {0, None}:
             errors.append(f"receipt architecture.{key} must be 0")
-    for key in (LEGACY_APPLIED_DEBT_FIELD, LEGACY_EXPIRED_DEBT_FIELD, "known_debt_applied", "known_debt", "expired_known_debt"):
+    for key in (
+        LEGACY_APPLIED_DEBT_FIELD,
+        LEGACY_EXPIRED_DEBT_FIELD,
+        "known_debt_applied",
+        "known_debt",
+        "expired_known_debt",
+    ):
         if architecture.get(key):
             errors.append(f"receipt architecture.{key} must be empty")
     if architecture.get("errors"):
@@ -1725,11 +1812,7 @@ def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
 
 
 def _receipt_sha_errors(receipt: dict[str, Any]) -> list[str]:
-    errors = [
-        f"{key} must be a 40-character lowercase Git SHA"
-        for key in ("base_sha", "head_sha")
-        if not SHA1_RE.fullmatch(str(receipt.get(key) or ""))
-    ]
+    errors = [f"{key} must be a 40-character lowercase Git SHA" for key in ("base_sha", "head_sha") if not SHA1_RE.fullmatch(str(receipt.get(key) or ""))]
     merged_sha = str(receipt.get("merged_sha") or "")
     if merged_sha and not SHA1_RE.fullmatch(merged_sha):
         errors.append("merged_sha must be empty or a 40-character lowercase Git SHA")
@@ -1973,12 +2056,16 @@ def _parse_yaml_scalar(value: str) -> Any:
     return value
 
 
-def _add_config_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_config_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     parser = subparsers.add_parser("supportability-config", help="validate supportability config")
     parser.add_argument("--config", type=Path, required=True)
 
 
-def _add_gate_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_gate_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     parser = subparsers.add_parser("supportability-gate", help="run configured supportability gates")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--target-repo", type=Path, required=True)
@@ -1990,7 +2077,9 @@ def _add_gate_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/supportability"))
 
 
-def _add_copilot_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_copilot_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     parser = subparsers.add_parser("copilot-review-gate", help="verify Copilot review on latest head")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--head-sha", required=True)
@@ -2000,7 +2089,9 @@ def _add_copilot_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/supportability"))
 
 
-def _add_receipt_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_receipt_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     parser = subparsers.add_parser("delivery-receipt", help="generate supportability delivery receipt")
     parser.add_argument("--gate-result", type=Path, required=True)
     parser.add_argument("--copilot-result", type=Path, required=True)
@@ -2022,7 +2113,9 @@ def _add_receipt_parser(subparsers: argparse._SubParsersAction[argparse.Argument
     parser.add_argument("--governance-weakening-detected", action="store_true")
 
 
-def _add_bootstrap_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_bootstrap_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     parser = subparsers.add_parser("bootstrap-receipt", help="generate a RED bootstrap receipt")
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/supportability"))
     parser.add_argument("--repository-url", default="")
@@ -2032,7 +2125,9 @@ def _add_bootstrap_parser(subparsers: argparse._SubParsersAction[argparse.Argume
     parser.add_argument("--reason", default="baseline protected workflow missing on main")
 
 
-def _add_verify_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_verify_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     parser = subparsers.add_parser("verify-receipt", help="verify supportability receipt against GitHub")
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--skip-live", action="store_true")
@@ -2042,7 +2137,13 @@ def _add_verify_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 def _cli_config(args: argparse.Namespace) -> int:
     config = load_supportability_config(args.config)
     errors = validate_supportability_config(config)
-    print(json.dumps({"status": STATUS_RED if errors else STATUS_GREEN, "errors": errors}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {"status": STATUS_RED if errors else STATUS_GREEN, "errors": errors},
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 1 if errors else 0
 
 
@@ -2245,7 +2346,17 @@ def _live_pr(repo: str, pr_number: int) -> dict[str, Any]:
 
 
 def _live_run(repo: str, run_id: str) -> dict[str, Any]:
-    return _gh_json(["run", "view", run_id, "--repo", repo, "--json", "status,conclusion,headSha,url"])
+    return _gh_json(
+        [
+            "run",
+            "view",
+            run_id,
+            "--repo",
+            repo,
+            "--json",
+            "status,conclusion,headSha,url",
+        ]
+    )
 
 
 def _live_artifact(repo: str, artifact_id: str) -> dict[str, Any]:
@@ -2276,7 +2387,15 @@ def _ls_remote_main(repository_url: str) -> str:
 def _fresh_clone_log(repository_url: str) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="supportability-receipt-") as tmp:
         subprocess.run(
-            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", repository_url, tmp],
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--filter=blob:none",
+                "--no-checkout",
+                repository_url,
+                tmp,
+            ],
             check=True,
             timeout=GIT_NETWORK_TIMEOUT_SECONDS,
         )
@@ -2296,7 +2415,15 @@ def _fresh_clone_log(repository_url: str) -> list[str]:
 def _fresh_clone_contains_commit(repository_url: str, commit_sha: str) -> bool:
     with tempfile.TemporaryDirectory(prefix="supportability-receipt-") as tmp:
         subprocess.run(
-            ["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", repository_url, tmp],
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--filter=blob:none",
+                "--no-checkout",
+                repository_url,
+                tmp,
+            ],
             check=True,
             timeout=GIT_NETWORK_TIMEOUT_SECONDS,
         )

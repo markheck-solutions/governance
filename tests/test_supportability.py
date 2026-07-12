@@ -38,7 +38,9 @@ class SupportabilityConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 
-    def test_config_validation_rejects_missing_gate_empty_command_and_bad_hash(self) -> None:
+    def test_config_validation_rejects_missing_gate_empty_command_and_bad_hash(
+        self,
+    ) -> None:
         config = _valid_config(self.root)
         config["standard"]["hash"] = "not-a-hash"
         config["required_gates"].pop("tests")
@@ -78,7 +80,9 @@ class SupportabilityConfigTests(unittest.TestCase):
         with self.assertRaises(SchemaValidationError):
             validate_named("supportability_config", config, self.root)
 
-    def test_config_schema_validation_is_independent_of_current_working_directory(self) -> None:
+    def test_config_schema_validation_is_independent_of_current_working_directory(
+        self,
+    ) -> None:
         config = _valid_config(self.root)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,7 +159,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 command_runner=_passing_runner,
             )
 
-            self.assertEqual(result["owner_status"], STATUS_GREEN)
+            self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
             self.assertEqual(result["errors"], [])
             self.assertIn("lint", result["coverage"]["changed_files"]["src/app.py"])
 
@@ -333,17 +337,22 @@ class SupportabilityGateTests(unittest.TestCase):
             )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("supportability config changed" in error for error in result["errors"]))
+            self.assertTrue(any("config change must be isolated" in error for error in result["errors"]))
             self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
-    def test_gate_blocks_initial_architecture_policy_adoption_mixed_with_config_change(self) -> None:
+    def test_gate_blocks_initial_architecture_policy_adoption_mixed_with_config_change(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             config = load_supportability_config(repo / ".github/governance/supportability.yml")
             base_config = dict(config)
             base_config.pop("architecture_policy")
 
-            with mock.patch("governance_eval.supportability._base_supportability_config", return_value=(base_config, [])):
+            with mock.patch(
+                "governance_eval.supportability._base_supportability_config",
+                return_value=(base_config, []),
+            ):
                 result = run_supportability_gate(
                     repo / ".github/governance/supportability.yml",
                     repo,
@@ -354,7 +363,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("supportability config changed" in error for error in result["errors"]))
+            self.assertTrue(any("unclassified supportability config key added" in error for error in result["errors"]))
 
     def test_gate_blocks_architecture_size_limit_increase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -374,9 +383,7 @@ class SupportabilityGateTests(unittest.TestCase):
             repo = _synthetic_repo(Path(tmp), self.root)
             base_config = load_supportability_config(repo / ".github/governance/supportability.yml")
             head_config = json.loads(json.dumps(base_config))
-            head_config["architecture_policy"]["governed_roots"] = [
-                root for root in head_config["architecture_policy"]["governed_roots"] if root["path"] != "docs"
-            ]
+            head_config["architecture_policy"]["governed_roots"] = [root for root in head_config["architecture_policy"]["governed_roots"] if root["path"] != "docs"]
             (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
 
             result = _run_config_change_with_base(repo, base_config)
@@ -452,14 +459,17 @@ class SupportabilityGateTests(unittest.TestCase):
             )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("architecture checker files changed" in error for error in result["errors"]))
+            self.assertTrue(any("protected checker change" in error for error in result["errors"]))
             self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
     def test_gate_blocks_existing_copilot_review_evidence_checker_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
 
-            with mock.patch("governance_eval.supportability._git_show_text", return_value="base parser"):
+            with mock.patch(
+                "governance_eval.supportability._git_show_text",
+                return_value="base parser",
+            ):
                 result = run_supportability_gate(
                     repo / ".github/governance/supportability.yml",
                     repo,
@@ -471,6 +481,59 @@ class SupportabilityGateTests(unittest.TestCase):
 
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("copilot_review_evidence.py" in error for error in result["errors"]))
+
+    def test_non_weakening_config_change_runs_only_trusted_base_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = _valid_config(repo)
+            _set_semantic_gate_commands(base_config)
+            head_config = json.loads(json.dumps(base_config))
+            head_config["ai_review"]["reviewer_login_patterns"] = [
+                "copilot-pull-request-reviewer[bot]",
+                "github-copilot[bot]",
+            ]
+            (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
+            seen: list[str] = []
+
+            def runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+                del cwd
+                seen.append(command)
+                return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+            with mock.patch(
+                "governance_eval.supportability._base_supportability_config",
+                return_value=(base_config, []),
+            ):
+                result = run_supportability_gate(
+                    repo / ".github/governance/supportability.yml",
+                    repo,
+                    "a" * 40,
+                    "b" * 40,
+                    changed_files=[".github/governance/supportability.yml"],
+                    command_runner=runner,
+                )
+
+            self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
+            self.assertTrue(seen)
+            self.assertIn("python -m ruff check .", seen)
+
+    def test_config_change_rejects_unclassified_key_and_unapproved_reviewer(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = _valid_config(repo)
+            head_config = json.loads(json.dumps(base_config))
+            head_config["execution"] = {"shell_escape": True}
+            head_config["ai_review"]["reviewer_login_patterns"] = ["evil-copilot-attacker[bot]"]
+            (repo / ".github/governance/supportability.yml").write_text(json.dumps(head_config), encoding="utf-8")
+
+            result = _run_config_change_with_base(repo, base_config)
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(any("unexpected key 'execution'" in error for error in result["errors"]))
+            self.assertTrue(any("unclassified supportability config key" in error for error in result["errors"]))
+            self.assertTrue(any("reviewer identity is not approved" in error for error in result["errors"]))
             self.assertTrue(all(command["status"] == "SKIPPED" for command in result["commands"]))
 
     def test_gate_blocks_architecture_workflow_command_change(self) -> None:
@@ -481,7 +544,10 @@ class SupportabilityGateTests(unittest.TestCase):
             workflow_path.write_text("run: echo ok\n", encoding="utf-8")
             base_workflow = "run: python -m governance_eval architecture-gate \\\n"
 
-            with mock.patch("governance_eval.supportability._git_show_text", return_value=base_workflow):
+            with mock.patch(
+                "governance_eval.supportability._git_show_text",
+                return_value=base_workflow,
+            ):
                 result = run_supportability_gate(
                     repo / ".github/governance/supportability.yml",
                     repo,
@@ -528,7 +594,10 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("SQL files require explicit SQL gate" in error for error in result["errors"]))
             self.assertTrue(any("explicit SQL gate command missing" in error for error in result["errors"]))
-            self.assertNotIn("sql_supportability", result["coverage"]["changed_files"]["sql/report.sql"])
+            self.assertNotIn(
+                "sql_supportability",
+                result["coverage"]["changed_files"]["sql/report.sql"],
+            )
 
     def test_repo_file_discovery_prunes_skipped_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -595,7 +664,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["review_status"]["reviewer"], "chatgpt-codex-connector")
             self.assertEqual(result["review_status"]["commit_oid"], head)
 
-    def test_copilot_review_gate_accepts_structured_clean_latest_head_evidence(self) -> None:
+    def test_copilot_review_gate_accepts_structured_clean_latest_head_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "c" * 40
@@ -642,11 +713,7 @@ class CopilotReviewGateTests(unittest.TestCase):
                 [
                     f"@copilot review commit {head}. If clean, end your response with exactly:",
                     "<!-- governance-review-evidence:v1",
-                    (
-                        '{"schema_version":"governance-review-evidence.v1",'
-                        f'"reviewed_commit_sha":"{head}",'
-                        '"verdict":"clean","open_findings":[]}'
-                    ),
+                    (f'{{"schema_version":"governance-review-evidence.v1","reviewed_commit_sha":"{head}","verdict":"clean","open_findings":[]}}'),
                     "-->",
                     'If blocked, use verdict "blocked" and list open_findings with severity, title, and path.',
                 ]
@@ -700,7 +767,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["review_status"]["reviewed_commit_sha"], stale_head)
             self.assertTrue(any("missing or stale" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_allows_legacy_fallback_when_structured_evidence_is_stale(self) -> None:
+    def test_copilot_review_gate_allows_legacy_fallback_when_structured_evidence_is_stale(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -735,12 +804,7 @@ class CopilotReviewGateTests(unittest.TestCase):
                     comments=[
                         {
                             "author": "github-copilot[bot]",
-                            "body": (
-                                f"Reviewed commit {head}.\n"
-                                "<!-- governance-review-evidence:v1\n"
-                                f'{{"reviewed_commit_sha":"{head}",not-json}}\n'
-                                "-->"
-                            ),
+                            "body": (f'Reviewed commit {head}.\n<!-- governance-review-evidence:v1\n{{"reviewed_commit_sha":"{head}",not-json}}\n-->'),
                             "createdAt": "2026-06-30T14:35:45Z",
                             "isMinimized": False,
                         }
@@ -753,7 +817,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertFalse(result["review_status"]["structured_evidence_valid"])
             self.assertTrue(any("structured Copilot review evidence is invalid" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_rejects_malformed_current_head_evidence_from_visible_review_line(self) -> None:
+    def test_copilot_review_gate_rejects_malformed_current_head_evidence_from_visible_review_line(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -781,7 +847,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertFalse(result["review_status"]["structured_evidence_valid"])
             self.assertTrue(any("structured Copilot review evidence is invalid" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_allows_later_clean_structured_evidence_after_malformed_head_evidence(self) -> None:
+    def test_copilot_review_gate_allows_later_clean_structured_evidence_after_malformed_head_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -883,7 +951,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertFalse(result["review_status"]["latest_head_reviewed"])
             self.assertTrue(any("missing or stale" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_allows_legacy_fallback_when_stale_structured_json_is_invalid(self) -> None:
+    def test_copilot_review_gate_allows_legacy_fallback_when_stale_structured_json_is_invalid(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -936,7 +1006,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_GREEN)
             self.assertTrue(result["review_status"]["latest_head_reviewed"])
 
-    def test_copilot_review_gate_allows_legacy_fallback_when_off_head_structured_document_is_invalid(self) -> None:
+    def test_copilot_review_gate_allows_legacy_fallback_when_off_head_structured_document_is_invalid(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -975,7 +1047,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_GREEN)
             self.assertTrue(result["review_status"]["latest_head_reviewed"])
 
-    def test_copilot_review_gate_rejects_structured_evidence_from_wrong_author(self) -> None:
+    def test_copilot_review_gate_rejects_structured_evidence_from_wrong_author(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -1076,7 +1150,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertTrue(result["review_status"]["structured_evidence_valid"])
             self.assertEqual(result["review_status"]["open_finding_count"], 1)
 
-    def test_copilot_review_gate_rejects_dismissed_structured_review_as_only_evidence(self) -> None:
+    def test_copilot_review_gate_rejects_dismissed_structured_review_as_only_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -1094,7 +1170,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertFalse(result["review_status"]["latest_head_reviewed"])
             self.assertTrue(any("missing or stale" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_rejects_visible_severe_text_with_clean_structured_block(self) -> None:
+    def test_copilot_review_gate_rejects_visible_severe_text_with_clean_structured_block(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -1110,7 +1188,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_RED)
             self.assertTrue(any("severe AI review comment" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_ignores_fenced_severe_examples_with_clean_structured_block(self) -> None:
+    def test_copilot_review_gate_ignores_fenced_severe_examples_with_clean_structured_block(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -1134,7 +1214,9 @@ class CopilotReviewGateTests(unittest.TestCase):
             self.assertEqual(result["owner_status"], STATUS_GREEN)
             self.assertEqual(result["review_status"]["blocking_comment_count"], 0)
 
-    def test_copilot_review_gate_allows_later_clean_structured_evidence_after_blocked_comment(self) -> None:
+    def test_copilot_review_gate_allows_later_clean_structured_evidence_after_blocked_comment(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "d" * 40
@@ -1225,7 +1307,9 @@ class CopilotReviewGateTests(unittest.TestCase):
         self.assertEqual(result["owner_status"], STATUS_RED)
         self.assertTrue(any("CHANGES_REQUESTED" in error for error in result["errors"]))
 
-    def test_copilot_review_gate_allows_clean_evidence_after_changes_requested_review(self) -> None:
+    def test_copilot_review_gate_allows_clean_evidence_after_changes_requested_review(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             head = "f" * 40
@@ -1360,7 +1444,10 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         self.assertEqual(receipt["owner_status"], STATUS_RED)
         self.assertEqual(receipt["bootstrap"]["gate_result"], STATUS_RED)
-        self.assertEqual(receipt["bootstrap"]["reason"], "baseline protected workflow missing on main")
+        self.assertEqual(
+            receipt["bootstrap"]["reason"],
+            "baseline protected workflow missing on main",
+        )
         self.assertEqual(receipt["bootstrap"]["human_decision_required"], "YES")
         self.assertFalse(receipt["bootstrap"]["governance_pass"])
 
@@ -1404,7 +1491,9 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["owner_status"], STATUS_RED)
         self.assertTrue(any("architecture violations must be empty" in error for error in receipt["errors"]))
 
-    def test_receipt_verifier_rejects_open_pr_claimed_merged_and_bad_artifact(self) -> None:
+    def test_receipt_verifier_rejects_open_pr_claimed_merged_and_bad_artifact(
+        self,
+    ) -> None:
         gate = _gate_result()
         copilot = _copilot_result()
         receipt = generate_delivery_receipt(
@@ -1430,7 +1519,11 @@ class DeliveryReceiptTests(unittest.TestCase):
                 "headRefOid": gate["head_sha"],
                 "mergeCommit": None,
             },
-            "run": {"status": "completed", "conclusion": "success", "headSha": gate["head_sha"]},
+            "run": {
+                "status": "completed",
+                "conclusion": "success",
+                "headSha": gate["head_sha"],
+            },
             "artifact": {
                 "id": 456,
                 "name": "supportability-delivery-receipt",
@@ -1474,8 +1567,17 @@ class DeliveryReceiptTests(unittest.TestCase):
                 "headRefOid": gate["head_sha"],
                 "mergeCommit": {"oid": merged_sha},
             },
-            "run": {"status": "completed", "conclusion": "success", "headSha": gate["head_sha"]},
-            "artifact": {"id": 456, "name": "supportability-delivery-receipt", "digest": digest, "expired": False},
+            "run": {
+                "status": "completed",
+                "conclusion": "success",
+                "headSha": gate["head_sha"],
+            },
+            "artifact": {
+                "id": 456,
+                "name": "supportability-delivery-receipt",
+                "digest": digest,
+                "expired": False,
+            },
         }
 
         result = verify_delivery_receipt(receipt, live_observations=observations)
@@ -1507,8 +1609,17 @@ class DeliveryReceiptTests(unittest.TestCase):
                 "headRefOid": gate["head_sha"],
                 "mergeCommit": None,
             },
-            "run": {"status": "in_progress", "conclusion": "", "headSha": gate["head_sha"]},
-            "artifact": {"id": 456, "name": "supportability-delivery-receipt", "digest": digest, "expired": False},
+            "run": {
+                "status": "in_progress",
+                "conclusion": "",
+                "headSha": gate["head_sha"],
+            },
+            "artifact": {
+                "id": 456,
+                "name": "supportability-delivery-receipt",
+                "digest": digest,
+                "expired": False,
+            },
         }
 
         with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "123"}):
@@ -1555,8 +1666,17 @@ class DeliveryReceiptTests(unittest.TestCase):
                 "headRefOid": gate["head_sha"],
                 "mergeCommit": None,
             },
-            "run": {"status": "completed", "conclusion": "success", "headSha": gate["head_sha"]},
-            "artifact": {"id": 456, "name": "supportability-delivery-receipt", "digest": digest, "expired": False},
+            "run": {
+                "status": "completed",
+                "conclusion": "success",
+                "headSha": gate["head_sha"],
+            },
+            "artifact": {
+                "id": 456,
+                "name": "supportability-delivery-receipt",
+                "digest": digest,
+                "expired": False,
+            },
         }
 
         result = verify_delivery_receipt(receipt, live_observations=observations)
@@ -1577,7 +1697,9 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(result["owner_status"], STATUS_RED)
         self.assertTrue(any("merged_sha" in error for error in result["errors"]))
 
-    def test_receipt_generation_rejects_invalid_merged_sha_without_schema_crash(self) -> None:
+    def test_receipt_generation_rejects_invalid_merged_sha_without_schema_crash(
+        self,
+    ) -> None:
         receipt = generate_delivery_receipt(
             _gate_result(),
             _copilot_result(),
@@ -1591,7 +1713,9 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["merged_sha"], "")
         self.assertTrue(any("merged_sha must be empty" in error for error in receipt["errors"]))
 
-    def test_receipt_generation_rejects_bad_gate_shas_without_schema_crash(self) -> None:
+    def test_receipt_generation_rejects_bad_gate_shas_without_schema_crash(
+        self,
+    ) -> None:
         gate = _gate_result()
         gate["base_sha"] = "bad-base"
         gate["head_sha"] = "bad-head"
@@ -1610,7 +1734,9 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertTrue(any("base_sha must be" in error for error in receipt["errors"]))
         self.assertTrue(any("head_sha must be" in error for error in receipt["errors"]))
 
-    def test_receipt_schema_validation_is_independent_of_current_working_directory(self) -> None:
+    def test_receipt_schema_validation_is_independent_of_current_working_directory(
+        self,
+    ) -> None:
         receipt = generate_delivery_receipt(
             _gate_result(),
             _copilot_result(),
@@ -1663,7 +1789,9 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertTrue(any(LEGACY_APPLIED_DEBT_FIELD in error for error in result["errors"]))
         self.assertTrue(any(LEGACY_EXPIRED_DEBT_FIELD in error for error in result["errors"]))
 
-    def test_receipt_verifier_rejects_merged_sha_missing_from_main_history(self) -> None:
+    def test_receipt_verifier_rejects_merged_sha_missing_from_main_history(
+        self,
+    ) -> None:
         gate = _gate_result()
         copilot = _copilot_result()
         merged_sha = "3" * 40
@@ -1690,8 +1818,17 @@ class DeliveryReceiptTests(unittest.TestCase):
                 "headRefOid": gate["head_sha"],
                 "mergeCommit": {"oid": merged_sha},
             },
-            "run": {"status": "completed", "conclusion": "success", "headSha": gate["head_sha"]},
-            "artifact": {"id": 456, "name": "supportability-delivery-receipt", "digest": digest, "expired": False},
+            "run": {
+                "status": "completed",
+                "conclusion": "success",
+                "headSha": gate["head_sha"],
+            },
+            "artifact": {
+                "id": 456,
+                "name": "supportability-delivery-receipt",
+                "digest": digest,
+                "expired": False,
+            },
         }
 
         result = verify_delivery_receipt(receipt, live_observations=observations)
@@ -1705,7 +1842,11 @@ class DeliveryReceiptTests(unittest.TestCase):
 
         with mock.patch("governance_eval.supportability._gh_api_json") as api_json:
             with mock.patch("governance_eval.supportability._gh_api_bytes", return_value=archive) as api_bytes:
-                api_json.return_value = {"id": 456, "name": "supportability-gate-evidence", "expired": False}
+                api_json.return_value = {
+                    "id": 456,
+                    "name": "supportability-gate-evidence",
+                    "expired": False,
+                }
 
                 artifact = supportability_module._live_artifact("example/repo", "456")
 
@@ -1825,7 +1966,9 @@ class DeliveryReceiptTests(unittest.TestCase):
         self.assertTrue(any("artifact.id is required" in error for error in result["errors"]))
         self.assertTrue(any("artifact.digest is required" in error for error in result["errors"]))
 
-    def test_delivery_receipt_cli_defaults_to_supportability_evidence_artifact(self) -> None:
+    def test_delivery_receipt_cli_defaults_to_supportability_evidence_artifact(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             gate_path = root / "gate.json"
@@ -1911,7 +2054,10 @@ def _valid_config(root: Path) -> dict:
             "unresolved_p0_p1_p2_blocks": True,
             "reviewer_login_patterns": ["*copilot*", "chatgpt-codex-connector*"],
         },
-        "receipt": {"artifact_name": "supportability-delivery-receipt", "retention_days": 90},
+        "receipt": {
+            "artifact_name": "supportability-delivery-receipt",
+            "retention_days": 90,
+        },
         "architecture_policy": _architecture_policy(),
     }
 
@@ -2026,8 +2172,18 @@ def _architecture_policy() -> dict:
         "version": 1,
         "enforcement_mode": "block_all",
         "governed_roots": [
-            {"path": "src", "kind": "production_python", "owner": "test", "purpose": "production source"},
-            {"path": "tests", "kind": "test_python", "owner": "test", "purpose": "tests"},
+            {
+                "path": "src",
+                "kind": "production_python",
+                "owner": "test",
+                "purpose": "production source",
+            },
+            {
+                "path": "tests",
+                "kind": "test_python",
+                "owner": "test",
+                "purpose": "tests",
+            },
             {"path": "docs", "kind": "docs", "owner": "test", "purpose": "docs"},
         ],
         "runtime_relevance": {
@@ -2082,7 +2238,10 @@ def _rewrite_gate_command(repo: Path, gate: str, commands: object) -> None:
 
 
 def _run_config_change_with_base(repo: Path, base_config: dict) -> dict:
-    with mock.patch("governance_eval.supportability._base_supportability_config", return_value=(base_config, [])):
+    with mock.patch(
+        "governance_eval.supportability._base_supportability_config",
+        return_value=(base_config, []),
+    ):
         return run_supportability_gate(
             repo / ".github/governance/supportability.yml",
             repo,
@@ -2091,6 +2250,21 @@ def _run_config_change_with_base(repo: Path, base_config: dict) -> dict:
             changed_files=[".github/governance/supportability.yml"],
             command_runner=_passing_runner,
         )
+
+
+def _set_semantic_gate_commands(config: dict) -> None:
+    config["required_gates"].update(
+        {
+            "lint": ["python -m ruff check ."],
+            "format_check": ["python -m ruff format --check ."],
+            "typecheck": ["python -m mypy ."],
+            "complexity": ["python -m ruff check --select C901 ."],
+            "architecture": ["python -m governance_eval architecture-gate --config .github/governance/supportability.yml --target-repo . --base-sha $BASE_SHA --head-sha $HEAD_SHA"],
+            "tests": ["python -m pytest tests -q"],
+            "compile_or_build": ["python -m build"],
+            "package_audit": ["python -m pip check"],
+        }
+    )
 
 
 def _passing_runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
