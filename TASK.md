@@ -185,9 +185,9 @@ Completion is `FAIL` unless all are true:
 - Delivery receipt validates both evidence chains and remote GitHub state.
 - These existing four required contexts are GREEN on the exact current head and base:
   - `Phase 1 shadow run`;
-  - `Baseline Protected Supportability Gate`;
-  - `Candidate Supportability Gate`;
-  - `Baseline Protected Delivery Receipt`.
+  - `Baseline Protected Supportability Gate / Supportability Gate`;
+  - `Candidate Supportability Gate / Supportability Gate`;
+  - `Baseline Protected Delivery Receipt / Delivery Receipt`.
 - Clean canary merges through the protected path.
 - Defective canary remains RED and closes unmerged.
 - Stale-review canary remains RED until fresh exact-head evidence exists.
