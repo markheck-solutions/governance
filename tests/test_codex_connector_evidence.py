@@ -275,6 +275,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         invalid_time["issue_comments"][0]["created_at"] = "2026-99-99T99:99:99Z"
         raw_cases = (
             b"not-json",
+            b"{}\n",
             raw_bytes(snapshot()) + b" ",
             b'{"schema_version":"1.0","schema_version":"1.0"}\n',
             b"[]\n",
@@ -286,6 +287,59 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
                 result = evaluate_codex_connector_evidence(raw, trusted(raw))
                 self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertTrue(result["reasons"])
+
+    def test_orphaned_current_head_connector_review_comment_blocks(self) -> None:
+        for severity in ("P0", "P1", "P2", "P3"):
+            with self.subTest(severity=severity):
+                value = snapshot()
+                value["review_comments"] = [
+                    connector_review_comment(review_id=999, severity=severity)
+                ]
+
+                result = evaluate(value)
+
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn("ORPHANED_REVIEW_COMMENT", result["reasons"])
+                if severity in ("P0", "P1", "P2"):
+                    self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+        stale = snapshot()
+        stale["review_comments"] = [connector_review_comment(review_id=999)]
+        stale["review_comments"][0]["commit_id"] = "c" * 40
+        self.assertEqual(evaluate(stale)["capability_status"], "PASS")
+
+    def test_snapshot_commit_identities_require_semantic_full_match(self) -> None:
+        cases = []
+
+        base = snapshot()
+        base["pull_request"]["base_sha"] += "\n"
+        cases.append(("base", base))
+
+        head = snapshot()
+        head["pull_request"]["head_sha"] += "\n"
+        cases.append(("head", head))
+
+        parent = snapshot()
+        parent_review = connector_review(commit_id=HEAD_SHA + "\n")
+        parent_review["body"] = "P1: unsafe evidence boundary"
+        parent["pull_request_reviews"] = [parent_review]
+        cases.append(("parent", parent))
+
+        inline_commit = snapshot()
+        inline_commit["review_comments"] = [connector_review_comment(review_id=999)]
+        inline_commit["review_comments"][0]["commit_id"] += "\n"
+        cases.append(("inline_commit", inline_commit))
+
+        inline_original = snapshot()
+        inline_original["review_comments"] = [connector_review_comment(review_id=999)]
+        inline_original["review_comments"][0]["original_commit_id"] += "\n"
+        cases.append(("inline_original", inline_original))
+
+        for name, value in cases:
+            with self.subTest(name=name):
+                result = evaluate(value)
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn("SNAPSHOT_COMMIT_IDENTITY_INVALID", result["reasons"])
 
     def test_current_head_connector_p0_p1_p2_findings_always_block(self) -> None:
         for severity in ("P0", "P1", "P2"):
@@ -306,7 +360,10 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         review["user"]["id"] = 1
         spoofed["pull_request_reviews"] = [review]
         spoofed["review_comments"] = [connector_review_comment()]
-        self.assertEqual(evaluate(spoofed)["capability_status"], "PASS")
+        spoofed_result = evaluate(spoofed)
+        self.assertEqual(spoofed_result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("ORPHANED_REVIEW_COMMENT", spoofed_result["reasons"])
+        self.assertIn("BLOCKING_FINDINGS_PRESENT", spoofed_result["reasons"])
 
     def test_parent_review_state_or_body_blocks_before_or_after_clean_comment(
         self,

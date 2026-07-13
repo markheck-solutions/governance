@@ -135,7 +135,7 @@ def _evaluate(
     normalized_digest = None
     response = None
     reviewed_head = None
-    if snapshot:
+    if snapshot is not None:
         schema_valid = _snapshot_schema_valid(snapshot)
         if not schema_valid:
             reasons.append("SNAPSHOT_SCHEMA_INVALID")
@@ -177,18 +177,18 @@ def _evaluate(
     return result
 
 
-def _load_snapshot(raw: Any) -> tuple[dict[str, Any], list[str]]:
+def _load_snapshot(raw: Any) -> tuple[dict[str, Any] | None, list[str]]:
     if not isinstance(raw, bytes) or not raw or len(raw) > _MAX_SNAPSHOT_BYTES:
-        return {}, ["SNAPSHOT_BYTES_INVALID"]
+        return None, ["SNAPSHOT_BYTES_INVALID"]
     try:
         parsed = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs)
         canonical = (json.dumps(parsed, indent=2, sort_keys=True) + "\n").encode(
             "utf-8"
         )
     except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError):
-        return {}, ["SNAPSHOT_JSON_INVALID"]
+        return None, ["SNAPSHOT_JSON_INVALID"]
     if not isinstance(parsed, dict):
-        return {}, ["SNAPSHOT_JSON_INVALID"]
+        return None, ["SNAPSHOT_JSON_INVALID"]
     return parsed, [] if raw == canonical else ["SNAPSHOT_BYTES_NONCANONICAL"]
 
 
@@ -262,6 +262,15 @@ def _collection_reasons(
     review_comments: list[dict[str, Any]],
 ) -> list[str]:
     reasons = _snapshot_identity_reasons(snapshot, trusted)
+    snapshot_commit_ids = [
+        snapshot["pull_request"]["base_sha"],
+        snapshot["pull_request"]["head_sha"],
+        *(review["commit_id"] for review in reviews),
+        *(comment["commit_id"] for comment in review_comments),
+        *(comment["original_commit_id"] for comment in review_comments),
+    ]
+    if any(not _SHA_RE.fullmatch(value) for value in snapshot_commit_ids):
+        reasons.append("SNAPSHOT_COMMIT_IDENTITY_INVALID")
     collections = (comments, reviews, review_comments)
     if any(len(items) > _MAX_COLLECTION_ITEMS for items in collections):
         reasons.append("SNAPSHOT_LIMIT_EXCEEDED")
@@ -273,6 +282,18 @@ def _collection_reasons(
         reasons.append("SNAPSHOT_TIMESTAMP_INVALID")
     if _manual_request_present(comments):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
+    current_connector_review_ids = {
+        review["id"]
+        for review in reviews
+        if _exact_connector_user(review) and review["commit_id"] == trusted.head_sha
+    }
+    if any(
+        _exact_connector_user(comment)
+        and comment["commit_id"] == trusted.head_sha
+        and comment["pull_request_review_id"] not in current_connector_review_ids
+        for comment in review_comments
+    ):
+        reasons.append("ORPHANED_REVIEW_COMMENT")
     if _blocking_finding_present(reviews, review_comments, trusted.head_sha):
         reasons.append("BLOCKING_FINDINGS_PRESENT")
     return reasons
@@ -294,8 +315,7 @@ def _blocking_finding_present(
         for review in current.values()
     )
     inline_blocking = any(
-        comment["pull_request_review_id"] in current
-        and _exact_connector_user(comment)
+        _exact_connector_user(comment)
         and comment["commit_id"] == head_sha
         and _BLOCKING_SEVERITY_RE.search(comment["body"])
         for comment in comments
