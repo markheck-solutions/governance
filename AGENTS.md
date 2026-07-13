@@ -37,6 +37,20 @@ Explicitly use bounded subagents when available:
 
 No agent may certify its own output merely by narrative assertion.
 
+## Delivery discipline
+
+These controls limit wasted execution without weakening `TASK.md` or its completion criteria.
+
+- Work one dependency-complete implementation slice at a time. Do not begin another slice until the current slice has a verified commit or a precisely evidenced blocker.
+- A plan, status message, test invocation, or elapsed effort is not a deliverable. Progress reports must identify a new commit SHA, pull request URL, machine-readable artifact digest, or exact newly reproduced failing assertion.
+- Run focused positive and negative controls before an aggregate suite. Do not use an aggregate suite to discover failures that a bounded focused command can expose.
+- Every command must have a declared hard timeout. After the first timeout, do not rerun the same scope with a larger timeout. Isolate the slow file or case, identify the cause, and set the next bound from measured evidence.
+- Permit at most two consecutive repair or verification loops without a durable artifact. At that point, stop, inspect the design and diff, and either produce the slice commit or record the exact blocker.
+- Run formatting and `git diff --check` before expensive verification.
+- Do not mix incompatible reusable-workflow publication, caller-pin activation, typed-configuration migration, or protected-surface activation in one pull request.
+- Do not start target-repository rollout while Governance self-enforcement remains unproven.
+- Never convert a timeout, skipped test, partial batch, narrative review, or locally green subset into a completion claim.
+
 ## Completion
 
 Completion requires implementation, automated tests, exact commands and results, generated machine-readable benchmark evidence, and resolution of every reproduced P0-P2 finding. Report a blocked result rather than weakening scope or fabricating proof.
