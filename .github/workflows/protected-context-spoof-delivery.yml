@@ -1,0 +1,19 @@
+name: Protected Context Spoof Delivery Receipt
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  delivery-receipt:
+    name: Delivery Receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Emit harmless canary result
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'protected-context-spoof-delivery-receipt-canary'

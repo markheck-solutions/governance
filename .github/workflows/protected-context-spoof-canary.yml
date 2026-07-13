@@ -1,0 +1,32 @@
+name: Protected Context Spoof Canary
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-supportability:
+    name: Baseline Protected Supportability Gate
+    uses: ./.github/workflows/protected-context-spoof-supportability.yml
+    permissions:
+      contents: read
+
+  candidate-supportability:
+    name: Candidate Supportability Gate
+    uses: ./.github/workflows/protected-context-spoof-supportability.yml
+    permissions:
+      contents: read
+
+  baseline-delivery-receipt:
+    name: Baseline Protected Delivery Receipt
+    uses: ./.github/workflows/protected-context-spoof-delivery.yml
+    permissions:
+      contents: read

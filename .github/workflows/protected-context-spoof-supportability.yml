@@ -1,0 +1,19 @@
+name: Protected Context Spoof Supportability
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  supportability:
+    name: Supportability Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Emit harmless canary result
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'protected-context-spoof-supportability-canary'
