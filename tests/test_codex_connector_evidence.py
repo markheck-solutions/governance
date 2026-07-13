@@ -18,6 +18,7 @@ from governance_eval.schemas import load_schema, validate_named
 REPOSITORY_ID = 1280677092
 REPOSITORY = "markheck-solutions/governance"
 PR_NUMBER = 31
+PR_NODE_ID = "PR_kwDOTFWU5M8AAAAB"
 BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
 EVALUATOR_SHA = "e" * 40
@@ -34,6 +35,19 @@ CONNECTOR_APP = {
     "node_id": "A_kwHOAOQ6Gs4AEXij",
     "slug": "chatgpt-codex-connector",
 }
+CONNECTOR_REACTION_USER = {
+    "login": "chatgpt-codex-connector[bot]",
+    "id": 199175422,
+    "node_id": "BOT_kgDOC98s_g",
+    "type": "User",
+}
+COLLECTION_FIELDS = (
+    "issue_comments",
+    "issue_reactions",
+    "pull_request_reviews",
+    "review_comments",
+    "pull_request_events",
+)
 PRODUCT_DETAILS = """<details> <summary>ℹ️ About Codex in GitHub</summary>
 <br/>
 
@@ -133,26 +147,128 @@ def connector_review_comment(*, review_id: int = 300, severity: str = "P1") -> d
     }
 
 
+def connector_reaction(
+    *,
+    reaction_id: int = 407803693,
+    node_id: str = "REA_lAHOTFWU5M8AAAABIsCXZM4YTpct",
+    content: str = "+1",
+    created_at: str = "2026-07-13T18:04:10Z",
+    user: dict | None = None,
+) -> dict:
+    return {
+        "id": reaction_id,
+        "node_id": node_id,
+        "created_at": created_at,
+        "content": content,
+        "user": deepcopy(CONNECTOR_REACTION_USER if user is None else user),
+    }
+
+
+def pull_request_event(
+    event: str,
+    *,
+    event_id: int = 500,
+    created_at: str = "2026-07-13T18:02:00Z",
+) -> dict:
+    return {
+        "id": event_id,
+        "node_id": f"EV_{event_id}",
+        "event": event,
+        "created_at": created_at,
+    }
+
+
 def snapshot() -> dict:
     return {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
+        "collector": {
+            "id": "github_rest_codex_connector_v1",
+            "governance_evaluator_sha": EVALUATOR_SHA,
+        },
         "collection_complete": True,
+        "captured_at": DEADLINE,
+        "collection_receipts": {},
         "repository": {"id": REPOSITORY_ID, "full_name": REPOSITORY},
         "pull_request": {
             "number": PR_NUMBER,
+            "node_id": PR_NODE_ID,
+            "created_at": ANCHOR,
             "state": "open",
             "draft": False,
             "base_sha": BASE_SHA,
             "head_sha": HEAD_SHA,
         },
         "issue_comments": [comment(clean_body())],
+        "issue_reactions": [],
         "pull_request_reviews": [],
         "review_comments": [],
+        "pull_request_events": [],
     }
 
 
-def raw_bytes(value: dict) -> bytes:
+def reaction_snapshot() -> dict:
+    result = snapshot()
+    result["captured_at"] = DEADLINE
+    result["issue_comments"] = []
+    result["issue_reactions"] = [connector_reaction()]
+    result["pull_request_events"] = []
+    return result
+
+
+def raw_bytes(value: dict, *, refresh_receipts: bool = True) -> bytes:
+    if refresh_receipts and value.get("schema_version") == "2.0":
+        _refresh_collection_receipts(value)
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _refresh_collection_receipts(value: dict) -> None:
+    repository = value["repository"]["full_name"]
+    pull_request_number = value["pull_request"]["number"]
+    endpoints = {
+        "issue_comments": f"issues/{pull_request_number}/comments",
+        "issue_reactions": f"issues/{pull_request_number}/reactions",
+        "pull_request_reviews": f"pulls/{pull_request_number}/reviews",
+        "review_comments": f"pulls/{pull_request_number}/comments",
+        "pull_request_events": f"issues/{pull_request_number}/events",
+    }
+    receipts = {}
+    for field in COLLECTION_FIELDS:
+        items = value.setdefault(field, [])
+        timestamp_field = (
+            "submitted_at" if field == "pull_request_reviews" else "created_at"
+        )
+        ordered = sorted(
+            items,
+            key=lambda item: (str(item[timestamp_field]), int(item["id"])),
+        )
+        chunks = [ordered[index : index + 100] for index in range(0, len(ordered), 100)]
+        if not chunks:
+            chunks = [[]]
+        pages = []
+        for index, chunk in enumerate(chunks, start=1):
+            terminal = index == len(chunks)
+            next_url = None
+            if not terminal:
+                next_url = (
+                    f"https://api.github.com/repos/{repository}/"
+                    f"{endpoints[field]}?per_page=100&page={index + 1}"
+                )
+            pages.append(
+                {
+                    "page": index,
+                    "item_count": len(chunk),
+                    "page_sha256": sha256_json(chunk),
+                    "next_url": next_url,
+                    "terminal": terminal,
+                }
+            )
+        receipts[field] = {
+            "complete": True,
+            "item_count": len(ordered),
+            "items_sha256": sha256_json(ordered),
+            "pages": pages,
+        }
+    value["collection_receipts"] = receipts
 
 
 def trusted(raw: bytes, **changes: object) -> TrustedCodexConnectorContext:
@@ -161,6 +277,8 @@ def trusted(raw: bytes, **changes: object) -> TrustedCodexConnectorContext:
         "repository_id": REPOSITORY_ID,
         "repository_full_name": REPOSITORY,
         "pull_request_number": PR_NUMBER,
+        "pull_request_node_id": PR_NODE_ID,
+        "pull_request_created_at": ANCHOR,
         "base_sha": BASE_SHA,
         "head_sha": HEAD_SHA,
         "governance_evaluator_sha": EVALUATOR_SHA,
@@ -174,10 +292,420 @@ def trusted(raw: bytes, **changes: object) -> TrustedCodexConnectorContext:
 
 def evaluate(value: dict) -> dict:
     raw = raw_bytes(value)
-    return evaluate_codex_connector_evidence(raw, trusted(raw))
+    resolved = None if value.get("issue_reactions") else HEAD_SHA
+    return evaluate_codex_connector_evidence(
+        raw,
+        trusted(raw, resolved_clean_commit_sha=resolved),
+    )
 
 
 class CodexConnectorEvidenceTests(unittest.TestCase):
+    def test_exact_connector_reaction_for_immutable_opened_head_passes(self) -> None:
+        value = reaction_snapshot()
+
+        result = evaluate(value)
+
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
+        self.assertEqual(result["evidence_cutoff_at"], DEADLINE)
+        self.assertEqual(result["response"]["response_type"], "pull_request_reaction")
+        self.assertEqual(result["adapter_id"], "codex_connector_pr_signal_v2")
+        self.assertEqual(
+            result["response"]["app_provenance"],
+            "NOT_EXPOSED_BY_GITHUB_API",
+        )
+        self.assertEqual(
+            result["response"]["response_node_id"],
+            "REA_lAHOTFWU5M8AAAABIsCXZM4YTpct",
+        )
+        self.assertIsNone(result["response"]["app_id"])
+
+    def test_reaction_snapshot_pull_request_node_mismatch_blocks(self) -> None:
+        value = reaction_snapshot()
+        value["pull_request"]["node_id"] = "PR_replayed"
+
+        result = evaluate(value)
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("PULL_REQUEST_MISMATCH", result["reasons"])
+
+    def test_connector_failure_around_clean_reaction_still_blocks(self) -> None:
+        for created_at in (
+            "2026-07-13T18:02:00Z",
+            "2026-07-13T18:04:30Z",
+        ):
+            with self.subTest(created_at=created_at):
+                value = reaction_snapshot()
+                value["issue_comments"] = [
+                    comment(
+                        "Codex couldn't complete this request. Try again later.",
+                        created_at=created_at,
+                    )
+                ]
+
+                result = evaluate(value)
+
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn("CONNECTOR_FAILURE_PRESENT", result["reasons"])
+
+    def test_multiple_connector_reactions_are_ambiguous(self) -> None:
+        value = reaction_snapshot()
+        value["issue_reactions"] = [
+            connector_reaction(),
+            connector_reaction(
+                reaction_id=407803694,
+                node_id="REA_lAHOTFWU5M8AAAABIsCXZM4YTpcy",
+            ),
+        ]
+
+        result = evaluate(value)
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("CONNECTOR_REACTION_AMBIGUOUS", result["reasons"])
+
+    def test_connector_reaction_identity_lookalike_blocks_explicitly(self) -> None:
+        value = reaction_snapshot()
+        lookalike = deepcopy(CONNECTOR_REACTION_USER)
+        lookalike["id"] = 1
+        value["issue_reactions"] = [connector_reaction(user=lookalike)]
+
+        result = evaluate(value)
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("CONNECTOR_IDENTITY_MISMATCH", result["reasons"])
+
+    def test_reaction_snapshot_rejects_event_after_capture(self) -> None:
+        value = reaction_snapshot()
+        value["pull_request_events"] = [
+            {
+                "id": 1,
+                "node_id": "EV_future",
+                "event": "review_requested",
+                "created_at": "2026-07-13T18:05:01Z",
+            }
+        ]
+
+        result = evaluate(value)
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("SNAPSHOT_ITEM_AFTER_CAPTURE", result["reasons"])
+
+    def test_reaction_snapshot_rejects_duplicate_reaction_node_ids(self) -> None:
+        value = reaction_snapshot()
+        owner = {
+            "login": "markheck-solutions",
+            "id": 12345,
+            "node_id": "U_owner",
+            "type": "User",
+        }
+        value["issue_reactions"].extend(
+            [
+                connector_reaction(
+                    reaction_id=10,
+                    node_id="REA_duplicate",
+                    user=owner,
+                ),
+                connector_reaction(
+                    reaction_id=11,
+                    node_id="REA_duplicate",
+                    user=owner,
+                ),
+            ]
+        )
+
+        result = evaluate(value)
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("DUPLICATE_RESPONSE_NODE_ID", result["reasons"])
+
+    def test_pagination_receipt_and_collector_mutations_block(self) -> None:
+        mutations = (
+            lambda value: value["collection_receipts"]["issue_reactions"].update(
+                item_count=99
+            ),
+            lambda value: value["collection_receipts"]["issue_reactions"]["pages"][
+                0
+            ].update(page_sha256="0" * 64),
+            lambda value: value["collection_receipts"]["issue_reactions"]["pages"][
+                0
+            ].update(
+                terminal=False,
+                next_url=(
+                    f"https://api.github.com/repos/{REPOSITORY}/issues/"
+                    f"{PR_NUMBER}/reactions?per_page=100&page=2"
+                ),
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                value = reaction_snapshot()
+                _refresh_collection_receipts(value)
+                mutate(value)
+                raw = raw_bytes(value, refresh_receipts=False)
+                result = evaluate_codex_connector_evidence(
+                    raw,
+                    trusted(raw, resolved_clean_commit_sha=None),
+                )
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn("COLLECTION_RECEIPT_INVALID", result["reasons"])
+
+        wrong_collector = reaction_snapshot()
+        _refresh_collection_receipts(wrong_collector)
+        wrong_collector["collector"]["governance_evaluator_sha"] = "c" * 40
+        raw = raw_bytes(wrong_collector, refresh_receipts=False)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(raw, resolved_clean_commit_sha=None),
+        )
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("COLLECTOR_IDENTITY_MISMATCH", result["reasons"])
+
+    def test_reaction_window_timing_and_finalization_controls(self) -> None:
+        at_deadline = reaction_snapshot()
+        at_deadline["issue_reactions"][0]["created_at"] = DEADLINE
+        self.assertEqual(evaluate(at_deadline)["capability_status"], "PASS")
+
+        cases = []
+        for created_at in (ANCHOR, "2026-07-13T17:59:59Z"):
+            value = reaction_snapshot()
+            value["issue_reactions"][0]["created_at"] = created_at
+            cases.append(("not_after_start", value, "RESPONSE_NOT_AFTER_WINDOW"))
+        late = reaction_snapshot()
+        late["issue_reactions"][0]["created_at"] = "2026-07-13T18:05:01Z"
+        late["captured_at"] = "2026-07-13T18:05:01Z"
+        cases.append(("after_deadline", late, "RESPONSE_AFTER_DEADLINE"))
+        early_capture = reaction_snapshot()
+        early_capture["captured_at"] = "2026-07-13T18:04:59Z"
+        cases.append(
+            ("collection_not_final", early_capture, "REACTION_COLLECTION_NOT_FINAL")
+        )
+
+        for name, value, reason in cases:
+            with self.subTest(name=name):
+                result = evaluate(value)
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn(reason, result["reasons"])
+
+        missing_events = reaction_snapshot()
+        _refresh_collection_receipts(missing_events)
+        del missing_events["pull_request_events"]
+        raw = raw_bytes(missing_events, refresh_receipts=False)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(raw, resolved_clean_commit_sha=None),
+        )
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("SNAPSHOT_SCHEMA_INVALID", result["reasons"])
+
+    def test_reaction_route_rejects_head_and_lifecycle_mutations(self) -> None:
+        disqualifying = (
+            "closed",
+            "reopened",
+            "merged",
+            "head_ref_force_pushed",
+            "head_ref_deleted",
+            "head_ref_restored",
+            "base_ref_changed",
+            "base_ref_force_pushed",
+            "converted_to_draft",
+            "ready_for_review",
+        )
+        for index, event in enumerate(disqualifying):
+            with self.subTest(event=event):
+                value = reaction_snapshot()
+                value["pull_request_events"] = [
+                    pull_request_event(event, event_id=500 + index)
+                ]
+                result = evaluate(value)
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn("PULL_REQUEST_HEAD_NOT_IMMUTABLE", result["reasons"])
+
+        wrong_head = reaction_snapshot()
+        wrong_head["pull_request"]["head_sha"] = "c" * 40
+        self.assertIn("PULL_REQUEST_MISMATCH", evaluate(wrong_head)["reasons"])
+
+        reopened_window = reaction_snapshot()
+        reopened_window["pull_request"]["created_at"] = "2026-07-13T17:00:00Z"
+        result = evaluate(reopened_window)
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("PULL_REQUEST_MISMATCH", result["reasons"])
+        self.assertIn("REACTION_WINDOW_NOT_BOUND_TO_OPENED_HEAD", result["reasons"])
+
+    def test_reaction_signal_spoof_noise_and_content_controls(self) -> None:
+        owner = {
+            "login": "markheck-solutions",
+            "id": 12345,
+            "node_id": "U_owner",
+            "type": "User",
+        }
+        copilot = {
+            "login": "copilot-pull-request-reviewer[bot]",
+            "id": 175728472,
+            "node_id": "BOT_kgDOCnlnWA",
+            "type": "Bot",
+        }
+        noise = reaction_snapshot()
+        noise["issue_reactions"].extend(
+            [
+                connector_reaction(
+                    reaction_id=10,
+                    node_id="REA_owner",
+                    user=owner,
+                ),
+                connector_reaction(
+                    reaction_id=11,
+                    node_id="REA_copilot",
+                    content="eyes",
+                    user=copilot,
+                ),
+            ]
+        )
+        self.assertEqual(evaluate(noise)["capability_status"], "PASS")
+
+        for content in ("eyes", "rocket", "-1"):
+            with self.subTest(content=content):
+                value = reaction_snapshot()
+                value["issue_reactions"] = [connector_reaction(content=content)]
+                result = evaluate(value)
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn("CONNECTOR_REACTION_UNRECOGNIZED", result["reasons"])
+
+        manual = reaction_snapshot()
+        manual["issue_comments"] = [human_comment("@codex review")]
+        result = evaluate(manual)
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+    def test_p0_p1_p2_findings_block_reaction_before_or_after_signal(self) -> None:
+        for severity in ("P0", "P1", "P2"):
+            for submitted_at in (
+                "2026-07-13T18:02:00Z",
+                "2026-07-13T18:04:30Z",
+            ):
+                with self.subTest(severity=severity, submitted_at=submitted_at):
+                    value = reaction_snapshot()
+                    review = connector_review()
+                    review["submitted_at"] = submitted_at
+                    value["pull_request_reviews"] = [review]
+                    value["review_comments"] = [
+                        connector_review_comment(severity=severity)
+                    ]
+
+                    result = evaluate(value)
+
+                    self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                    self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+                    issue_comment = reaction_snapshot()
+                    issue_comment["issue_comments"] = [
+                        comment(
+                            f"{severity}: unsafe exact-head evidence",
+                            created_at=submitted_at,
+                        )
+                    ]
+                    issue_result = evaluate(issue_comment)
+                    self.assertEqual(
+                        issue_result["capability_status"], "BLOCK_TECHNICAL"
+                    )
+                    self.assertIn("BLOCKING_FINDINGS_PRESENT", issue_result["reasons"])
+
+    def test_exact_pr35_reaction_fixture_satisfies_bound_envelope(self) -> None:
+        value = reaction_snapshot()
+        value["captured_at"] = "2026-07-13T22:12:10Z"
+        value["pull_request"].update(
+            number=35,
+            node_id="PR_kwDOTFWU5M7xSZMq",
+            created_at="2026-07-13T22:07:10Z",
+            base_sha="f8a37f8d81d68290bac0b4c841c060a601e5fd8a",
+            head_sha="dd4068034f9a4b9b3df19883445aa5df50d6e428",
+        )
+        value["issue_reactions"] = [
+            connector_reaction(created_at="2026-07-13T22:11:20Z")
+        ]
+        value["pull_request_reviews"] = [
+            {
+                "id": 4689135932,
+                "submitted_at": "2026-07-13T22:07:16Z",
+                "state": "COMMENTED",
+                "commit_id": "dd4068034f9a4b9b3df19883445aa5df50d6e428",
+                "body": "Copilot was unable to review this pull request because the user who requested the review has reached their quota limit.",
+                "user": {
+                    "login": "copilot-pull-request-reviewer[bot]",
+                    "id": 175728472,
+                    "node_id": "BOT_kgDOCnlnWA",
+                    "type": "Bot",
+                },
+            }
+        ]
+        value["pull_request_events"] = [
+            {
+                "id": 27933206579,
+                "node_id": "RRE_lADOTFWU5M8AAAABIsCXZM8AAAAGgPLoMw",
+                "event": "review_requested",
+                "created_at": "2026-07-13T22:07:10Z",
+            }
+        ]
+        raw = raw_bytes(value)
+        context = trusted(
+            raw,
+            pull_request_number=35,
+            pull_request_node_id="PR_kwDOTFWU5M7xSZMq",
+            pull_request_created_at="2026-07-13T22:07:10Z",
+            base_sha="f8a37f8d81d68290bac0b4c841c060a601e5fd8a",
+            head_sha="dd4068034f9a4b9b3df19883445aa5df50d6e428",
+            review_window_started_at="2026-07-13T22:07:10Z",
+            review_deadline_at="2026-07-13T22:12:10Z",
+            resolved_clean_commit_sha=None,
+        )
+
+        result = evaluate_codex_connector_evidence(raw, context)
+
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["response"]["response_id"], 407803693)
+        self.assertEqual(
+            result["reviewed_head_sha"],
+            "dd4068034f9a4b9b3df19883445aa5df50d6e428",
+        )
+
+    def test_reaction_result_cannot_fabricate_app_provenance(self) -> None:
+        value = reaction_snapshot()
+        raw = raw_bytes(value)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(raw, resolved_clean_commit_sha=None),
+        )
+        result["response"].update(
+            app_provenance="VERIFIED_PERFORMED_VIA_GITHUB_APP",
+            app_id=1144995,
+            app_node_id="A_kwHOAOQ6Gs4AEXij",
+            app_slug="chatgpt-codex-connector",
+        )
+        result["result_content_hash"] = sha256_json(
+            {**result, "result_content_hash": ""}
+        )
+
+        with self.assertRaises(ValueError):
+            serialize_codex_connector_evidence_result(result)
+
+    def test_reaction_commit_resolution_is_absent_or_blocks_without_crash(self) -> None:
+        value = reaction_snapshot()
+        raw = raw_bytes(value)
+        clean = evaluate_codex_connector_evidence(
+            raw,
+            trusted(raw, resolved_clean_commit_sha=None),
+        )
+        self.assertEqual(clean["capability_status"], "PASS")
+
+        wrong = evaluate_codex_connector_evidence(
+            raw,
+            trusted(raw, resolved_clean_commit_sha="c" * 40),
+        )
+        self.assertEqual(wrong["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn(
+            "REACTION_COMMIT_RESOLUTION_NOT_APPLICABLE",
+            wrong["reasons"],
+        )
+
     def test_live_automatic_summary_and_semantic_paraphrase_pass(self) -> None:
         bodies = (
             automatic_summary_body(),
@@ -365,7 +893,9 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
                 )
                 validate_codex_connector_evidence_result(first, raw, context)
 
-    def test_latest_signed_response_controls_result(self) -> None:
+    def test_any_connector_failure_in_window_blocks_despite_later_clean_signal(
+        self,
+    ) -> None:
         quota = comment(
             "You have reached your Codex usage limits for code reviews.",
             comment_id=199,
@@ -373,7 +903,9 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         )
         value = snapshot()
         value["issue_comments"].insert(0, quota)
-        self.assertEqual(evaluate(value)["capability_status"], "PASS")
+        first_result = evaluate(value)
+        self.assertEqual(first_result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("CONNECTOR_FAILURE_PRESENT", first_result["reasons"])
 
         quota["id"] = 201
         quota["created_at"] = "2026-07-13T18:02:00Z"
@@ -407,6 +939,15 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         self.assertEqual(failure_result["capability_status"], "BLOCK_TECHNICAL")
         self.assertIn("RESPONSE_AFTER_DEADLINE", failure_result["reasons"])
         self.assertIn("RESPONSE_BODY_UNRECOGNIZED", failure_result["reasons"])
+
+    def test_issue_comment_cutoff_before_deadline_blocks_without_crash(self) -> None:
+        value = snapshot()
+        value["captured_at"] = "2026-07-13T18:04:59Z"
+
+        result = evaluate(value)
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("EVIDENCE_CUTOFF_BEFORE_DEADLINE", result["reasons"])
 
     def test_snapshot_and_identity_fail_closed_controls(self) -> None:
         cases: list[tuple[str, dict]] = []
@@ -668,8 +1209,8 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         left = evaluate(first)
         right = evaluate(second)
 
-        self.assertEqual(left["capability_status"], "PASS")
-        self.assertEqual(right["capability_status"], "PASS")
+        self.assertEqual(left["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(right["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(
             left["normalized_snapshot_sha256"],
             right["normalized_snapshot_sha256"],
@@ -682,7 +1223,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         raw = raw_bytes(value)
         context = trusted(raw)
         result = evaluate_codex_connector_evidence(raw, context)
-        validate_named("codex_connector_evidence_result", result)
+        validate_named("codex_connector_evidence_result_v2", result)
 
         mutations = (
             lambda item: item["response"].update(response_id=999),
@@ -727,6 +1268,14 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
             load_schema("codex_connector_evidence_result")["title"],
             "Codex Connector Evidence Result",
         )
+        self.assertEqual(
+            load_schema("codex_connector_snapshot_v2")["title"],
+            "Codex Connector Review Snapshot v2",
+        )
+        self.assertEqual(
+            load_schema("codex_connector_evidence_result_v2")["title"],
+            "Codex Connector Evidence Result v2",
+        )
         raw = raw_bytes(snapshot())
         with self.assertRaises(ValueError):
             trusted(raw, governance_evaluator_sha="not-a-sha")
@@ -740,6 +1289,66 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(deadline=deadline), self.assertRaises(ValueError):
                 trusted(raw, review_deadline_at=deadline)
+
+    def test_v1_schemas_remain_immutable_and_accept_prior_artifacts(self) -> None:
+        old_snapshot = {
+            "schema_version": "1.0",
+            "collection_complete": True,
+            "repository": {"id": REPOSITORY_ID, "full_name": REPOSITORY},
+            "pull_request": {
+                "number": PR_NUMBER,
+                "state": "open",
+                "draft": False,
+                "base_sha": BASE_SHA,
+                "head_sha": HEAD_SHA,
+            },
+            "issue_comments": [comment(clean_body())],
+            "pull_request_reviews": [],
+            "review_comments": [],
+        }
+        validate_named("codex_connector_snapshot", old_snapshot)
+        with self.assertRaises(ValueError):
+            validate_named("codex_connector_snapshot_v2", old_snapshot)
+
+        old_result = {
+            "schema_version": "1.0",
+            "capability": "CODEX_CONNECTOR_REVIEW_EVIDENCE",
+            "adapter_id": "codex_connector_issue_comment_v1",
+            "repository": {"id": REPOSITORY_ID, "full_name": REPOSITORY},
+            "pull_request": {
+                "number": PR_NUMBER,
+                "base_sha": BASE_SHA,
+                "head_sha": HEAD_SHA,
+            },
+            "governance_evaluator_sha": EVALUATOR_SHA,
+            "review_window_started_at": ANCHOR,
+            "review_deadline_at": DEADLINE,
+            "snapshot_file_sha256": "sha256:" + "0" * 64,
+            "normalized_snapshot_sha256": "1" * 64,
+            "resolved_clean_commit_sha": HEAD_SHA,
+            "connector_identity": {
+                "login": CONNECTOR_USER["login"],
+                "user_id": CONNECTOR_USER["id"],
+                "user_node_id": CONNECTOR_USER["node_id"],
+                "user_type": "Bot",
+                "app_id": CONNECTOR_APP["id"],
+                "app_node_id": CONNECTOR_APP["node_id"],
+                "app_slug": CONNECTOR_APP["slug"],
+            },
+            "capability_status": "PASS",
+            "reviewed_head_sha": HEAD_SHA,
+            "response": {
+                "response_type": "issue_comment",
+                "response_id": 200,
+                "created_at": "2026-07-13T18:01:00Z",
+                "body_sha256": "2" * 64,
+            },
+            "reasons": [],
+            "result_content_hash": "3" * 64,
+        }
+        validate_named("codex_connector_evidence_result", old_result)
+        with self.assertRaises(ValueError):
+            validate_named("codex_connector_evidence_result_v2", old_result)
 
 
 if __name__ == "__main__":

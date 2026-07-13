@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 
 from governance_eval.cases import load_cases
-from governance_eval.lock import read_spaghetti_lock, validate_spaghetti_lock, write_spaghetti_lock
+from governance_eval.lock import (
+    read_spaghetti_lock,
+    validate_spaghetti_lock,
+    write_spaghetti_lock,
+)
 from governance_eval.models import DetectorEvidence, EvidenceStatus, ReviewFinding
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError, validate
@@ -16,6 +20,22 @@ from governance_eval.schemas import validate_named
 class SchemaAndLockTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
+
+    def test_schema_validator_resolves_local_defs_and_array_bounds(self) -> None:
+        schema = {
+            "$defs": {"positive": {"type": "integer", "minimum": 1}},
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "items": {"$ref": "#/$defs/positive"},
+        }
+        validate([1, 2], schema)
+        for invalid in ([], [0], [1, 2, 3]):
+            with (
+                self.subTest(invalid=invalid),
+                self.assertRaises(SchemaValidationError),
+            ):
+                validate(invalid, schema)
 
     def test_all_cases_validate_against_schema(self) -> None:
         cases = load_cases(self.root)
@@ -43,7 +63,9 @@ class SchemaAndLockTests(unittest.TestCase):
         validate_named("detector_evidence", evidence.to_json(), self.root)
 
     def test_schema_rejects_missing_required_case_field(self) -> None:
-        bad_case = json.loads((self.root / "cases/v1/001_spaghetti_pr_141_defect.json").read_text())
+        bad_case = json.loads(
+            (self.root / "cases/v1/001_spaghetti_pr_141_defect.json").read_text()
+        )
         del bad_case["expected_decision"]
         with self.assertRaises(SchemaValidationError):
             validate_named("evaluation_case", bad_case, self.root)
@@ -55,7 +77,9 @@ class SchemaAndLockTests(unittest.TestCase):
     def test_schema_validator_pattern_uses_search_semantics(self) -> None:
         validate("prefix-abc-suffix", {"type": "string", "pattern": "abc"}, "$.field")
         with self.assertRaisesRegex(SchemaValidationError, "does not match pattern"):
-            validate("prefix-def-suffix", {"type": "string", "pattern": "abc"}, "$.field")
+            validate(
+                "prefix-def-suffix", {"type": "string", "pattern": "abc"}, "$.field"
+            )
 
     def test_supportability_result_schemas_reject_malformed_shas(self) -> None:
         gate_result = {

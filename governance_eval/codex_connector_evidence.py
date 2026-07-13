@@ -12,13 +12,22 @@ from governance_eval.hashing import sha256_json
 from governance_eval.schemas import validate_named
 
 
-ADAPTER_ID = "codex_connector_issue_comment_v1"
+ADAPTER_ID = "codex_connector_pr_signal_v2"
 _MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024
 _MAX_COLLECTION_ITEMS = 10_000
 _MAX_REVIEW_WINDOW_SECONDS = 300
+_COLLECTOR_ID = "github_rest_codex_connector_v1"
+_COLLECTION_FIELDS = (
+    "issue_comments",
+    "issue_reactions",
+    "pull_request_reviews",
+    "review_comments",
+    "pull_request_events",
+)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_NODE_ID_RE = re.compile(r"^[A-Za-z0-9_=-]+$")
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 _CLEAN_RE = re.compile(
     r"\ACodex Review: Didn't find any major issues\."
@@ -43,7 +52,7 @@ _SERVICE_FAILURE_RE = re.compile(
     r"(?:(?:usage\s+limits?|quota).{0,40}(?:reached|exceeded|exhausted)"
     r"|(?:reached|exceeded|exhausted).{0,40}(?:usage\s+limits?|quota))"
     r"|(?:create|set\s*up|configure).{0,30}(?:codex\s+)?environment"
-    r"|(?:unable|cannot|could\s+not).{0,30}(?:complete|perform|run|review)"
+    r"|(?:unable|cannot|could(?:\s+not|n't)).{0,30}(?:complete|perform|run|review)"
     r"|review.{0,20}(?:failed|failure|unavailable|error)"
     r"|service\s+unavailable",
     re.IGNORECASE | re.DOTALL,
@@ -70,6 +79,12 @@ _CONNECTOR_USER = {
     "node_id": "BOT_kgDOC98s_g",
     "type": "Bot",
 }
+_CONNECTOR_REACTION_USER = {
+    "login": "chatgpt-codex-connector[bot]",
+    "id": 199175422,
+    "node_id": "BOT_kgDOC98s_g",
+    "type": "User",
+}
 _CONNECTOR_APP = {
     "id": 1144995,
     "node_id": "A_kwHOAOQ6Gs4AEXij",
@@ -79,10 +94,6 @@ _CONNECTOR_RESULT_IDENTITY = {
     "login": _CONNECTOR_USER["login"],
     "user_id": _CONNECTOR_USER["id"],
     "user_node_id": _CONNECTOR_USER["node_id"],
-    "user_type": _CONNECTOR_USER["type"],
-    "app_id": _CONNECTOR_APP["id"],
-    "app_node_id": _CONNECTOR_APP["node_id"],
-    "app_slug": _CONNECTOR_APP["slug"],
 }
 
 
@@ -92,6 +103,8 @@ class TrustedCodexConnectorContext:
     repository_id: int
     repository_full_name: str
     pull_request_number: int
+    pull_request_node_id: str
+    pull_request_created_at: str
     base_sha: str
     head_sha: str
     governance_evaluator_sha: str
@@ -108,6 +121,10 @@ class TrustedCodexConnectorContext:
             raise ValueError("repository name is invalid")
         if not _positive_int(self.pull_request_number):
             raise ValueError("pull request number is invalid")
+        if not _NODE_ID_RE.fullmatch(self.pull_request_node_id):
+            raise ValueError("pull request node ID is invalid")
+        if not _valid_timestamp(self.pull_request_created_at):
+            raise ValueError("pull request creation timestamp is invalid")
         if not all(
             _SHA_RE.fullmatch(value)
             for value in (self.base_sha, self.head_sha, self.governance_evaluator_sha)
@@ -178,7 +195,7 @@ def _evaluate(
     reasons = sorted(set(reasons))
     passed = not reasons and reviewed_head == trusted.head_sha and response is not None
     result = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "capability": "CODEX_CONNECTOR_REVIEW_EVIDENCE",
         "adapter_id": ADAPTER_ID,
         "repository": {
@@ -187,12 +204,17 @@ def _evaluate(
         },
         "pull_request": {
             "number": trusted.pull_request_number,
+            "node_id": trusted.pull_request_node_id,
+            "created_at": trusted.pull_request_created_at,
             "base_sha": trusted.base_sha,
             "head_sha": trusted.head_sha,
         },
         "governance_evaluator_sha": trusted.governance_evaluator_sha,
         "review_window_started_at": trusted.review_window_started_at,
         "review_deadline_at": trusted.review_deadline_at,
+        "evidence_cutoff_at": (
+            snapshot.get("captured_at") if normalized_digest is not None else None
+        ),
         "snapshot_file_sha256": observed_digest,
         "normalized_snapshot_sha256": normalized_digest,
         "resolved_clean_commit_sha": trusted.resolved_clean_commit_sha,
@@ -229,14 +251,28 @@ def _evaluate_snapshot(
     comments = snapshot["issue_comments"]
     reviews = snapshot["pull_request_reviews"]
     review_comments = snapshot["review_comments"]
-    reasons = _collection_reasons(snapshot, trusted, comments, reviews, review_comments)
-    responses = [
-        ("issue_comment", item)
-        for item in comments
-        if _exact_connector_issue_comment(item)
-    ] + [
-        ("pull_request_review", item) for item in reviews if _exact_connector_user(item)
-    ]
+    reactions = snapshot.get("issue_reactions", [])
+    events = snapshot.get("pull_request_events", [])
+    reasons = _collection_reasons(
+        snapshot, trusted, comments, reviews, review_comments, reactions, events
+    )
+    responses = (
+        [
+            ("issue_comment", item)
+            for item in comments
+            if _exact_connector_issue_comment(item)
+        ]
+        + [
+            ("pull_request_review", item)
+            for item in reviews
+            if _exact_connector_user(item)
+        ]
+        + [
+            ("pull_request_reaction", item)
+            for item in reactions
+            if _exact_connector_reaction_user(item)
+        ]
+    )
     valid_responses = [
         item
         for item in responses
@@ -253,11 +289,31 @@ def _evaluate_snapshot(
             item[0],
         ),
     )
+    reaction_response = response_type == "pull_request_reaction"
+    app_provenance = (
+        "NOT_EXPOSED_BY_GITHUB_API"
+        if reaction_response or response_type == "pull_request_review"
+        else "VERIFIED_PERFORMED_VIA_GITHUB_APP"
+    )
     response = {
         "response_type": response_type,
         "response_id": latest["id"],
+        "response_node_id": latest.get("node_id"),
         "created_at": _response_timestamp(response_type, latest),
-        "body_sha256": sha256(latest["body"].encode("utf-8")).hexdigest(),
+        "payload_sha256": sha256(
+            latest["content" if reaction_response else "body"].encode("utf-8")
+        ).hexdigest(),
+        "user_type": latest["user"]["type"],
+        "app_provenance": app_provenance,
+        "app_id": None
+        if app_provenance == "NOT_EXPOSED_BY_GITHUB_API"
+        else _CONNECTOR_APP["id"],
+        "app_node_id": None
+        if app_provenance == "NOT_EXPOSED_BY_GITHUB_API"
+        else _CONNECTOR_APP["node_id"],
+        "app_slug": None
+        if app_provenance == "NOT_EXPOSED_BY_GITHUB_API"
+        else _CONNECTOR_APP["slug"],
     }
     if _timestamp(response["created_at"]) <= _timestamp(
         trusted.review_window_started_at
@@ -273,6 +329,44 @@ def _evaluate_snapshot(
         else:
             reasons.append("RESPONSE_BODY_UNRECOGNIZED")
         return response, reasons, None
+    if response_type == "pull_request_reaction":
+        pull_request = snapshot["pull_request"]
+        captured_at = snapshot.get("captured_at")
+        if not {"captured_at", "issue_reactions", "pull_request_events"}.issubset(
+            snapshot
+        ):
+            reasons.append("REACTION_COLLECTION_INCOMPLETE")
+        if latest["content"] != "+1":
+            reasons.append("CONNECTOR_REACTION_UNRECOGNIZED")
+        if trusted.resolved_clean_commit_sha is not None:
+            reasons.append("REACTION_COMMIT_RESOLUTION_NOT_APPLICABLE")
+        if pull_request.get("created_at") != trusted.review_window_started_at:
+            reasons.append("REACTION_WINDOW_NOT_BOUND_TO_OPENED_HEAD")
+        if not isinstance(captured_at, str) or not _valid_timestamp(captured_at):
+            reasons.append("REACTION_COLLECTION_NOT_FINAL")
+        elif _timestamp(captured_at) < _timestamp(trusted.review_deadline_at):
+            reasons.append("REACTION_COLLECTION_NOT_FINAL")
+        disqualifying_events = {
+            "closed",
+            "reopened",
+            "merged",
+            "head_ref_force_pushed",
+            "head_ref_deleted",
+            "head_ref_restored",
+            "base_ref_changed",
+            "base_ref_force_pushed",
+            "converted_to_draft",
+            "ready_for_review",
+        }
+        if any(
+            event["event"] in disqualifying_events
+            and _valid_timestamp(event["created_at"])
+            and _timestamp(event["created_at"])
+            >= _timestamp(trusted.review_window_started_at)
+            for event in events
+        ):
+            reasons.append("PULL_REQUEST_HEAD_NOT_IMMUTABLE")
+        return response, reasons, trusted.head_sha if not reasons else None
     commit_identity = _clean_commit_identity(latest["body"])
     if commit_identity is None:
         reasons.append("RESPONSE_BODY_UNRECOGNIZED")
@@ -296,8 +390,18 @@ def _collection_reasons(
     comments: list[dict[str, Any]],
     reviews: list[dict[str, Any]],
     review_comments: list[dict[str, Any]],
+    reactions: list[dict[str, Any]],
+    events: list[dict[str, Any]],
 ) -> list[str]:
     reasons = _snapshot_identity_reasons(snapshot, trusted)
+    expected_collector = {
+        "id": _COLLECTOR_ID,
+        "governance_evaluator_sha": trusted.governance_evaluator_sha,
+    }
+    if snapshot["collector"] != expected_collector:
+        reasons.append("COLLECTOR_IDENTITY_MISMATCH")
+    if _collection_receipts_invalid(snapshot):
+        reasons.append("COLLECTION_RECEIPT_INVALID")
     snapshot_commit_ids = [
         snapshot["pull_request"]["base_sha"],
         snapshot["pull_request"]["head_sha"],
@@ -307,17 +411,69 @@ def _collection_reasons(
     ]
     if any(not _SHA_RE.fullmatch(value) for value in snapshot_commit_ids):
         reasons.append("SNAPSHOT_COMMIT_IDENTITY_INVALID")
-    collections = (comments, reviews, review_comments)
+    collections = (comments, reviews, review_comments, reactions, events)
     if any(len(items) > _MAX_COLLECTION_ITEMS for items in collections):
         reasons.append("SNAPSHOT_LIMIT_EXCEEDED")
     if any(_duplicate_ids(items) for items in collections):
         reasons.append("DUPLICATE_RESPONSE_ID")
-    timestamps = [item["created_at"] for item in comments + review_comments]
+    if any(_duplicate_node_ids(items) for items in (reactions, events)):
+        reasons.append("DUPLICATE_RESPONSE_NODE_ID")
+    timestamps = [
+        item["created_at"] for item in comments + review_comments + reactions + events
+    ]
     timestamps.extend(item["submitted_at"] for item in reviews)
     if any(not _valid_timestamp(value) for value in timestamps):
         reasons.append("SNAPSHOT_TIMESTAMP_INVALID")
+    captured_at = snapshot.get("captured_at")
+    if (
+        not isinstance(captured_at, str)
+        or not _valid_timestamp(captured_at)
+        or _timestamp(captured_at) < _timestamp(trusted.review_deadline_at)
+    ):
+        reasons.append("EVIDENCE_CUTOFF_BEFORE_DEADLINE")
+    if (
+        isinstance(captured_at, str)
+        and _valid_timestamp(captured_at)
+        and any(
+            _valid_timestamp(value) and _timestamp(value) > _timestamp(captured_at)
+            for value in timestamps
+        )
+    ):
+        reasons.append("SNAPSHOT_ITEM_AFTER_CAPTURE")
     if _manual_request_present(comments):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
+    connector_failure = any(
+        _exact_connector_issue_comment(comment)
+        and _SERVICE_FAILURE_RE.search(comment["body"])
+        for comment in comments
+    ) or any(
+        _exact_connector_user(review) and _SERVICE_FAILURE_RE.search(review["body"])
+        for review in reviews
+    )
+    if connector_failure:
+        reasons.append("CONNECTOR_FAILURE_PRESENT")
+    if any(
+        _exact_connector_issue_comment(comment)
+        and _BLOCKING_SEVERITY_RE.search(comment["body"])
+        for comment in comments
+    ):
+        reasons.append("BLOCKING_FINDINGS_PRESENT")
+    connector_reactions = [
+        reaction for reaction in reactions if _exact_connector_reaction_user(reaction)
+    ]
+    if any(
+        reaction["user"] != _CONNECTOR_REACTION_USER
+        and any(
+            reaction["user"].get(field) == _CONNECTOR_REACTION_USER[field]
+            for field in ("login", "id", "node_id")
+        )
+        for reaction in reactions
+    ):
+        reasons.append("CONNECTOR_IDENTITY_MISMATCH")
+    if len(connector_reactions) > 1:
+        reasons.append("CONNECTOR_REACTION_AMBIGUOUS")
+    if any(reaction["content"] != "+1" for reaction in connector_reactions):
+        reasons.append("CONNECTOR_REACTION_UNRECOGNIZED")
     current_connector_review_ids = {
         review["id"]
         for review in reviews
@@ -383,6 +539,8 @@ def _snapshot_identity_reasons(
     }
     expected_pr = {
         "number": trusted.pull_request_number,
+        "node_id": trusted.pull_request_node_id,
+        "created_at": trusted.pull_request_created_at,
         "base_sha": trusted.base_sha,
         "head_sha": trusted.head_sha,
     }
@@ -528,10 +686,14 @@ def _exact_connector_user(item: dict[str, Any]) -> bool:
     return item.get("user") == _CONNECTOR_USER
 
 
+def _exact_connector_reaction_user(item: dict[str, Any]) -> bool:
+    return item.get("user") == _CONNECTOR_REACTION_USER
+
+
 def _response_timestamp(response_type: str, response: dict[str, Any]) -> str:
     return str(
         response["created_at"]
-        if response_type == "issue_comment"
+        if response_type in {"issue_comment", "pull_request_reaction"}
         else response["submitted_at"]
     )
 
@@ -541,16 +703,84 @@ def _duplicate_ids(items: list[dict[str, Any]]) -> bool:
     return len(ids) != len(set(ids))
 
 
+def _duplicate_node_ids(items: list[dict[str, Any]]) -> bool:
+    node_ids = [item["node_id"] for item in items]
+    return len(node_ids) != len(set(node_ids))
+
+
+def _collection_receipts_invalid(snapshot: dict[str, Any]) -> bool:
+    receipts = snapshot["collection_receipts"]
+    repository = snapshot["repository"]["full_name"]
+    pull_request_number = snapshot["pull_request"]["number"]
+    endpoints = {
+        "issue_comments": f"issues/{pull_request_number}/comments",
+        "issue_reactions": f"issues/{pull_request_number}/reactions",
+        "pull_request_reviews": f"pulls/{pull_request_number}/reviews",
+        "review_comments": f"pulls/{pull_request_number}/comments",
+        "pull_request_events": f"issues/{pull_request_number}/events",
+    }
+    for field in _COLLECTION_FIELDS:
+        source_items = snapshot[field]
+        items = _semantic_order(field, source_items)
+        receipt = receipts[field]
+        pages = receipt["pages"]
+        if (
+            receipt["complete"] is not True
+            or receipt["item_count"] != len(items)
+            or receipt["items_sha256"] != sha256_json(items)
+            or sum(page["item_count"] for page in pages) != len(items)
+        ):
+            return True
+        offset = 0
+        for index, page in enumerate(pages, start=1):
+            terminal = index == len(pages)
+            item_count = page["item_count"]
+            expected_next = None
+            if not terminal:
+                expected_next = (
+                    f"https://api.github.com/repos/{repository}/"
+                    f"{endpoints[field]}?per_page=100&page={index + 1}"
+                )
+            page_items = _semantic_order(
+                field,
+                source_items[offset : offset + item_count],
+            )
+            if (
+                page["page"] != index
+                or page["terminal"] is not terminal
+                or page["next_url"] != expected_next
+                or page["page_sha256"] != sha256_json(page_items)
+                or (not terminal and item_count != 100)
+            ):
+                return True
+            offset += item_count
+        if offset != len(items):
+            return True
+    return False
+
+
+def _semantic_order(
+    collection_name: str, items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    timestamp_field = (
+        "submitted_at" if collection_name == "pull_request_reviews" else "created_at"
+    )
+    return sorted(
+        items,
+        key=lambda item: (str(item[timestamp_field]), int(item["id"])),
+    )
+
+
 def _snapshot_schema_valid(snapshot: dict[str, Any]) -> bool:
     try:
-        validate_named("codex_connector_snapshot", snapshot)
+        validate_named("codex_connector_snapshot_v2", snapshot)
     except (KeyError, TypeError, ValueError, RecursionError):
         return False
     return True
 
 
 def _validate_result_shape(result: dict[str, Any]) -> None:
-    validate_named("codex_connector_evidence_result", result)
+    validate_named("codex_connector_evidence_result_v2", result)
     if not _valid_timestamp(result["review_window_started_at"]) or not _valid_timestamp(
         result["review_deadline_at"]
     ):
@@ -565,13 +795,55 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
     if result["result_content_hash"] != expected_hash:
         raise ValueError("Codex connector evidence result hash is invalid")
     passed = result["capability_status"] == "PASS"
+    response = result["response"]
+    if isinstance(response, dict):
+        response_type = response["response_type"]
+        if response_type == "issue_comment":
+            provenance_valid = (
+                response["user_type"] == "Bot"
+                and response["app_provenance"] == "VERIFIED_PERFORMED_VIA_GITHUB_APP"
+                and response["app_id"] == _CONNECTOR_APP["id"]
+                and response["app_node_id"] == _CONNECTOR_APP["node_id"]
+                and response["app_slug"] == _CONNECTOR_APP["slug"]
+            )
+        elif response_type == "pull_request_reaction":
+            provenance_valid = (
+                response["user_type"] == "User"
+                and response["app_provenance"] == "NOT_EXPOSED_BY_GITHUB_API"
+                and response["response_node_id"] is not None
+                and response["app_id"] is None
+                and response["app_node_id"] is None
+                and response["app_slug"] is None
+            )
+        else:
+            provenance_valid = (
+                response["user_type"] == "Bot"
+                and response["app_provenance"] == "NOT_EXPOSED_BY_GITHUB_API"
+                and response["app_id"] is None
+                and response["app_node_id"] is None
+                and response["app_slug"] is None
+            )
+        if not provenance_valid:
+            raise ValueError("Codex connector evidence provenance is invalid")
+    response_type = (
+        response.get("response_type") if isinstance(response, dict) else None
+    )
+    resolution_valid = (
+        result["resolved_clean_commit_sha"] == result["pull_request"]["head_sha"]
+        if response_type == "issue_comment"
+        else result["resolved_clean_commit_sha"] is None
+    )
     pass_semantics = (
         result["reasons"] == []
         and result["reviewed_head_sha"] == result["pull_request"]["head_sha"]
-        and isinstance(result["response"], dict)
-        and result["response"].get("response_type") == "issue_comment"
-        and result["resolved_clean_commit_sha"] == result["pull_request"]["head_sha"]
+        and isinstance(response, dict)
+        and response.get("response_type") in {"issue_comment", "pull_request_reaction"}
+        and resolution_valid
         and result["normalized_snapshot_sha256"] is not None
+        and isinstance(result["evidence_cutoff_at"], str)
+        and _valid_timestamp(result["evidence_cutoff_at"])
+        and _timestamp(result["evidence_cutoff_at"])
+        >= _timestamp(result["review_deadline_at"])
     )
     block_semantics = bool(result["reasons"]) and result["reviewed_head_sha"] is None
     if (passed and not pass_semantics) or (not passed and not block_semantics):
@@ -584,8 +856,12 @@ def _normalized_snapshot_digest(snapshot: dict[str, Any]) -> str:
         "issue_comments": "created_at",
         "pull_request_reviews": "submitted_at",
         "review_comments": "created_at",
+        "issue_reactions": "created_at",
+        "pull_request_events": "created_at",
     }
     for field, timestamp_field in order_fields.items():
+        if field not in normalized:
+            continue
         normalized[field] = sorted(
             normalized[field],
             key=lambda item: (str(item[timestamp_field]), int(item["id"])),
