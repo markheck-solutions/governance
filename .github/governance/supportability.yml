@@ -277,3 +277,5 @@ architecture_policy:
         max_functions_per_file: 0
         max_classes_per_file: 0
   known_debt: []
+
+# Protected-context-spoof RED control; never merge.
