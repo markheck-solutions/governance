@@ -24,6 +24,8 @@ SCHEMA_FILES = {
     "judge_evidence_bundle": "judge_evidence_bundle.schema.json",
     "judge_evidence_pair": "judge_evidence_pair.schema.json",
     "delivery_receipt": "delivery_receipt.schema.json",
+    "codex_connector_snapshot": "codex_connector_snapshot.schema.json",
+    "codex_connector_evidence_result": "codex_connector_evidence_result.schema.json",
 }
 
 
