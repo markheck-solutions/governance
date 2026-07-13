@@ -55,6 +55,26 @@ def clean_body(suffix: str = " Bravo.", prefix: str | None = None) -> str:
     )
 
 
+def automatic_summary_body(head_sha: str = HEAD_SHA) -> str:
+    return f"""### Summary
+
+* Verified the PR head is exactly `{head_sha}`, matching the supplied `head_ref`.
+* Confirmed the native Codex connector evaluator is present and deterministic: it binds snapshot digests, repository/PR identity, base/head SHAs, evaluator SHA, review window, connector identity, reviewed head, response metadata, reasons, and a result content hash before schema validation. [governance_eval/codex_connector_evidence.pyL126-L177](https://github.com/markheck-solutions/governance/blob/{head_sha}/governance_eval/codex_connector_evidence.py#L126-L177)
+* Confirmed the evaluator fails closed for malformed or stale evidence, digest mismatch, non-head review evidence, unrecognized connector responses, manual `@codex review` requests, and unresolved blocking findings. [governance_eval/codex_connector_evidence.pyL180-L254](https://github.com/markheck-solutions/governance/blob/{head_sha}/governance_eval/codex_connector_evidence.py#L180-L254)
+* Confirmed the machine-readable result schema requires exact connector identity, exact PR/head bindings, status, response metadata, reasons, and content hash. [schemas/v1/codex_connector_evidence_result.schema.jsonL7-L68](https://github.com/markheck-solutions/governance/blob/{head_sha}/schemas/v1/codex_connector_evidence_result.schema.json#L7-L68)
+* Confirmed positive and negative controls cover deterministic clean connector evidence, quota/noise comments, missing/incomplete/stale snapshots, manual review requests, identity mismatches, and trusted full-SHA resolution. [tests/test_codex_connector_evidence.pyL158-L271](https://github.com/markheck-solutions/governance/blob/{head_sha}/tests/test_codex_connector_evidence.py#L158-L271)
+* No code changes were needed, so I did **not** create a commit or open a new PR.
+
+**Testing**
+
+* ✅ `git rev-parse HEAD` — returned `{head_sha}`.
+* ✅ `git status --porcelain=v1` — clean working tree.
+* ✅ `python -m pytest tests/test_codex_connector_evidence.py` — 14 passed.
+* ✅ `python -m governance_eval verify --artifacts-dir artifacts/phase1` — 315 tests passed; `phase1_decision` was `BENCHMARK_PASS`; generated `artifacts/phase1/governance-benchmark-20260713T212251Z.json`.
+
+ [View task →](https://chatgpt.com/s/example)"""
+
+
 def comment(
     body: str,
     *,
@@ -156,6 +176,167 @@ def evaluate(value: dict) -> dict:
 
 
 class CodexConnectorEvidenceTests(unittest.TestCase):
+    def test_live_automatic_summary_and_semantic_paraphrase_pass(self) -> None:
+        bodies = (
+            automatic_summary_body(),
+            f"""### Summary
+
+- The pull request head `{HEAD_SHA}` equals the supplied `head_ref`.
+- Deterministic evidence collection and validation completed.
+- No code changes were needed, so I did **not** create a commit or open a new PR.
+
+### Testing
+
+- ✅ Focused positive and negative controls passed.
+""",
+        )
+        for body in bodies:
+            with self.subTest(body=body[:80]):
+                value = snapshot()
+                value["issue_comments"][0]["body"] = body
+                raw = raw_bytes(value)
+                context = trusted(raw)
+
+                first = evaluate_codex_connector_evidence(raw, context)
+                second = evaluate_codex_connector_evidence(raw, context)
+
+                self.assertEqual(first, second)
+                self.assertEqual(first["capability_status"], "PASS")
+                self.assertEqual(first["reviewed_head_sha"], HEAD_SHA)
+                self.assertEqual(first["reasons"], [])
+
+    def test_automatic_summary_fail_closed_controls(self) -> None:
+        valid = automatic_summary_body()
+        mutations = {
+            "missing_testing": valid.split("\n**Testing**", 1)[0],
+            "no_success": valid.replace("* ✅", "* completed"),
+            "failed_test": valid.replace("14 passed.", "1 failed."),
+            "test_error": valid.replace("14 passed.", "1 passed, 1 error."),
+            "test_failures": valid.replace("14 passed.", "1 passed, 2 failures."),
+            "test_failing": valid.replace("14 passed.", "2 tests are failing."),
+            "unmarked_not_run_bullet": valid.replace(
+                "* ✅ `python -m pytest tests/test_codex_connector_evidence.py` — 14 passed.",
+                "* ✅ `python -m pytest tests/test_codex_connector_evidence.py` — 14 passed.\n* Required integration tests were not run.",
+            ),
+            "plain_not_run": valid.replace(
+                "* ✅ `python -m pytest tests/test_codex_connector_evidence.py` — 14 passed.",
+                "* ✅ `python -m pytest tests/test_codex_connector_evidence.py` — 14 passed.\nRequired integration tests were not run.",
+            ),
+            "plain_error": valid.replace(
+                "* ✅ `python -m pytest tests/test_codex_connector_evidence.py` — 14 passed.",
+                "* ✅ `python -m pytest tests/test_codex_connector_evidence.py` — 14 passed.\nIntegration suite ended with 1 error.",
+            ),
+            "fake_green_not_run": valid.replace(
+                "14 passed.", "✅ required integration tests were not run."
+            ),
+            "timed_out_hyphen": valid.replace("14 passed.", "timed-out."),
+            "time_out_hyphen": valid.replace("14 passed.", "time-out."),
+            "exit_code": valid.replace("14 passed.", "exited with code 1."),
+            "did_not_pass": valid.replace("14 passed.", "1 test did not pass."),
+            "unsuccessful": valid.replace("14 passed.", "test run was unsuccessful."),
+            "cancelled": valid.replace("14 passed.", "test run was cancelled."),
+            "zero_passed": valid.replace("14 passed.", "0 passed."),
+            "summary_timeout": valid.replace(
+                "* No code changes were needed",
+                "* The review timed out.\n* No code changes were needed",
+            ),
+            "summary_incomplete": valid.replace(
+                "* No code changes were needed",
+                "* Review incomplete.\n* No code changes were needed",
+            ),
+            "summary_cancelled": valid.replace(
+                "* No code changes were needed",
+                "* This review was cancelled.\n* No code changes were needed",
+            ),
+            "plain_summary_timeout": valid.replace(
+                "* No code changes were needed",
+                "The review timed out.\n* No code changes were needed",
+            ),
+            "timeout": valid.replace("14 passed.", "timed out."),
+            "skipped": valid.replace("14 passed.", "required proof skipped."),
+            "quota": valid.replace(
+                "* No code changes were needed",
+                "* You have reached your Codex usage limits.\n* No code changes were needed",
+            ),
+            "environment": valid.replace(
+                "* No code changes were needed",
+                "* To use Codex here, create an environment for this repo.\n* No code changes were needed",
+            ),
+            "unable": valid.replace(
+                "* No code changes were needed",
+                "* Codex was unable to complete the review.\n* No code changes were needed",
+            ),
+            "review_error": valid.replace(
+                "* No code changes were needed",
+                "* The review failed with an error.\n* No code changes were needed",
+            ),
+            "unavailable": valid.replace(
+                "* No code changes were needed",
+                "* The review service was unavailable.\n* No code changes were needed",
+            ),
+            "severity": valid.replace(
+                "* No code changes were needed",
+                "* P1 finding remains.\n* No code changes were needed",
+            ),
+            "wrong_head": valid.replace(HEAD_SHA, "c" * 40),
+            "uppercase_head": valid.replace(HEAD_SHA, "B" * 40),
+            "short_head": valid.replace(HEAD_SHA, HEAD_SHA[:10]),
+            "mixed_head": valid.replace(
+                f"returned `{HEAD_SHA}`", f"returned `{'c' * 40}`", 1
+            ),
+            "quoted": valid.replace("### Summary", "> ### Summary", 1),
+            "fenced": "```markdown\n" + valid + "\n```",
+            "linked_only": valid.replace(
+                f"`{HEAD_SHA}`", f"[{HEAD_SHA}](https://example.invalid)", 1
+            ),
+            "competing": valid.replace(
+                "* Confirmed the evaluator",
+                f"* The PR head `{HEAD_SHA}` also matches `head_ref`.\n* Confirmed the evaluator",
+            ),
+        }
+        for name, body in mutations.items():
+            with self.subTest(name=name):
+                value = snapshot()
+                value["issue_comments"][0]["body"] = body
+                result = evaluate(value)
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertTrue(result["reasons"])
+
+    def test_automatic_summary_identity_and_collection_controls(self) -> None:
+        valid = automatic_summary_body()
+        cases = []
+        owner = snapshot()
+        owner["issue_comments"] = [human_comment(valid)]
+        cases.append(owner)
+        wrong_app = snapshot()
+        wrong_app["issue_comments"][0]["body"] = valid
+        wrong_app["issue_comments"][0]["performed_via_github_app"]["id"] = 1
+        cases.append(wrong_app)
+        incomplete = snapshot()
+        incomplete["issue_comments"][0]["body"] = valid
+        incomplete["collection_complete"] = False
+        cases.append(incomplete)
+        manual = snapshot()
+        manual["issue_comments"][0]["body"] = valid
+        manual["issue_comments"].insert(0, human_comment("@codex review"))
+        cases.append(manual)
+        manual_other_task = snapshot()
+        manual_other_task["issue_comments"][0]["body"] = valid
+        manual_other_task["issue_comments"].insert(
+            0, human_comment("@codex inspect this pull request and report findings")
+        )
+        cases.append(manual_other_task)
+        finding = snapshot()
+        finding["issue_comments"][0]["body"] = valid
+        finding["pull_request_reviews"] = [connector_review()]
+        finding["review_comments"] = [connector_review_comment(severity="P2")]
+        cases.append(finding)
+
+        for value in cases:
+            with self.subTest(case=len(value["issue_comments"])):
+                result = evaluate(value)
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+
     def test_live_clean_body_variants_pass_deterministically(self) -> None:
         for suffix in (
             " Bravo.",

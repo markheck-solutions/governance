@@ -25,8 +25,28 @@ _CLEAN_RE = re.compile(
     r"\*\*Reviewed commit:\*\* `(?P<prefix>[0-9a-f]{10})`"
     r"(?P<trailer>\n\n<details>[\s\S]*</details>)?\Z"
 )
-_MANUAL_REQUEST_RE = re.compile(r"@codex\s+review\b", re.IGNORECASE)
+_AUTOMATIC_SUMMARY_START_RE = re.compile(r"\A### Summary[ \t]*\n")
+_TESTING_HEADING_RE = re.compile(r"(?m)^(?:\*\*Testing\*\*|### Testing)[ \t]*$")
+_TOP_LEVEL_BULLET_RE = re.compile(r"(?m)^[*-][ \t]+(?P<text>[^\r\n]+)$")
+_INLINE_FULL_SHA_RE = re.compile(r"`([0-9a-f]{40})`")
+_TASK_LINK_RE = re.compile(r"\[View task →\]\(https://chatgpt\.com/s/[A-Za-z0-9_-]+\)")
+_REVIEW_COMPLETION = (
+    "No code changes were needed, so I did **not** create a commit or open a new PR."
+)
+_REVIEW_OUTCOME_SUBJECT_RE = re.compile(
+    r"(?:^|\b(?:the|this|code|pull request)\s+)review\b", re.IGNORECASE
+)
+_MANUAL_REQUEST_RE = re.compile(r"@codex\b", re.IGNORECASE)
 _BLOCKING_SEVERITY_RE = re.compile(r"\bP[0-2]\b", re.IGNORECASE)
+_SERVICE_FAILURE_RE = re.compile(
+    r"(?:(?:usage\s+limits?|quota).{0,40}(?:reached|exceeded|exhausted)"
+    r"|(?:reached|exceeded|exhausted).{0,40}(?:usage\s+limits?|quota))"
+    r"|(?:create|set\s*up|configure).{0,30}(?:codex\s+)?environment"
+    r"|(?:unable|cannot|could\s+not).{0,30}(?:complete|perform|run|review)"
+    r"|review.{0,20}(?:failed|failure|unavailable|error)"
+    r"|service\s+unavailable",
+    re.IGNORECASE | re.DOTALL,
+)
 _APPROVED_CLEAN_SUFFIXES = {
     "",
     " Bravo.",
@@ -240,13 +260,16 @@ def _evaluate_snapshot(
         else:
             reasons.append("RESPONSE_BODY_UNRECOGNIZED")
         return response, reasons, None
-    prefix = _clean_commit_prefix(latest["body"])
-    if prefix is None:
+    commit_identity = _clean_commit_identity(latest["body"])
+    if commit_identity is None:
         reasons.append("RESPONSE_BODY_UNRECOGNIZED")
         return response, reasons, None
     resolved = trusted.resolved_clean_commit_sha
-    if resolved is None or not resolved.startswith(prefix):
+    if resolved is None or not resolved.startswith(commit_identity):
         reasons.append("COMMIT_RESOLUTION_MISMATCH")
+        return response, reasons, None
+    if len(commit_identity) == 40 and commit_identity != trusted.head_sha:
+        reasons.append("REVIEWED_COMMIT_NOT_HEAD")
         return response, reasons, None
     if resolved != trusted.head_sha:
         reasons.append("REVIEWED_COMMIT_NOT_HEAD")
@@ -364,7 +387,10 @@ def _snapshot_identity_reasons(
     return reasons
 
 
-def _clean_commit_prefix(body: str) -> str | None:
+def _clean_commit_identity(body: str) -> str | None:
+    automatic_head = _automatic_summary_head(body)
+    if automatic_head is not None:
+        return automatic_head
     match = _CLEAN_RE.fullmatch(body)
     if match is None:
         return None
@@ -375,6 +401,92 @@ def _clean_commit_prefix(body: str) -> str | None:
     if trailer and not _safe_product_trailer(trailer):
         return None
     return str(match.group("prefix"))
+
+
+def _automatic_summary_head(body: str) -> str | None:
+    if (
+        _AUTOMATIC_SUMMARY_START_RE.match(body) is None
+        or _BLOCKING_SEVERITY_RE.search(body)
+        or _SERVICE_FAILURE_RE.search(body)
+        or "```" in body
+        or "<details" in body.lower()
+    ):
+        return None
+    testing_heading = _TESTING_HEADING_RE.search(body)
+    if testing_heading is None:
+        return None
+    summary = body[: testing_heading.start()]
+    testing = body[testing_heading.end() :]
+    summary_items: list[str] = []
+    for line in summary.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped == "### Summary":
+            continue
+        bullet = re.fullmatch(r"[*-][ \t]+(?P<text>.+)", line)
+        if bullet is None:
+            return None
+        summary_items.append(bullet.group("text"))
+    if summary_items.count(_REVIEW_COMPLETION) != 1:
+        return None
+    for item in summary_items:
+        without_inline_code = re.sub(r"`[^`]*`", "", item)
+        if item != _REVIEW_COMPLETION and _REVIEW_OUTCOME_SUBJECT_RE.search(
+            without_inline_code
+        ):
+            return None
+    attestations: list[str] = []
+    for match in _TOP_LEVEL_BULLET_RE.finditer(summary):
+        text = match.group("text")
+        lowered = text.lower()
+        if (
+            re.search(r"\b(?:pr|pull request)?\s*head\b", lowered)
+            and "`head_ref`" in lowered
+            and re.search(r"\b(?:match(?:es|ed|ing)?|equal(?:s|ed|ing)?)\b", lowered)
+        ):
+            shas = _INLINE_FULL_SHA_RE.findall(text)
+            if len(shas) != 1:
+                return None
+            attestations.append(shas[0])
+    if len(attestations) != 1:
+        return None
+    visible_inline_shas = _INLINE_FULL_SHA_RE.findall(summary + testing)
+    if any(sha != attestations[0] for sha in visible_inline_shas):
+        return None
+    test_items: list[str] = []
+    for line in testing.splitlines():
+        stripped = line.strip()
+        if not stripped or _TASK_LINK_RE.fullmatch(stripped):
+            continue
+        bullet = re.fullmatch(r"[*-][ \t]+(?P<text>.+)", line)
+        if bullet is None:
+            return None
+        test_items.append(bullet.group("text"))
+    if not test_items or any(
+        not _successful_test_item(item, attestations[0]) for item in test_items
+    ):
+        return None
+    return attestations[0]
+
+
+def _successful_test_item(item: str, head_sha: str) -> bool:
+    exact_items = {
+        f"✅ `git rev-parse HEAD` — returned `{head_sha}`.",
+        "✅ `git status --porcelain=v1` — clean working tree.",
+        "✅ Focused positive and negative controls passed.",
+    }
+    if item in exact_items:
+        return True
+    command = r"`[^`\r\n]+`"
+    positive_count = r"[1-9][0-9]*"
+    if re.fullmatch(rf"✅ {command} — {positive_count}(?: tests?)? passed\.", item):
+        return True
+    return bool(
+        re.fullmatch(
+            rf"✅ {command} — {positive_count} tests passed; "
+            r"`phase1_decision` was `BENCHMARK_PASS`; generated `[^`\r\n]+`\.",
+            item,
+        )
+    )
 
 
 def _safe_product_trailer(trailer: str) -> bool:
