@@ -706,6 +706,8 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
             wrong["reasons"],
         )
 
+
+class CodexConnectorCommentEvidenceTests(unittest.TestCase):
     def test_live_automatic_summary_and_semantic_paraphrase_pass(self) -> None:
         bodies = (
             automatic_summary_body(),

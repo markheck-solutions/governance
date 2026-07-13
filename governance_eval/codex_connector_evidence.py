@@ -8,6 +8,7 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Any
 
+from governance_eval.ai_review_failures import is_ai_review_service_failure
 from governance_eval.hashing import sha256_json
 from governance_eval.schemas import validate_named
 
@@ -48,15 +49,6 @@ _REVIEW_OUTCOME_SUBJECT_RE = re.compile(
 )
 _MANUAL_REQUEST_RE = re.compile(r"@codex\b", re.IGNORECASE)
 _BLOCKING_SEVERITY_RE = re.compile(r"\bP[0-2]\b", re.IGNORECASE)
-_SERVICE_FAILURE_RE = re.compile(
-    r"(?:(?:usage\s+limits?|quota).{0,40}(?:reached|exceeded|exhausted)"
-    r"|(?:reached|exceeded|exhausted).{0,40}(?:usage\s+limits?|quota))"
-    r"|(?:create|set\s*up|configure).{0,30}(?:codex\s+)?environment"
-    r"|(?:unable|cannot|could(?:\s+not|n't)).{0,30}(?:complete|perform|run|review)"
-    r"|review.{0,20}(?:failed|failure|unavailable|error)"
-    r"|service\s+unavailable",
-    re.IGNORECASE | re.DOTALL,
-)
 _APPROVED_CLEAN_SUFFIXES = {
     "",
     " Bravo.",
@@ -444,10 +436,10 @@ def _collection_reasons(
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
     connector_failure = any(
         _exact_connector_issue_comment(comment)
-        and _SERVICE_FAILURE_RE.search(comment["body"])
+        and is_ai_review_service_failure(comment["body"])
         for comment in comments
     ) or any(
-        _exact_connector_user(review) and _SERVICE_FAILURE_RE.search(review["body"])
+        _exact_connector_user(review) and is_ai_review_service_failure(review["body"])
         for review in reviews
     )
     if connector_failure:
@@ -578,7 +570,7 @@ def _automatic_summary_head(body: str) -> str | None:
     if (
         _AUTOMATIC_SUMMARY_START_RE.match(body) is None
         or _BLOCKING_SEVERITY_RE.search(body)
-        or _SERVICE_FAILURE_RE.search(body)
+        or is_ai_review_service_failure(body)
         or "```" in body
         or "<details" in body.lower()
     ):
