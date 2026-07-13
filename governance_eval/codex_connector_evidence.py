@@ -15,6 +15,7 @@ from governance_eval.schemas import validate_named
 ADAPTER_ID = "codex_connector_issue_comment_v1"
 _MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024
 _MAX_COLLECTION_ITEMS = 10_000
+_MAX_REVIEW_WINDOW_SECONDS = 300
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -95,6 +96,7 @@ class TrustedCodexConnectorContext:
     head_sha: str
     governance_evaluator_sha: str
     review_window_started_at: str
+    review_deadline_at: str
     resolved_clean_commit_sha: str | None
 
     def __post_init__(self) -> None:
@@ -113,6 +115,14 @@ class TrustedCodexConnectorContext:
             raise ValueError("trusted commit identity is invalid")
         if not _valid_timestamp(self.review_window_started_at):
             raise ValueError("review window timestamp is invalid")
+        if not _valid_timestamp(self.review_deadline_at):
+            raise ValueError("review deadline timestamp is invalid")
+        review_window_seconds = (
+            _timestamp(self.review_deadline_at)
+            - _timestamp(self.review_window_started_at)
+        ).total_seconds()
+        if not 0 < review_window_seconds <= _MAX_REVIEW_WINDOW_SECONDS:
+            raise ValueError("review deadline exceeds bounded review window")
         if self.resolved_clean_commit_sha is not None and not _SHA_RE.fullmatch(
             self.resolved_clean_commit_sha
         ):
@@ -182,6 +192,7 @@ def _evaluate(
         },
         "governance_evaluator_sha": trusted.governance_evaluator_sha,
         "review_window_started_at": trusted.review_window_started_at,
+        "review_deadline_at": trusted.review_deadline_at,
         "snapshot_file_sha256": observed_digest,
         "normalized_snapshot_sha256": normalized_digest,
         "resolved_clean_commit_sha": trusted.resolved_clean_commit_sha,
@@ -252,6 +263,8 @@ def _evaluate_snapshot(
         trusted.review_window_started_at
     ):
         reasons.append("RESPONSE_NOT_AFTER_WINDOW")
+    if _timestamp(response["created_at"]) > _timestamp(trusted.review_deadline_at):
+        reasons.append("RESPONSE_AFTER_DEADLINE")
     if response_type == "pull_request_review":
         if latest["commit_id"] != trusted.head_sha:
             reasons.append("REVIEWED_COMMIT_NOT_HEAD")
@@ -538,6 +551,16 @@ def _snapshot_schema_valid(snapshot: dict[str, Any]) -> bool:
 
 def _validate_result_shape(result: dict[str, Any]) -> None:
     validate_named("codex_connector_evidence_result", result)
+    if not _valid_timestamp(result["review_window_started_at"]) or not _valid_timestamp(
+        result["review_deadline_at"]
+    ):
+        raise ValueError("Codex connector evidence review window is invalid")
+    review_window_seconds = (
+        _timestamp(result["review_deadline_at"])
+        - _timestamp(result["review_window_started_at"])
+    ).total_seconds()
+    if not 0 < review_window_seconds <= _MAX_REVIEW_WINDOW_SECONDS:
+        raise ValueError("Codex connector evidence review window exceeds limit")
     expected_hash = sha256_json({**result, "result_content_hash": ""})
     if result["result_content_hash"] != expected_hash:
         raise ValueError("Codex connector evidence result hash is invalid")

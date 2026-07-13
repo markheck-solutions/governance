@@ -22,6 +22,7 @@ BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
 EVALUATOR_SHA = "e" * 40
 ANCHOR = "2026-07-13T18:00:00Z"
+DEADLINE = "2026-07-13T18:05:00Z"
 CONNECTOR_USER = {
     "login": "chatgpt-codex-connector[bot]",
     "id": 199175422,
@@ -164,6 +165,7 @@ def trusted(raw: bytes, **changes: object) -> TrustedCodexConnectorContext:
         "head_sha": HEAD_SHA,
         "governance_evaluator_sha": EVALUATOR_SHA,
         "review_window_started_at": ANCHOR,
+        "review_deadline_at": DEADLINE,
         "resolved_clean_commit_sha": HEAD_SHA,
     }
     values.update(changes)
@@ -384,6 +386,28 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["response"]["response_id"], 201)
 
+    def test_review_deadline_is_inclusive_and_late_evidence_blocks(self) -> None:
+        at_deadline = snapshot()
+        at_deadline["issue_comments"][0]["created_at"] = DEADLINE
+        self.assertEqual(evaluate(at_deadline)["capability_status"], "PASS")
+
+        late_clean = snapshot()
+        late_clean["issue_comments"][0]["created_at"] = "2026-07-13T18:05:01Z"
+        late_result = evaluate(late_clean)
+        self.assertEqual(late_result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("RESPONSE_AFTER_DEADLINE", late_result["reasons"])
+        self.assertIsNone(late_result["reviewed_head_sha"])
+
+        late_failure = snapshot()
+        late_failure["issue_comments"][0]["created_at"] = "2026-07-13T18:07:20Z"
+        late_failure["issue_comments"][0]["body"] = (
+            "Codex couldn't complete this request. Try again later."
+        )
+        failure_result = evaluate(late_failure)
+        self.assertEqual(failure_result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertIn("RESPONSE_AFTER_DEADLINE", failure_result["reasons"])
+        self.assertIn("RESPONSE_BODY_UNRECOGNIZED", failure_result["reasons"])
+
     def test_snapshot_and_identity_fail_closed_controls(self) -> None:
         cases: list[tuple[str, dict]] = []
         missing = snapshot()
@@ -426,7 +450,11 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
             trusted(raw, pull_request_number=99),
             trusted(raw, base_sha="c" * 40),
             trusted(raw, head_sha="c" * 40),
-            trusted(raw, review_window_started_at="2026-07-13T19:00:00Z"),
+            trusted(
+                raw,
+                review_window_started_at="2026-07-13T19:00:00Z",
+                review_deadline_at="2026-07-13T19:05:00Z",
+            ),
             trusted(raw, snapshot_file_sha256="sha256:" + "0" * 64),
             trusted(raw, resolved_clean_commit_sha="c" * 40),
         )
@@ -660,6 +688,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
             lambda item: item["response"].update(response_id=999),
             lambda item: item.update(reviewed_head_sha="c" * 40),
             lambda item: item["connector_identity"].update(user_id=1),
+            lambda item: item.update(review_deadline_at="2026-07-13T18:04:59Z"),
         )
         for mutate in mutations:
             with self.subTest(mutate=mutate):
@@ -703,6 +732,14 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
             trusted(raw, governance_evaluator_sha="not-a-sha")
         with self.assertRaises(ValueError):
             trusted(raw, review_window_started_at="not-a-time")
+        for deadline in (
+            "not-a-time",
+            ANCHOR,
+            "2026-07-13T17:59:59Z",
+            "2026-07-13T18:05:01Z",
+        ):
+            with self.subTest(deadline=deadline), self.assertRaises(ValueError):
+                trusted(raw, review_deadline_at=deadline)
 
 
 if __name__ == "__main__":
