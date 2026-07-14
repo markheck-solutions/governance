@@ -100,6 +100,31 @@ def generate_bootstrap_audit_receipt(
                     errors.append(f"mutation event {index} {payload_key} is missing")
                 elif sha256_json(event[payload_key]) != event.get(digest_key):
                     errors.append(f"mutation event {index} {digest_key} mismatch")
+            request = (
+                event.get("request") if isinstance(event.get("request"), dict) else {}
+            )
+            response = (
+                event.get("response") if isinstance(event.get("response"), dict) else {}
+            )
+            endpoint = f"{expected_protection_url}/enforce_admins"
+            expected_method = "DELETE" if index == 0 else "POST"
+            expected_status = 204 if index == 0 else 200
+            if (
+                request.get("method") != expected_method
+                or request.get("url") != endpoint
+            ):
+                errors.append(f"mutation event {index} request semantics are invalid")
+            if response.get("status") != expected_status:
+                errors.append(f"mutation event {index} response status is invalid")
+            body = response.get("body")
+            if index == 0 and body is not None:
+                errors.append("disable response body must be null")
+            if index == 1 and not (
+                isinstance(body, dict)
+                and body.get("enabled") is True
+                and body.get("url") == endpoint
+            ):
+                errors.append("restore response body is invalid")
     started = _timestamp(record.get("started_at"), errors, "started_at")
     completed = _timestamp(record.get("completed_at"), errors, "completed_at")
     expires = _timestamp(record.get("expires_at"), errors, "expires_at")

@@ -9,10 +9,14 @@ from governance_eval.hashing import sha256_json
 
 def record() -> dict:
     protection_url = "https://api.github.com/repos/owner/repo/branches/main/protection"
-    disable_request = {"enforce_admins": False}
-    disable_response = {"enabled": False}
-    restore_request = {"enforce_admins": True}
-    restore_response = {"enabled": True}
+    endpoint = f"{protection_url}/enforce_admins"
+    disable_request = {"method": "DELETE", "url": endpoint}
+    disable_response = {"status": 204, "body": None}
+    restore_request = {"method": "POST", "url": endpoint}
+    restore_response = {
+        "status": 200,
+        "body": {"url": endpoint, "enabled": True},
+    }
     return {
         "repository_url": "https://github.com/owner/repo",
         "protection_url": protection_url,
@@ -134,7 +138,12 @@ class BootstrapAuditTests(unittest.TestCase):
         mutated_payload["mutation_events"][0]["response"] = {"enabled": True}
         cross_repo = record()
         cross_repo["rulesets_url"] = "https://api.github.com/repos/other/repo/rulesets"
-        for source in (missing_url, mutated_payload, cross_repo):
+        wrong_method = record()
+        wrong_method["mutation_events"][0]["request"]["method"] = "POST"
+        wrong_method["mutation_events"][0]["request_sha256"] = sha256_json(
+            wrong_method["mutation_events"][0]["request"]
+        )
+        for source in (missing_url, mutated_payload, cross_repo, wrong_method):
             with self.subTest(source=source):
                 result = generate_bootstrap_audit_receipt(
                     source,
