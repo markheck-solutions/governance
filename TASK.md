@@ -108,7 +108,7 @@ Required enforcement properties:
 - artifacts bound to exact repository, pull request, base, head, run, ID, name, and digest;
 - exact approved AI reviewer identities and latest-head binding for any AI evidence that is received before the bounded cutoff;
 - unresolved reproduced P0-P2 findings block;
-- Codex is requested automatically for every new head SHA. Each head gets a five-minute cutoff derived from GitHub server time. Evidence whose authoritative GitHub creation or submission timestamp is at or before the cutoff is in-window even if observed later. GREEN is prohibited until a fully paginated collection begins after the cutoff and reconciles an unchanged head. Missing, late, quota-limited, or unavailable evidence then records `AI_REVIEW_UNAVAILABLE`, never approval, and does not block deterministic governance;
+- A Codex request is attempted automatically for every new head SHA. GitHub-blocked bot-to-bot request transport is recorded but does not skip deterministic evaluation and does not require a PAT or Copilot fallback. Each head gets a five-minute cutoff derived from GitHub server time. Evidence whose authoritative GitHub creation or submission timestamp is at or before the cutoff is in-window even if observed later. GREEN is prohibited until a fully paginated collection begins after the cutoff and reconciles an unchanged head. Missing, late, quota-limited, or unavailable evidence then records `AI_REVIEW_UNAVAILABLE`, never approval, and does not block deterministic governance;
 - Copilot is not a required gate, reviewer, receipt dependency, or fallback;
 - manual Actions approval, manual API rerun, or owner-copied review evidence can never satisfy a required check, receipt, canary, or completion proof; automatic exact-head reconciliation is allowed.
 
@@ -220,7 +220,7 @@ Completion is `FAIL` unless all are true:
 - Defective canary remains RED and closes unmerged.
 - Stale-review canary proves stale AI evidence cannot block or authorize the current head; a current exact-head received P0-P2 finding remains RED until resolved.
 - Protected-context-spoof canary cannot bypass the real protected result.
-- Codex is requested automatically; exact-head received evidence is classified; missing or unavailable evidence records `AI_REVIEW_UNAVAILABLE`; no Copilot evidence is required.
+- Codex request transport is attempted automatically and cannot skip deterministic evaluation; exact-head received evidence is classified; missing or unavailable evidence records `AI_REVIEW_UNAVAILABLE`; no PAT or Copilot evidence is required.
 - A deterministic adoption command generates repo config and a caller pinned to the exact Governance SHA, validates config hash and required-context mapping, documents protection setup, and proves disposable clean and defective adoption canaries without modifying any target repository.
 - Fresh adversarial review reports zero unresolved P0-P2 findings.
 - Final report lists exact commands, exit codes, artifacts, hashes, commit SHAs, live GitHub proof, and unresolved unknowns.
