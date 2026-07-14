@@ -37,12 +37,16 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             baseline = _validate(
-                _create_archive(root / "baseline.zip", generated_at="2026-07-12T17:00:00Z"),
+                _create_archive(
+                    root / "baseline.zip", generated_at="2026-07-12T17:00:00Z"
+                ),
                 role="protected_baseline",
                 artifact_id="456",
             )
             candidate = _validate(
-                _create_archive(root / "candidate.zip", generated_at="2026-07-12T17:00:01Z"),
+                _create_archive(
+                    root / "candidate.zip", generated_at="2026-07-12T17:00:01Z"
+                ),
                 role="candidate",
                 artifact_id="789",
             )
@@ -74,7 +78,9 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
             with self.subTest(baseline=baseline, candidate=candidate):
                 result = validate_judge_evidence_pair(baseline, candidate)
                 self.assertEqual(result["owner_status"], "RED")
-                self.assertTrue(any("archive validation" in error for error in result["errors"]))
+                self.assertTrue(
+                    any("archive validation" in error for error in result["errors"])
+                )
 
     def test_candidate_green_cannot_mask_forged_baseline_document_red(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -85,7 +91,9 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
                 artifact_id="456",
             )
             candidate = _validate(
-                _create_archive(root / "candidate.zip", generated_at="2026-07-12T17:00:01Z"),
+                _create_archive(
+                    root / "candidate.zip", generated_at="2026-07-12T17:00:01Z"
+                ),
                 role="candidate",
                 artifact_id="789",
             )
@@ -97,11 +105,15 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
             result = validate_judge_evidence_pair(forged_baseline, candidate)
 
         self.assertEqual(result["owner_status"], "RED")
-        self.assertTrue(any("archive validation" in error for error in result["errors"]))
+        self.assertTrue(
+            any("archive validation" in error for error in result["errors"])
+        )
 
     def test_rejects_owner_forged_native_review_identity(self) -> None:
         def mutate(documents: dict[str, dict[str, Any]]) -> None:
-            documents["copilot-review-gate-result.json"]["review_status"]["reviewer"] = "markheck-solutions"
+            documents["copilot-review-gate-result.json"]["review_status"][
+                "reviewer"
+            ] = "markheck-solutions"
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _create_archive(Path(tmp) / "forged.zip", mutate=mutate)
@@ -141,12 +153,20 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
             ("package_audit", "PASS", 0, True),
         )
         for gate, status, exit_code, duplicate in cases:
-            with self.subTest(gate=gate, status=status, duplicate=duplicate), tempfile.TemporaryDirectory() as tmp:
+            with (
+                self.subTest(gate=gate, status=status, duplicate=duplicate),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+
                 def mutate(documents: dict[str, dict[str, Any]]) -> None:
                     command = _command(gate, status=status, exit_code=exit_code)
-                    documents["supportability-gate-result.json"]["commands"].append(command)
+                    documents["supportability-gate-result.json"]["commands"].append(
+                        command
+                    )
                     if duplicate:
-                        documents["supportability-gate-result.json"]["commands"].append(dict(command))
+                        documents["supportability-gate-result.json"]["commands"].append(
+                            dict(command)
+                        )
 
                 archive = _create_archive(Path(tmp) / "commands.zip", mutate=mutate)
                 result = _validate(archive, role="candidate", artifact_id="456")
@@ -181,7 +201,9 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
             )
 
         self.assertEqual(result["owner_status"], "RED")
-        self.assertTrue(any("canonical positive decimal" in error for error in result["errors"]))
+        self.assertTrue(
+            any("canonical positive decimal" in error for error in result["errors"])
+        )
 
     def test_rejects_unbound_artifact_metadata_or_archive_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -216,7 +238,9 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
         self.assertEqual(result["owner_status"], "RED")
         self.assertTrue(any("head_sha" in error for error in result["errors"]))
 
-    def test_pair_rejects_candidate_semantic_omission_extra_and_standard_drift(self) -> None:
+    def test_pair_rejects_candidate_semantic_omission_extra_and_standard_drift(
+        self,
+    ) -> None:
         mutations = ("omit", "extra", "standard")
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
@@ -252,7 +276,9 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
                     role="candidate",
                     artifact_id="789",
                 )
-                self.assertEqual(candidate["owner_status"], "GREEN", candidate["errors"])
+                self.assertEqual(
+                    candidate["owner_status"], "GREEN", candidate["errors"]
+                )
 
                 result = validate_judge_evidence_pair(baseline, candidate)
 
@@ -263,6 +289,7 @@ class JudgeEvidenceBundleTests(unittest.TestCase):
         mutations = ("excluded", "architecture", "fixtures")
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+
                 def mutate(documents: dict[str, dict[str, Any]]) -> None:
                     gate = documents["supportability-gate-result.json"]
                     architecture = documents["architecture-gate-result.json"]
@@ -479,7 +506,9 @@ def _gate_result(generated_at: str, pr_url: str) -> dict[str, Any]:
             *[_command(gate) for gate in gates],
             _command("lint", command="run lint second"),
             _command("package_audit", status="SKIPPED", exit_code=None, command=""),
-            _command("sql_supportability", status="SKIPPED", exit_code=None, command=""),
+            _command(
+                "sql_supportability", status="SKIPPED", exit_code=None, command=""
+            ),
         ],
         "errors": [],
     }

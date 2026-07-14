@@ -103,6 +103,16 @@ class SupportabilityError(ValueError):
     pass
 
 
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _bool_dict_or_empty(value: Any) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items() if isinstance(item, bool)}
+
+
 def load_supportability_config(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     return _parse_supportability_config_text(text, path.suffix)
@@ -700,9 +710,7 @@ def _schema_safe_sha(value: str) -> str:
 
 
 def _standard_hash_errors(config: dict[str, Any], target_repo: Path) -> list[str]:
-    standard = (
-        config.get("standard") if isinstance(config.get("standard"), dict) else {}
-    )
+    standard = _dict_or_empty(config.get("standard"))
     source = str(standard.get("source") or "")
     expected = str(standard.get("hash") or "")
     path = target_repo / source
@@ -1014,15 +1022,16 @@ def _protected_delivery_chain_errors(target_repo: Path) -> list[str]:
         if not block
     ]
     expected_conditions = {
-        "baseline-supportability": "${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
-        "candidate-supportability": "${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
-        "delivery-receipt": "${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
+        "baseline-supportability": "${{ github.event.pull_request.base.ref == 'main' }}",
+        "candidate-supportability": "${{ github.event.pull_request.base.ref == 'main' }}",
+        "delivery-receipt": "${{ always() && github.event.pull_request.base.ref == 'main' }}",
     }
     for name, expected in expected_conditions.items():
         if jobs[name] and _job_condition(jobs[name]) != expected:
             errors.append(f"protected {name} workflow condition is missing or changed")
     pinned_workflows = {
         "baseline-supportability": "supportability-gate.yml",
+        "candidate-supportability": "supportability-gate.yml",
         "delivery-receipt": "delivery-receipt.yml",
     }
     for name, workflow in pinned_workflows.items():
@@ -1033,11 +1042,6 @@ def _protected_delivery_chain_errors(target_repo: Path) -> list[str]:
             errors.append(
                 f"protected {name} workflow must use exact {workflow} at a full immutable SHA"
             )
-    if jobs["candidate-supportability"] and not re.search(
-        r"(?m)^\s+uses:\s+\./\.github/workflows/supportability-gate\.yml\s*$",
-        jobs["candidate-supportability"],
-    ):
-        errors.append("candidate supportability workflow is missing")
     delivery = jobs["delivery-receipt"]
     if delivery and not all(
         _job_needs(delivery, dependency)
@@ -1078,13 +1082,25 @@ def _protected_enforcement_change_errors(
         return ["protected enforcement workflow base or head is missing"]
     head_text = path.read_text(encoding="utf-8")
     sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
-    if sha_ref.sub("<PIN>", base_text) != sha_ref.sub("<PIN>", head_text):
+    governance_ref = re.compile(r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)")
+
+    def normalized(text: str) -> str:
+        text = sha_ref.sub("<PIN>", text)
+        return governance_ref.sub(r"\1<PIN>\3", text)
+
+    if normalized(base_text) != normalized(head_text):
         return [
             "protected enforcement workflow change is not an exact SHA pin rotation"
         ]
     errors = _protected_delivery_chain_errors(target_repo)
-    replacement_pins = sha_ref.findall(head_text)
-    if not replacement_pins or any(pin != base_sha for pin in replacement_pins):
+    workflow_pins = sha_ref.findall(head_text)
+    governance_pins = [match.group(2) for match in governance_ref.finditer(head_text)]
+    replacement_pins = workflow_pins + governance_pins
+    if (
+        len(workflow_pins) != 3
+        or len(governance_pins) != 3
+        or any(pin != base_sha for pin in replacement_pins)
+    ):
         errors.append("protected enforcement workflow pins must equal trusted base SHA")
     return errors
 
@@ -1164,17 +1180,13 @@ def _is_initial_architecture_policy_adoption(
 def _build_coverage_plan(
     config: dict[str, Any], changed: list[str], high_risk: list[str]
 ) -> dict[str, Any]:
-    gates = (
-        config.get("required_gates")
-        if isinstance(config.get("required_gates"), dict)
-        else {}
-    )
+    gates = _dict_or_empty(config.get("required_gates"))
     files = _unique_paths(changed + high_risk)
     errors: list[str] = []
     gate_names = list(REQUIRED_COMMAND_GATES)
     if _sql_files(files):
         gate_names.append("sql_supportability")
-    coverage = {
+    coverage: dict[str, Any] = {
         "changed_files": {path: [] for path in changed},
         "high_risk_files": {path: [] for path in high_risk},
         "excluded_changed_files": [],
@@ -1318,11 +1330,7 @@ def _sql_gate_commands(
     changed: list[str],
     high_risk: list[str],
 ) -> tuple[list[str], list[str]]:
-    gates = (
-        config.get("required_gates")
-        if isinstance(config.get("required_gates"), dict)
-        else {}
-    )
+    gates = _dict_or_empty(config.get("required_gates"))
     value = gates.get("sql_supportability")
     sql_needed = bool(_sql_files(changed + high_risk) or _repo_has_sql(target_repo))
     if value == "auto":
@@ -1346,11 +1354,7 @@ def _run_configured_commands(
     sql_commands: list[str],
     runner: Callable[[str, Path], subprocess.CompletedProcess[str]],
 ) -> list[dict[str, Any]]:
-    gates = (
-        config.get("required_gates")
-        if isinstance(config.get("required_gates"), dict)
-        else {}
-    )
+    gates = _dict_or_empty(config.get("required_gates"))
     results: list[dict[str, Any]] = []
     for gate in REQUIRED_COMMAND_GATES + OPTIONAL_COMMAND_GATES:
         commands = _normalized_command_list(gates.get(gate))
@@ -1714,9 +1718,7 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
         errors.append("receipt owner_status must be GREEN before verification")
     errors.extend(_embedded_receipt_status_errors(receipt))
     errors.extend(_receipt_sha_errors(receipt))
-    artifact = (
-        receipt.get("artifact") if isinstance(receipt.get("artifact"), dict) else {}
-    )
+    artifact = _dict_or_empty(receipt.get("artifact"))
     if not artifact.get("name"):
         errors.append("artifact.name is required")
     artifact_id = str(artifact.get("id") or "")
@@ -1734,27 +1736,11 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
 
 def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    supportability_gate = (
-        receipt.get("supportability_gate")
-        if isinstance(receipt.get("supportability_gate"), dict)
-        else {}
-    )
-    ai_review = (
-        receipt.get("ai_review") if isinstance(receipt.get("ai_review"), dict) else {}
-    )
-    architecture = (
-        receipt.get("architecture")
-        if isinstance(receipt.get("architecture"), dict)
-        else {}
-    )
-    required_judges = (
-        receipt.get("required_judges")
-        if isinstance(receipt.get("required_judges"), dict)
-        else {}
-    )
-    bootstrap = (
-        receipt.get("bootstrap") if isinstance(receipt.get("bootstrap"), dict) else {}
-    )
+    supportability_gate = _dict_or_empty(receipt.get("supportability_gate"))
+    ai_review = _dict_or_empty(receipt.get("ai_review"))
+    architecture = _dict_or_empty(receipt.get("architecture"))
+    required_judges = _bool_dict_or_empty(receipt.get("required_judges"))
+    bootstrap = _dict_or_empty(receipt.get("bootstrap"))
     if supportability_gate.get("owner_status") != STATUS_GREEN:
         errors.append("receipt supportability_gate.owner_status must be GREEN")
     if supportability_gate.get("errors"):
@@ -1858,7 +1844,7 @@ def _live_pr_errors(receipt: dict[str, Any], pr: dict[str, Any]) -> list[str]:
     if pr.get("baseRefOid") != receipt.get("base_sha"):
         errors.append("GitHub PR baseRefOid does not match receipt base_sha")
     if receipt.get("merged_sha"):
-        merge = pr.get("mergeCommit") if isinstance(pr.get("mergeCommit"), dict) else {}
+        merge = _dict_or_empty(pr.get("mergeCommit"))
         if pr.get("state") != "MERGED":
             errors.append("receipt claims merged_sha but GitHub PR is not MERGED")
         if merge.get("oid") != receipt.get("merged_sha"):
@@ -1887,9 +1873,7 @@ def _live_run_errors(
 
 
 def _is_current_workflow_run(receipt: dict[str, Any]) -> bool:
-    workflow = (
-        receipt.get("workflow") if isinstance(receipt.get("workflow"), dict) else {}
-    )
+    workflow = _dict_or_empty(receipt.get("workflow"))
     return bool(
         os.environ.get("GITHUB_RUN_ID")
         and str(workflow.get("run_id") or "") == os.environ["GITHUB_RUN_ID"]
@@ -1901,9 +1885,7 @@ def _live_artifact_errors(
 ) -> list[str]:
     if not artifact:
         return ["GitHub artifact proof is missing"]
-    expected = (
-        receipt.get("artifact") if isinstance(receipt.get("artifact"), dict) else {}
-    )
+    expected = _dict_or_empty(receipt.get("artifact"))
     errors = _artifact_identity_errors(artifact, expected)
     if artifact.get("expired") is True:
         errors.append("GitHub artifact is expired")

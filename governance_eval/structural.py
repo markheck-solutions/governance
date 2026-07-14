@@ -25,27 +25,41 @@ def scan_structural_metrics(
     pack: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     config = _config(pack)
-    prod_files = _python_files(root, config["production_roots"], config["source_globs"], config["ignore_globs"])
-    test_files = _python_files(root, config["test_roots"], config["source_globs"], config["ignore_globs"])
+    prod_files = _python_files(
+        root, config["production_roots"], config["source_globs"], config["ignore_globs"]
+    )
+    test_files = _python_files(
+        root, config["test_roots"], config["source_globs"], config["ignore_globs"]
+    )
     graph = _import_graph(root, prod_files, config["production_roots"])
     fanout_threshold = _threshold(pack, "module_dependency_fanout", "max_imports")
     size_lines = _threshold(pack, "production_module_size_function_count", "max_lines")
-    size_functions = _threshold(pack, "production_module_size_function_count", "max_functions")
+    size_functions = _threshold(
+        pack, "production_module_size_function_count", "max_functions"
+    )
     typed_size_lines = _threshold(pack, "large_typed_god_modules", "max_lines")
     typed_size_functions = _threshold(pack, "large_typed_god_modules", "max_functions")
-    complexity_threshold = _threshold(pack, "touched_function_complexity", "max_complexity")
+    complexity_threshold = _threshold(
+        pack, "touched_function_complexity", "max_complexity"
+    )
     module_sizes = _module_sizes(prod_files, root)
     fanout = {module: len(imports) for module, imports in graph.items()}
     return {
-        "cross_module_private_references": _private_imports(prod_files, root, include_attribute_access=True),
+        "cross_module_private_references": _private_imports(
+            prod_files, root, include_attribute_access=True
+        ),
         "private_helper_reexports": _private_reexports(prod_files, root),
-        "tests_private_production_internals": _private_imports(test_files, root, include_attribute_access=True),
+        "tests_private_production_internals": _private_imports(
+            test_files, root, include_attribute_access=True
+        ),
         "import_cycles": _cycles(graph),
         "weak_public_contracts": _weak_contracts(prod_files, root),
         "module_dependency_fanout": {
             "max": max(fanout.values(), default=0),
             "threshold": fanout_threshold,
-            "over_threshold": sorted(module for module, count in fanout.items() if count > fanout_threshold),
+            "over_threshold": sorted(
+                module for module, count in fanout.items() if count > fanout_threshold
+            ),
             "by_module": fanout,
         },
         "production_module_size_function_count": {
@@ -64,7 +78,9 @@ def scan_structural_metrics(
             and data["function_count"] > typed_size_functions
             and data["has_typing"]
         ),
-        "touched_function_complexity": _complexity(prod_files, root, changed_files or set(), complexity_threshold),
+        "touched_function_complexity": _complexity(
+            prod_files, root, changed_files or set(), complexity_threshold
+        ),
         "gate_scope_or_threshold_weakening": _gate_config(root, pack),
         "duplicate_compatibility_surfaces": _duplicate_surfaces(prod_files, root),
         "publicized_private_helper_renames": _function_body_index(prod_files, root),
@@ -90,8 +106,15 @@ def structural_delta(
         if key == "publicized_private_helper_renames":
             result[key] = _rename_delta(before_value, after_value, policy, threshold)
             continue
-        if _unknown(before_value) or _unknown(after_value) or before_value is None or after_value is None:
-            result[key] = _unknown_delta(policy, threshold, _unknown_reason(before_value, after_value))
+        if (
+            _unknown(before_value)
+            or _unknown(after_value)
+            or before_value is None
+            or after_value is None
+        ):
+            result[key] = _unknown_delta(
+                policy, threshold, _unknown_reason(before_value, after_value)
+            )
             continue
         before = _identity_set(before_value)
         after = _identity_set(after_value)
@@ -104,7 +127,10 @@ def structural_delta(
             "removed": sorted(before - after),
             "threshold": threshold,
             "policy": policy,
-            "evidence": {"base": _evidence_sample(before_value), "head": _evidence_sample(after_value)},
+            "evidence": {
+                "base": _evidence_sample(before_value),
+                "head": _evidence_sample(after_value),
+            },
             "reason": "",
         }
     return result
@@ -121,7 +147,9 @@ def _config(pack: dict[str, Any] | None) -> dict[str, Any]:
 
 def _detector_policies(pack: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     configured = (pack or {}).get("detector_policies") or {}
-    return {name: _normalize_policy(name, policy) for name, policy in configured.items()}
+    return {
+        name: _normalize_policy(name, policy) for name, policy in configured.items()
+    }
 
 
 def _normalize_policy(name: str, policy: dict[str, Any]) -> dict[str, Any]:
@@ -129,7 +157,9 @@ def _normalize_policy(name: str, policy: dict[str, Any]) -> dict[str, Any]:
         "required": bool(policy.get("required", False)),
         "blocking": bool(policy.get("blocking", False)),
         "fail_on_unknown": bool(policy.get("fail_on_unknown", False)),
-        "thresholds": dict(policy.get("thresholds") or DEFAULT_THRESHOLDS.get(name, {})),
+        "thresholds": dict(
+            policy.get("thresholds") or DEFAULT_THRESHOLDS.get(name, {})
+        ),
     }
 
 
@@ -144,14 +174,20 @@ def _default_policy(name: str) -> dict[str, Any]:
 
 def _threshold(pack: dict[str, Any] | None, detector: str, key: str) -> int:
     policy = _detector_policies(pack).get(detector, _default_policy(detector))
-    return int(policy.get("thresholds", {}).get(key, DEFAULT_THRESHOLDS.get(detector, {}).get(key, 0)))
+    return int(
+        policy.get("thresholds", {}).get(
+            key, DEFAULT_THRESHOLDS.get(detector, {}).get(key, 0)
+        )
+    )
 
 
 def _policy_threshold(policy: dict[str, Any], detector: str) -> dict[str, Any]:
     return dict(policy.get("thresholds") or DEFAULT_THRESHOLDS.get(detector, {}))
 
 
-def _python_files(root: Path, roots: list[str], source_globs: list[str], ignore_globs: list[str]) -> list[Path]:
+def _python_files(
+    root: Path, roots: list[str], source_globs: list[str], ignore_globs: list[str]
+) -> list[Path]:
     files: set[Path] = set()
     for relative_root in roots:
         search_root = root / relative_root
@@ -163,7 +199,10 @@ def _python_files(root: Path, roots: list[str], source_globs: list[str], ignore_
             candidates = [path for path in search_root.rglob("*.py") if path.is_file()]
         for path in candidates:
             rel = _rel(path, root)
-            if not any(fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(path.name, glob) for glob in source_globs):
+            if not any(
+                fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(path.name, glob)
+                for glob in source_globs
+            ):
                 continue
             if any(fnmatch.fnmatch(rel, glob) for glob in ignore_globs):
                 continue
@@ -176,7 +215,9 @@ def _rel(path: Path, root: Path) -> str:
 
 
 def _parse(path: Path) -> ast.Module:
-    return ast.parse(path.read_text(encoding="utf-8", errors="ignore"), filename=str(path))
+    return ast.parse(
+        path.read_text(encoding="utf-8", errors="ignore"), filename=str(path)
+    )
 
 
 def _module_for_path(path: Path, root: Path, production_roots: list[str]) -> str:
@@ -198,7 +239,9 @@ def _module_for_path(path: Path, root: Path, production_roots: list[str]) -> str
     return module
 
 
-def _import_graph(root: Path, files: list[Path], production_roots: list[str]) -> dict[str, set[str]]:
+def _import_graph(
+    root: Path, files: list[Path], production_roots: list[str]
+) -> dict[str, set[str]]:
     modules = {_module_for_path(path, root, production_roots): path for path in files}
     module_names = set(modules)
     graph: dict[str, set[str]] = defaultdict(set)
@@ -220,9 +263,11 @@ def _import_graph(root: Path, files: list[Path], production_roots: list[str]) ->
     return graph
 
 
-def _import_from_targets(node: ast.ImportFrom, current_module: str, module_names: set[str]) -> set[str]:
+def _import_from_targets(
+    node: ast.ImportFrom, current_module: str, module_names: set[str]
+) -> set[str]:
     if node.level:
-        package_parts = current_module.split(".")[:-node.level]
+        package_parts = current_module.split(".")[: -node.level]
         base = ".".join(part for part in package_parts if part)
         if node.module:
             base = ".".join(part for part in [base, node.module] if part)
@@ -233,7 +278,11 @@ def _import_from_targets(node: ast.ImportFrom, current_module: str, module_names
         if alias.name == "*":
             continue
         candidates.add(".".join(part for part in [base, alias.name] if part))
-    return {resolved for item in candidates if (resolved := _internal_module(item, module_names))}
+    return {
+        resolved
+        for item in candidates
+        if (resolved := _internal_module(item, module_names))
+    }
 
 
 def _internal_module(name: str, module_names: set[str]) -> str | None:
@@ -285,7 +334,9 @@ def _cycles(graph: dict[str, set[str]]) -> list[str]:
     return sorted("->".join(component + [component[0]]) for component in components)
 
 
-def _private_imports(files: list[Path], root: Path, include_attribute_access: bool) -> list[str]:
+def _private_imports(
+    files: list[Path], root: Path, include_attribute_access: bool
+) -> list[str]:
     refs: set[str] = set()
     for path in files:
         rel = _rel(path, root)
@@ -297,10 +348,14 @@ def _private_imports(files: list[Path], root: Path, include_attribute_access: bo
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                module_private = any(part.startswith("_") for part in module.split(".") if part)
+                module_private = any(
+                    part.startswith("_") for part in module.split(".") if part
+                )
                 for alias in node.names:
                     local = alias.asname or alias.name
-                    imported_aliases[local] = ".".join(part for part in [module, alias.name] if part)
+                    imported_aliases[local] = ".".join(
+                        part for part in [module, alias.name] if part
+                    )
                     if module_private or alias.name.startswith("_"):
                         refs.add(f"{rel}:{module}:{alias.name}")
             elif isinstance(node, ast.Import):
@@ -313,7 +368,11 @@ def _private_imports(files: list[Path], root: Path, include_attribute_access: bo
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute):
                     chain = _attribute_chain(node)
-                    if len(chain) >= 2 and chain[0] in imported_aliases and any(part.startswith("_") for part in chain[1:]):
+                    if (
+                        len(chain) >= 2
+                        and chain[0] in imported_aliases
+                        and any(part.startswith("_") for part in chain[1:])
+                    ):
                         refs.add(f"{rel}:{'.'.join(chain)}")
     return sorted(refs)
 
@@ -332,24 +391,40 @@ def _private_reexports(files: list[Path], root: Path) -> list[str]:
         for node in tree.body:
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                module_private = any(part.startswith("_") for part in module.split(".") if part)
+                module_private = any(
+                    part.startswith("_") for part in module.split(".") if part
+                )
                 for alias in node.names:
                     local = alias.asname or alias.name
                     if module_private or alias.name.startswith("_"):
                         private_names.add(local)
-                    if not local.startswith("_") and (module_private or alias.name.startswith("_")):
+                    if not local.startswith("_") and (
+                        module_private or alias.name.startswith("_")
+                    ):
                         refs.add(f"{rel}:alias:{module}.{alias.name}->{local}")
-            elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
+            elif isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets
+            ):
                 if isinstance(node.value, (ast.List, ast.Tuple)):
                     for item in node.value.elts:
-                        if isinstance(item, ast.Constant) and isinstance(item.value, str) and item.value.startswith("_"):
+                        if (
+                            isinstance(item, ast.Constant)
+                            and isinstance(item.value, str)
+                            and item.value.startswith("_")
+                        ):
                             refs.add(f"{rel}:__all__:{item.value}")
             elif isinstance(node, ast.Assign):
                 value_name = _expr_name(node.value)
-                value_private = value_name.startswith("_") or "._" in value_name or value_name in private_names
+                value_private = (
+                    value_name.startswith("_")
+                    or "._" in value_name
+                    or value_name in private_names
+                )
                 if value_private:
                     for target in node.targets:
-                        if isinstance(target, ast.Name) and not target.id.startswith("_"):
+                        if isinstance(target, ast.Name) and not target.id.startswith(
+                            "_"
+                        ):
                             refs.add(f"{rel}:rebinding:{value_name}->{target.id}")
     return sorted(refs)
 
@@ -366,7 +441,11 @@ def _weak_contracts(files: list[Path], root: Path) -> list[str]:
         for node in tree.body:
             if isinstance(node, (ast.Assign, ast.AnnAssign)):
                 value = getattr(node, "value", None)
-                targets = [node.target] if isinstance(node, ast.AnnAssign) else list(getattr(node, "targets", []))
+                targets = (
+                    [node.target]
+                    if isinstance(node, ast.AnnAssign)
+                    else list(getattr(node, "targets", []))
+                )
                 text = ast.unparse(value) if value is not None else ""
                 if _is_weak_type_text(text):
                     for target in targets:
@@ -375,13 +454,20 @@ def _weak_contracts(files: list[Path], root: Path) -> list[str]:
                             refs.add(f"{rel}:alias:{target.id}:{text}")
             if isinstance(node, ast.ClassDef):
                 bases = {ast.unparse(base) for base in node.bases}
-                if any(base.endswith("TypedDict") or base == "TypedDict" for base in bases):
+                if any(
+                    base.endswith("TypedDict") or base == "TypedDict" for base in bases
+                ):
                     for stmt in node.body:
                         annotation = getattr(stmt, "annotation", None)
                         if annotation is not None and "Any" in ast.unparse(annotation):
                             refs.add(f"{rel}:{node.name}.Any")
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
-                annotations = [node.returns, *(arg.annotation for arg in node.args.args)]
+            if isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef)
+            ) and not node.name.startswith("_"):
+                annotations = [
+                    node.returns,
+                    *(arg.annotation for arg in node.args.args),
+                ]
                 for annotation in annotations:
                     text = ast.unparse(annotation) if annotation else ""
                     if _is_weak_type_text(text) or text in aliases:
@@ -417,10 +503,15 @@ def _function_count(path: Path) -> int:
         tree = _parse(path)
     except SyntaxError:
         return 0
-    return sum(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) for node in ast.walk(tree))
+    return sum(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in ast.walk(tree)
+    )
 
 
-def _complexity(files: list[Path], root: Path, changed_files: set[str], threshold: int) -> dict[str, Any]:
+def _complexity(
+    files: list[Path], root: Path, changed_files: set[str], threshold: int
+) -> dict[str, Any]:
     over: list[str] = []
     for path in files:
         rel = _rel(path, root)
@@ -433,7 +524,18 @@ def _complexity(files: list[Path], root: Path, changed_files: set[str], threshol
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 score = 1 + sum(
-                    isinstance(child, (ast.If, ast.For, ast.While, ast.Try, ast.BoolOp, ast.IfExp, ast.ExceptHandler))
+                    isinstance(
+                        child,
+                        (
+                            ast.If,
+                            ast.For,
+                            ast.While,
+                            ast.Try,
+                            ast.BoolOp,
+                            ast.IfExp,
+                            ast.ExceptHandler,
+                        ),
+                    )
                     for child in ast.walk(node)
                 )
                 if score > threshold:
@@ -447,17 +549,26 @@ def _gate_config(root: Path, pack: dict[str, Any] | None) -> dict[str, Any]:
     if not required_files:
         required_files = ["pyproject.toml", ".github/workflows"]
     try:
-        return _sets_to_lists({
-            "status": "MEASURED",
-            "required_files": required_files,
-            "governed_roots": list(contract.get("governed_roots") or []),
-            "required_commands": list(contract.get("required_commands") or []),
-            "pyproject": _parse_pyproject(root / "pyproject.toml"),
-            "workflows": _parse_workflows(root / ".github" / "workflows"),
-            "files": {relative: (root / relative).exists() for relative in required_files if not relative.endswith("/")},
-        })
+        return _sets_to_lists(
+            {
+                "status": "MEASURED",
+                "required_files": required_files,
+                "governed_roots": list(contract.get("governed_roots") or []),
+                "required_commands": list(contract.get("required_commands") or []),
+                "pyproject": _parse_pyproject(root / "pyproject.toml"),
+                "workflows": _parse_workflows(root / ".github" / "workflows"),
+                "files": {
+                    relative: (root / relative).exists()
+                    for relative in required_files
+                    if not relative.endswith("/")
+                },
+            }
+        )
     except Exception as exc:
-        return {"status": "UNKNOWN", "reason": f"gate contract parsing failed: {type(exc).__name__}: {exc}"}
+        return {
+            "status": "UNKNOWN",
+            "reason": f"gate contract parsing failed: {type(exc).__name__}: {exc}",
+        }
 
 
 def _parse_pyproject(path: Path) -> dict[str, Any]:
@@ -475,9 +586,12 @@ def _parse_pyproject(path: Path) -> dict[str, Any]:
         "ruff_ignore": _as_set(lint.get("ignore") or ruff.get("ignore")),
         "ruff_include": _as_set(ruff.get("include")),
         "ruff_extend_include": _as_set(ruff.get("extend-include")),
-        "ruff_exclude": _as_set(ruff.get("exclude")) | _as_set(ruff.get("extend-exclude")),
+        "ruff_exclude": _as_set(ruff.get("exclude"))
+        | _as_set(ruff.get("extend-exclude")),
         "ruff_per_file_ignores": set((lint.get("per-file-ignores") or {}).keys()),
-        "ruff_max_complexity": _int_or_none(lint.get("mccabe", {}).get("max-complexity") or ruff.get("max-complexity")),
+        "ruff_max_complexity": _int_or_none(
+            lint.get("mccabe", {}).get("max-complexity") or ruff.get("max-complexity")
+        ),
         "mypy_files": _as_set(mypy.get("files")),
         "mypy_exclude": _as_set(mypy.get("exclude")),
         "pytest_testpaths": _as_set(pytest.get("testpaths")),
@@ -528,9 +642,16 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
             semantic_line = _workflow_semantic_line(line)
             run_command = _workflow_run_command(lines, index)
             job_disabled = f"{file.name}:{current_job}" in disabled_jobs
-            if run_command and not job_disabled and not _workflow_step_disabled(lines, index):
+            if (
+                run_command
+                and not job_disabled
+                and not _workflow_step_disabled(lines, index)
+            ):
                 run_commands.add(f"{file.name}:{current_job}:{run_command}")
-            if "continue-on-error:" in semantic_line and "true" in semantic_line.lower():
+            if (
+                "continue-on-error:" in semantic_line
+                and "true" in semantic_line.lower()
+            ):
                 continue_on_error.add(f"{file.name}:{current_job}")
             match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", semantic_line)
             if match:
@@ -567,7 +688,9 @@ def _workflow_disabled_jobs(file_name: str, lines: list[str]) -> set[str]:
         if line.strip() and indent <= current_job_indent:
             current_job = ""
             continue
-        if re.match(r"^ {4}if:\s*", line) and _workflow_if_false_expression(line.split(":", 1)[1]):
+        if re.match(r"^ {4}if:\s*", line) and _workflow_if_false_expression(
+            line.split(":", 1)[1]
+        ):
             disabled.add(f"{file_name}:{current_job}")
     return disabled
 
@@ -688,8 +811,15 @@ def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]
     return values
 
 
-def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[str, Any]) -> dict[str, Any]:
-    if _unknown(base) or _unknown(head) or not isinstance(base, dict) or not isinstance(head, dict):
+def _gate_delta(
+    base: Any, head: Any, policy: dict[str, Any], threshold: dict[str, Any]
+) -> dict[str, Any]:
+    if (
+        _unknown(base)
+        or _unknown(head)
+        or not isinstance(base, dict)
+        or not isinstance(head, dict)
+    ):
         return _unknown_delta(policy, threshold, _unknown_reason(base, head))
     introduced: set[str] = set()
     removed: set[str] = set()
@@ -698,33 +828,83 @@ def _gate_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[st
             introduced.add(f"required_file_removed:{file}")
     before_py = base.get("pyproject") or {}
     after_py = head.get("pyproject") or {}
-    introduced |= _removed_items("ruff.select", before_py.get("ruff_select"), after_py.get("ruff_select"))
-    introduced |= _include_narrowing("ruff.include", before_py.get("ruff_include"), after_py.get("ruff_include"))
-    introduced |= _removed_items("ruff.extend-include", before_py.get("ruff_extend_include"), after_py.get("ruff_extend_include"))
-    introduced |= _added_items("ruff.ignore", before_py.get("ruff_ignore"), after_py.get("ruff_ignore"))
-    introduced |= _added_items("ruff.exclude", before_py.get("ruff_exclude"), after_py.get("ruff_exclude"))
-    introduced |= _added_items("ruff.per-file-ignores", before_py.get("ruff_per_file_ignores"), after_py.get("ruff_per_file_ignores"))
-    introduced |= _added_items("mypy.exclude", before_py.get("mypy_exclude"), after_py.get("mypy_exclude"))
-    introduced |= _removed_items("mypy.files", before_py.get("mypy_files"), after_py.get("mypy_files"))
-    introduced |= _removed_items("pytest.testpaths", before_py.get("pytest_testpaths"), after_py.get("pytest_testpaths"))
-    introduced |= _added_items("coverage.omit", before_py.get("coverage_omit"), after_py.get("coverage_omit"))
-    introduced |= _removed_items("coverage.source", before_py.get("coverage_source"), after_py.get("coverage_source"))
+    introduced |= _removed_items(
+        "ruff.select", before_py.get("ruff_select"), after_py.get("ruff_select")
+    )
+    introduced |= _include_narrowing(
+        "ruff.include", before_py.get("ruff_include"), after_py.get("ruff_include")
+    )
+    introduced |= _removed_items(
+        "ruff.extend-include",
+        before_py.get("ruff_extend_include"),
+        after_py.get("ruff_extend_include"),
+    )
+    introduced |= _added_items(
+        "ruff.ignore", before_py.get("ruff_ignore"), after_py.get("ruff_ignore")
+    )
+    introduced |= _added_items(
+        "ruff.exclude", before_py.get("ruff_exclude"), after_py.get("ruff_exclude")
+    )
+    introduced |= _added_items(
+        "ruff.per-file-ignores",
+        before_py.get("ruff_per_file_ignores"),
+        after_py.get("ruff_per_file_ignores"),
+    )
+    introduced |= _added_items(
+        "mypy.exclude", before_py.get("mypy_exclude"), after_py.get("mypy_exclude")
+    )
+    introduced |= _removed_items(
+        "mypy.files", before_py.get("mypy_files"), after_py.get("mypy_files")
+    )
+    introduced |= _removed_items(
+        "pytest.testpaths",
+        before_py.get("pytest_testpaths"),
+        after_py.get("pytest_testpaths"),
+    )
+    introduced |= _added_items(
+        "coverage.omit", before_py.get("coverage_omit"), after_py.get("coverage_omit")
+    )
+    introduced |= _removed_items(
+        "coverage.source",
+        before_py.get("coverage_source"),
+        after_py.get("coverage_source"),
+    )
     if before_py.get("pytest_addopts") and not after_py.get("pytest_addopts"):
         introduced.add("pytest.addopts_removed")
     before_complexity = before_py.get("ruff_max_complexity")
     after_complexity = after_py.get("ruff_max_complexity")
-    if before_complexity is not None and after_complexity is not None and after_complexity > before_complexity:
+    if (
+        before_complexity is not None
+        and after_complexity is not None
+        and after_complexity > before_complexity
+    ):
         introduced.add(f"ruff.max-complexity:{before_complexity}->{after_complexity}")
     before_wf = base.get("workflows") or {}
     after_wf = head.get("workflows") or {}
-    introduced |= _removed_items("workflow.job", before_wf.get("jobs"), after_wf.get("jobs"))
-    introduced |= _removed_items("workflow.step", before_wf.get("steps"), after_wf.get("steps"))
-    introduced |= _added_items("workflow.continue-on-error", before_wf.get("continue_on_error"), after_wf.get("continue_on_error"))
-    introduced |= _workflow_paths_narrowing(before_wf.get("paths"), after_wf.get("paths"))
-    introduced |= _added_items("workflow.paths-ignore", before_wf.get("paths_ignore"), after_wf.get("paths_ignore"))
+    introduced |= _removed_items(
+        "workflow.job", before_wf.get("jobs"), after_wf.get("jobs")
+    )
+    introduced |= _removed_items(
+        "workflow.step", before_wf.get("steps"), after_wf.get("steps")
+    )
+    introduced |= _added_items(
+        "workflow.continue-on-error",
+        before_wf.get("continue_on_error"),
+        after_wf.get("continue_on_error"),
+    )
+    introduced |= _workflow_paths_narrowing(
+        before_wf.get("paths"), after_wf.get("paths")
+    )
+    introduced |= _added_items(
+        "workflow.paths-ignore",
+        before_wf.get("paths_ignore"),
+        after_wf.get("paths_ignore"),
+    )
     executable_commands = _workflow_command_lines(after_wf)
     executable_command_text = "\n".join(executable_commands)
-    gate_target_text = "\n".join([executable_command_text, _pyproject_gate_target_text(after_py)])
+    gate_target_text = "\n".join(
+        [executable_command_text, _pyproject_gate_target_text(after_py)]
+    )
     for command in head.get("required_commands") or []:
         if command and command not in executable_commands:
             introduced.add(f"required_command_missing:{command}")
@@ -794,8 +974,15 @@ def _pyproject_gate_target_text(pyproject: dict[str, Any]) -> str:
     return "\n".join(values)
 
 
-def _rename_delta(base: Any, head: Any, policy: dict[str, Any], threshold: dict[str, Any]) -> dict[str, Any]:
-    if _unknown(base) or _unknown(head) or not isinstance(base, dict) or not isinstance(head, dict):
+def _rename_delta(
+    base: Any, head: Any, policy: dict[str, Any], threshold: dict[str, Any]
+) -> dict[str, Any]:
+    if (
+        _unknown(base)
+        or _unknown(head)
+        or not isinstance(base, dict)
+        or not isinstance(head, dict)
+    ):
         return _unknown_delta(policy, threshold, _unknown_reason(base, head))
     before = base.get("function_bodies") or []
     after = head.get("function_bodies") or []
@@ -843,7 +1030,10 @@ def _function_body_index(files: list[Path], root: Path) -> dict[str, Any]:
         try:
             tree = _parse(path)
         except SyntaxError:
-            return {"status": "UNKNOWN", "reason": f"syntax error in {_rel(path, root)}"}
+            return {
+                "status": "UNKNOWN",
+                "reason": f"syntax error in {_rel(path, root)}",
+            }
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 body_dump = ast.dump(node.args, include_attributes=False) + ast.dump(
@@ -858,13 +1048,19 @@ def _function_body_index(files: list[Path], root: Path) -> dict[str, Any]:
                         "body_hash": sha256_json(body_dump),
                     }
                 )
-    return {"status": "MEASURED", "function_bodies": sorted(items, key=lambda item: (item["path"], item["name"]))}
+    return {
+        "status": "MEASURED",
+        "function_bodies": sorted(items, key=lambda item: (item["path"], item["name"])),
+    }
 
 
 def _duplicate_surfaces(files: list[Path], root: Path) -> list[str]:
     names: dict[str, list[str]] = defaultdict(list)
     for path in files:
-        if not any(token in path.name.lower() for token in ("compat", "legacy", "wrapper", "shim")):
+        if not any(
+            token in path.name.lower()
+            for token in ("compat", "legacy", "wrapper", "shim")
+        ):
             continue
         try:
             tree = _parse(path)
@@ -873,7 +1069,9 @@ def _duplicate_surfaces(files: list[Path], root: Path) -> list[str]:
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                 names[node.name].append(_rel(path, root))
-    return sorted(f"{name}:{','.join(paths)}" for name, paths in names.items() if len(paths) > 1)
+    return sorted(
+        f"{name}:{','.join(paths)}" for name, paths in names.items() if len(paths) > 1
+    )
 
 
 def _identity_set(value: Any) -> set[str]:
@@ -890,7 +1088,11 @@ def _identity_set(value: Any) -> set[str]:
             return {str(item) for item in value["weakened"]}
         if value.get("status") == "MEASURED" and "function_bodies" in value:
             return set()
-        return {f"{key}:{val}" for key, val in _sets_to_lists(value).items() if key not in {"by_module", "threshold"}}
+        return {
+            f"{key}:{val}"
+            for key, val in _sets_to_lists(value).items()
+            if key not in {"by_module", "threshold"}
+        }
     return {str(value)}
 
 
@@ -904,7 +1106,9 @@ def _over_threshold_identities(value: dict[str, Any]) -> set[str]:
         identities.add(item)
         detail = by_module.get(item)
         if isinstance(detail, dict):
-            size = ",".join(f"{key}={detail[key]}" for key in sorted(detail) if key != "has_typing")
+            size = ",".join(
+                f"{key}={detail[key]}" for key in sorted(detail) if key != "has_typing"
+            )
             if size:
                 identities.add(f"{item}:{size}")
         elif detail is not None:
@@ -916,7 +1120,9 @@ def _unknown(value: Any) -> bool:
     return isinstance(value, dict) and value.get("status") in {"UNKNOWN", "UNSUPPORTED"}
 
 
-def _unknown_delta(policy: dict[str, Any], threshold: dict[str, Any], reason: str) -> dict[str, Any]:
+def _unknown_delta(
+    policy: dict[str, Any], threshold: dict[str, Any], reason: str
+) -> dict[str, Any]:
     return {
         "status": "UNKNOWN",
         "base_count": 0,

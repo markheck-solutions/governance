@@ -148,7 +148,12 @@ class NativeReviewEvidenceTests(unittest.TestCase):
                     )
 
                     self.assertEqual(result["owner_status"], STATUS_RED)
-                    self.assertTrue(any("native Copilot review" in error for error in result["errors"]))
+                    self.assertTrue(
+                        any(
+                            "native Copilot review" in error
+                            for error in result["errors"]
+                        )
+                    )
 
     def test_copilot_review_gate_accepts_raw_graphql_commit_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -233,7 +238,9 @@ class NativeReviewEvidenceTests(unittest.TestCase):
                     )
 
                     self.assertEqual(result["owner_status"], STATUS_RED)
-                    self.assertTrue(any("review thread" in error for error in result["errors"]))
+                    self.assertTrue(
+                        any("review thread" in error for error in result["errors"])
+                    )
 
     def test_copilot_review_cli_returns_red_for_explicit_null_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,7 +265,9 @@ class NativeReviewEvidenceTests(unittest.TestCase):
                 )
 
             result = json.loads(
-                (output_dir / "copilot-review-gate-result.json").read_text(encoding="utf-8")
+                (output_dir / "copilot-review-gate-result.json").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(rc, 1)
             self.assertEqual(result["owner_status"], STATUS_RED)
@@ -287,11 +296,15 @@ class NativeReviewEvidenceTests(unittest.TestCase):
                 )
 
             result = json.loads(
-                (output_dir / "copilot-review-gate-result.json").read_text(encoding="utf-8")
+                (output_dir / "copilot-review-gate-result.json").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(rc, 1)
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("payload load failed" in error for error in result["errors"]))
+            self.assertTrue(
+                any("payload load failed" in error for error in result["errors"])
+            )
 
     def test_copilot_review_cli_returns_red_for_unreadable_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -314,11 +327,15 @@ class NativeReviewEvidenceTests(unittest.TestCase):
                 )
 
             result = json.loads(
-                (output_dir / "copilot-review-gate-result.json").read_text(encoding="utf-8")
+                (output_dir / "copilot-review-gate-result.json").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(rc, 1)
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("payload load failed" in error for error in result["errors"]))
+            self.assertTrue(
+                any("payload load failed" in error for error in result["errors"])
+            )
 
     def test_copilot_review_gate_rejects_wildcard_identity_spoof(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -471,11 +488,15 @@ class StructuredReviewEvidenceTests(unittest.TestCase):
             result = evaluate_copilot_review_gate(
                 repo / ".github/governance/supportability.yml",
                 head,
-                payload=_copilot_payload(head, reviews=[_review(head)], comments=[blocked]),
+                payload=_copilot_payload(
+                    head, reviews=[_review(head)], comments=[blocked]
+                ),
             )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("verdict is not clean" in error for error in result["errors"]))
+            self.assertTrue(
+                any("verdict is not clean" in error for error in result["errors"])
+            )
 
     def test_copilot_review_gate_rejects_non_boolean_minimized_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -487,7 +508,9 @@ class StructuredReviewEvidenceTests(unittest.TestCase):
             result = evaluate_copilot_review_gate(
                 repo / ".github/governance/supportability.yml",
                 head,
-                payload=_copilot_payload(head, reviews=[_review(head)], comments=[blocked]),
+                payload=_copilot_payload(
+                    head, reviews=[_review(head)], comments=[blocked]
+                ),
             )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
@@ -515,9 +538,13 @@ class StructuredReviewEvidenceTests(unittest.TestCase):
             )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("evidence is invalid" in error for error in result["errors"]))
+            self.assertTrue(
+                any("evidence is invalid" in error for error in result["errors"])
+            )
 
-    def test_copilot_review_gate_ignores_truncated_marker_bound_to_stale_head(self) -> None:
+    def test_copilot_review_gate_ignores_truncated_marker_bound_to_stale_head(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _review_repo(Path(tmp), self.root)
             head = "c" * 40
@@ -555,13 +582,19 @@ class StructuredReviewEvidenceTests(unittest.TestCase):
             result = evaluate_copilot_review_gate(
                 repo / ".github/governance/supportability.yml",
                 head,
-                payload=_copilot_payload(head, reviews=[_review(head)], comments=[comment]),
+                payload=_copilot_payload(
+                    head, reviews=[_review(head)], comments=[comment]
+                ),
             )
 
             self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(any("evidence is invalid" in error for error in result["errors"]))
+            self.assertTrue(
+                any("evidence is invalid" in error for error in result["errors"])
+            )
 
-    def test_later_exact_head_structured_clean_supersedes_unbound_bare_marker(self) -> None:
+    def test_later_exact_head_structured_clean_supersedes_unbound_bare_marker(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _review_repo(Path(tmp), self.root)
             head = "c" * 40

@@ -35,7 +35,10 @@ class TargetPackAndShadowTests(unittest.TestCase):
         ]:
             pack = load_target_pack(self.root / relative)
             self.assertIn("behavior_cases", pack)
-            self.assertEqual(set(pack["structural_detectors"]) - set(pack["detector_policies"]), set())
+            self.assertEqual(
+                set(pack["structural_detectors"]) - set(pack["detector_policies"]),
+                set(),
+            )
             self.assertIn("CANDIDATE_DYNAMIC", pack["revision_modes"])
 
     def test_schema_rejects_fixture_only_required_behavior_pack(self) -> None:
@@ -61,7 +64,9 @@ class TargetPackAndShadowTests(unittest.TestCase):
             pack_path.write_text(json.dumps(pack), encoding="utf-8")
             result = evaluate_target(pack_path, target["base"], target["head"])
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
-        self.assertTrue(any("FIXTURE_ONLY" in error for error in result["acceptance_errors"]))
+        self.assertTrue(
+            any("FIXTURE_ONLY" in error for error in result["acceptance_errors"])
+        )
 
     def test_pull_request_pack_requires_expected_source_hashes(self) -> None:
         pack = _mutable_pack(self.root / "target_packs/spaghetti/v1/pack.json")
@@ -86,10 +91,14 @@ class TargetPackAndShadowTests(unittest.TestCase):
             with self.assertRaises(SchemaValidationError):
                 load_target_pack(pack_path)
 
-    def test_partial_comparison_policy_defaults_still_require_pinned_expected_result(self) -> None:
+    def test_partial_comparison_policy_defaults_still_require_pinned_expected_result(
+        self,
+    ) -> None:
         pack = _mutable_pack(self.root / "target_packs/synthetic_clean/v1/pack.json")
         del pack["behavior_cases"][0]["expected_base_result"]
-        pack["behavior_cases"][0]["comparison_policies"] = {"CANDIDATE_DYNAMIC": "PRESERVE_BASE_BEHAVIOR"}
+        pack["behavior_cases"][0]["comparison_policies"] = {
+            "CANDIDATE_DYNAMIC": "PRESERVE_BASE_BEHAVIOR"
+        }
         with tempfile.TemporaryDirectory() as tmp:
             pack_path = Path(tmp) / "pack.json"
             pack_path.write_text(json.dumps(pack), encoding="utf-8")
@@ -104,22 +113,32 @@ class TargetPackAndShadowTests(unittest.TestCase):
                 Path(tmp) / "pack.json",
                 target,
             )
-            result = evaluate_target(pack_path, target["base"], target["head"], Path(tmp) / "artifacts")
+            result = evaluate_target(
+                pack_path, target["base"], target["head"], Path(tmp) / "artifacts"
+            )
             repeated = evaluate_target(pack_path, target["base"], target["head"])
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_MERGE)
         self.assertEqual(result["enforcement_mode"], NON_BLOCKING)
         self.assertEqual(result["case_counts"]["behavior_cases_passed"], 1)
         self.assertEqual(result["applicable_behavior_case_count"], 1)
         self.assertEqual(result["case_counts"]["required_behavior_case_count"], 1)
-        self.assertEqual(result["behavior_results"][0]["provenance_classification"], "EXECUTES_PINNED_TARGET_CODE")
+        self.assertEqual(
+            result["behavior_results"][0]["provenance_classification"],
+            "EXECUTES_PINNED_TARGET_CODE",
+        )
         self.assertEqual(result["revision_mode"], "HISTORICAL_FIXED")
         self.assertEqual(result["review_gate"], "NOT_APPLICABLE")
         self.assertEqual(result["github_review_state"], "NOT_APPLICABLE")
         self.assertRegex(result["artifact_content_hash"], r"^[0-9a-f]{64}$")
         self.assertRegex(result["deterministic_evidence_hash"], r"^[0-9a-f]{64}$")
-        self.assertEqual(result["deterministic_evidence_hash"], repeated["deterministic_evidence_hash"])
+        self.assertEqual(
+            result["deterministic_evidence_hash"],
+            repeated["deterministic_evidence_hash"],
+        )
 
-    def test_candidate_dynamic_with_all_behavior_cases_filtered_out_blocks(self) -> None:
+    def test_candidate_dynamic_with_all_behavior_cases_filtered_out_blocks(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = _make_synthetic_repo(Path(tmp), evasion=False)
             pack_path = _pack_copy(
@@ -130,12 +149,21 @@ class TargetPackAndShadowTests(unittest.TestCase):
             data = _mutable_pack(pack_path)
             data["behavior_cases"][0]["revision_modes"] = ["HISTORICAL_FIXED"]
             pack_path.write_text(json.dumps(data), encoding="utf-8")
-            result = evaluate_target(pack_path, target["base"], target["head"], revision_mode="CANDIDATE_DYNAMIC")
+            result = evaluate_target(
+                pack_path,
+                target["base"],
+                target["head"],
+                revision_mode="CANDIDATE_DYNAMIC",
+            )
 
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
         self.assertEqual(result["applicable_behavior_case_count"], 0)
         self.assertTrue(
-            any("no applicable behavior cases for revision mode CANDIDATE_DYNAMIC" in error for error in result["acceptance_errors"])
+            any(
+                "no applicable behavior cases for revision mode CANDIDATE_DYNAMIC"
+                in error
+                for error in result["acceptance_errors"]
+            )
         )
 
     def test_historical_fixed_with_all_behavior_cases_filtered_out_blocks(self) -> None:
@@ -149,15 +177,26 @@ class TargetPackAndShadowTests(unittest.TestCase):
             data = _mutable_pack(pack_path)
             data["behavior_cases"][0]["revision_modes"] = ["CANDIDATE_DYNAMIC"]
             pack_path.write_text(json.dumps(data), encoding="utf-8")
-            result = evaluate_target(pack_path, target["base"], target["head"], revision_mode="HISTORICAL_FIXED")
+            result = evaluate_target(
+                pack_path,
+                target["base"],
+                target["head"],
+                revision_mode="HISTORICAL_FIXED",
+            )
 
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
         self.assertEqual(result["applicable_behavior_case_count"], 0)
         self.assertTrue(
-            any("no applicable behavior cases for revision mode HISTORICAL_FIXED" in error for error in result["acceptance_errors"])
+            any(
+                "no applicable behavior cases for revision mode HISTORICAL_FIXED"
+                in error
+                for error in result["acceptance_errors"]
+            )
         )
 
-    def test_advisory_behavior_cases_do_not_satisfy_required_behavior_evidence(self) -> None:
+    def test_advisory_behavior_cases_do_not_satisfy_required_behavior_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = _make_synthetic_repo(Path(tmp), evasion=False)
             pack_path = _pack_copy(
@@ -168,14 +207,26 @@ class TargetPackAndShadowTests(unittest.TestCase):
             data = _mutable_pack(pack_path)
             data["behavior_cases"][0]["required_behavior_evidence"] = False
             pack_path.write_text(json.dumps(data), encoding="utf-8")
-            result = evaluate_target(pack_path, target["base"], target["head"], revision_mode="CANDIDATE_DYNAMIC")
+            result = evaluate_target(
+                pack_path,
+                target["base"],
+                target["head"],
+                revision_mode="CANDIDATE_DYNAMIC",
+            )
 
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
         self.assertEqual(result["applicable_behavior_case_count"], 0)
         self.assertEqual(result["case_counts"]["advisory_behavior_case_count"], 1)
-        self.assertTrue(any("no applicable behavior cases" in error for error in result["acceptance_errors"]))
+        self.assertTrue(
+            any(
+                "no applicable behavior cases" in error
+                for error in result["acceptance_errors"]
+            )
+        )
 
-    def test_required_unknown_structural_detector_blocks_and_advisory_unknown_does_not(self) -> None:
+    def test_required_unknown_structural_detector_blocks_and_advisory_unknown_does_not(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = _make_synthetic_repo(Path(tmp), evasion=False)
             required_pack = _pack_copy(
@@ -192,7 +243,9 @@ class TargetPackAndShadowTests(unittest.TestCase):
                 "thresholds": {},
             }
             required_pack.write_text(json.dumps(data), encoding="utf-8")
-            required_result = evaluate_target(required_pack, target["base"], target["head"])
+            required_result = evaluate_target(
+                required_pack, target["base"], target["head"]
+            )
 
             advisory_pack = Path(tmp) / "advisory.json"
             data["structural_detectors"][-1] = "missing_advisory_detector"
@@ -204,26 +257,45 @@ class TargetPackAndShadowTests(unittest.TestCase):
                 "thresholds": {},
             }
             advisory_pack.write_text(json.dumps(data), encoding="utf-8")
-            advisory_result = evaluate_target(advisory_pack, target["base"], target["head"])
+            advisory_result = evaluate_target(
+                advisory_pack, target["base"], target["head"]
+            )
 
-        self.assertEqual(required_result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
-        self.assertEqual(required_result["structural_measurements"]["unknown_required_count"], 1)
+        self.assertEqual(
+            required_result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL
+        )
+        self.assertEqual(
+            required_result["structural_measurements"]["unknown_required_count"], 1
+        )
         self.assertEqual(advisory_result["real_target_shadow_decision"], SHADOW_MERGE)
-        self.assertEqual(advisory_result["structural_measurements"]["unknown_advisory_count"], 1)
+        self.assertEqual(
+            advisory_result["structural_measurements"]["unknown_advisory_count"], 1
+        )
 
     def test_missing_source_symbol_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = _make_synthetic_repo(Path(tmp), evasion=False)
-            data = _mutable_pack(self.root / "target_packs/synthetic_clean/v1/pack.json")
+            data = _mutable_pack(
+                self.root / "target_packs/synthetic_clean/v1/pack.json"
+            )
             _retarget_pack(data, target)
-            data["behavior_cases"][0]["source_symbols"] = [{"path": "src/demo/api.py", "symbol": "missing_symbol"}]
+            data["behavior_cases"][0]["source_symbols"] = [
+                {"path": "src/demo/api.py", "symbol": "missing_symbol"}
+            ]
             pack_path = Path(tmp) / "pack.json"
             pack_path.write_text(json.dumps(data), encoding="utf-8")
             result = evaluate_target(pack_path, target["base"], target["head"])
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
-        self.assertTrue(any("source hash validation failed" in error for error in result["acceptance_errors"]))
+        self.assertTrue(
+            any(
+                "source hash validation failed" in error
+                for error in result["acceptance_errors"]
+            )
+        )
 
-    def test_repository_override_rejected_and_candidate_mode_accepts_unlisted_valid_shas(self) -> None:
+    def test_repository_override_rejected_and_candidate_mode_accepts_unlisted_valid_shas(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = _make_synthetic_repo(Path(tmp), evasion=False)
             pack_path = _pack_copy(
@@ -232,7 +304,12 @@ class TargetPackAndShadowTests(unittest.TestCase):
                 target,
             )
             with self.assertRaises(ValueError):
-                evaluate_target(pack_path, target["base"], target["head"], repository_url="https://example.invalid/other.git")
+                evaluate_target(
+                    pack_path,
+                    target["base"],
+                    target["head"],
+                    repository_url="https://example.invalid/other.git",
+                )
 
             dynamic = _make_synthetic_repo(Path(tmp) / "dynamic", evasion=True)
             data = _mutable_pack(pack_path)
@@ -245,7 +322,12 @@ class TargetPackAndShadowTests(unittest.TestCase):
             }
             dynamic_pack = Path(tmp) / "dynamic-pack.json"
             dynamic_pack.write_text(json.dumps(data), encoding="utf-8")
-            result = evaluate_target(dynamic_pack, dynamic["base"], dynamic["head"], revision_mode="CANDIDATE_DYNAMIC")
+            result = evaluate_target(
+                dynamic_pack,
+                dynamic["base"],
+                dynamic["head"],
+                revision_mode="CANDIDATE_DYNAMIC",
+            )
         self.assertEqual(result["revision_mode"], "CANDIDATE_DYNAMIC")
 
     def test_github_candidate_pr_number_must_match_base_and_head(self) -> None:
@@ -260,46 +342,76 @@ class TargetPackAndShadowTests(unittest.TestCase):
             data["repository_url"] = "https://github.com/example/synthetic-clean.git"
             data["repository_identity"]["canonical_url"] = data["repository_url"]
             pack_path.write_text(json.dumps(data), encoding="utf-8")
-            with mock.patch("governance_eval.target_eval._checkout", side_effect=[Path(tmp) / "base", Path(tmp) / "head"]), \
-                mock.patch("governance_eval.target_eval._commit_exists", return_value=True), \
-                mock.patch("governance_eval.target_eval._candidate_pull_request_validation", return_value={"status": "FAIL", "reason": "target PR base/head does not match supplied revisions"}), \
-                mock.patch("governance_eval.target_eval._run_setup_commands", return_value=[]), \
-                mock.patch("governance_eval.target_eval._changed_files", return_value=set()), \
-                mock.patch("governance_eval.target_eval._run_behavior_case", return_value={
-                    "case_id": "mock",
-                    "status": "PASS",
-                    "required_behavior_evidence": True,
-                    "behavior_comparison_policy": "PRESERVE_BASE_BEHAVIOR",
-                    "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
-                    "classification_reason": "",
-                    "target_repository_url": data["repository_url"],
-                    "pull_request": None,
-                    "base_sha": target["base"],
-                    "head_sha": target["head"],
-                    "merge_sha": None,
-                    "base_execution": _mock_execution(target["base"]),
-                    "head_execution": _mock_execution(target["head"]),
-                    "expected_result": {},
-                    "observed_result": {},
-                    "source_files": {"base": [], "head": []},
-                    "source_symbols": {"base": [], "head": []},
-                    "source_hash_validation": "PASS",
-                    "reproducer_files": [],
-                    "commands": [],
-                }), \
-                mock.patch("governance_eval.target_eval.scan_structural_metrics", return_value={"cross_module_private_references": []}), \
-                mock.patch("governance_eval.target_eval.structural_delta", return_value={"cross_module_private_references": {
-                    "status": "MEASURED",
-                    "introduced": [],
-                    "policy": data["detector_policies"]["cross_module_private_references"],
-                    "base_count": 0,
-                    "head_count": 0,
-                    "existing": [],
-                    "removed": [],
-                    "threshold": {},
-                    "evidence": {},
-                    "reason": "",
-                }}):
+            with (
+                mock.patch(
+                    "governance_eval.target_eval._checkout",
+                    side_effect=[Path(tmp) / "base", Path(tmp) / "head"],
+                ),
+                mock.patch(
+                    "governance_eval.target_eval._commit_exists", return_value=True
+                ),
+                mock.patch(
+                    "governance_eval.target_eval._candidate_pull_request_validation",
+                    return_value={
+                        "status": "FAIL",
+                        "reason": "target PR base/head does not match supplied revisions",
+                    },
+                ),
+                mock.patch(
+                    "governance_eval.target_eval._run_setup_commands", return_value=[]
+                ),
+                mock.patch(
+                    "governance_eval.target_eval._changed_files", return_value=set()
+                ),
+                mock.patch(
+                    "governance_eval.target_eval._run_behavior_case",
+                    return_value={
+                        "case_id": "mock",
+                        "status": "PASS",
+                        "required_behavior_evidence": True,
+                        "behavior_comparison_policy": "PRESERVE_BASE_BEHAVIOR",
+                        "provenance_classification": "EXECUTES_PINNED_TARGET_CODE",
+                        "classification_reason": "",
+                        "target_repository_url": data["repository_url"],
+                        "pull_request": None,
+                        "base_sha": target["base"],
+                        "head_sha": target["head"],
+                        "merge_sha": None,
+                        "base_execution": _mock_execution(target["base"]),
+                        "head_execution": _mock_execution(target["head"]),
+                        "expected_result": {},
+                        "observed_result": {},
+                        "source_files": {"base": [], "head": []},
+                        "source_symbols": {"base": [], "head": []},
+                        "source_hash_validation": "PASS",
+                        "reproducer_files": [],
+                        "commands": [],
+                    },
+                ),
+                mock.patch(
+                    "governance_eval.target_eval.scan_structural_metrics",
+                    return_value={"cross_module_private_references": []},
+                ),
+                mock.patch(
+                    "governance_eval.target_eval.structural_delta",
+                    return_value={
+                        "cross_module_private_references": {
+                            "status": "MEASURED",
+                            "introduced": [],
+                            "policy": data["detector_policies"][
+                                "cross_module_private_references"
+                            ],
+                            "base_count": 0,
+                            "head_count": 0,
+                            "existing": [],
+                            "removed": [],
+                            "threshold": {},
+                            "evidence": {},
+                            "reason": "",
+                        }
+                    },
+                ),
+            ):
                 result = evaluate_target(
                     pack_path,
                     target["base"],
@@ -309,7 +421,12 @@ class TargetPackAndShadowTests(unittest.TestCase):
                 )
 
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
-        self.assertTrue(any("candidate pull request validation failed" in error for error in result["acceptance_errors"]))
+        self.assertTrue(
+            any(
+                "candidate pull request validation failed" in error
+                for error in result["acceptance_errors"]
+            )
+        )
 
     def test_github_repository_parser_accepts_dotted_repository_names(self) -> None:
         self.assertEqual(
@@ -341,7 +458,7 @@ class TargetPackAndShadowTests(unittest.TestCase):
                     None,
                     "CANDIDATE_DYNAMIC",
                     self.root,
-            )
+                )
             if hasattr(os, "symlink"):
                 symlink = (
                     self.root
@@ -356,7 +473,9 @@ class TargetPackAndShadowTests(unittest.TestCase):
                     except OSError as exc:
                         self.skipTest(f"symlink creation unavailable: {exc}")
                     with self.assertRaises(SchemaValidationError):
-                        load_target_pack(symlink, root=self.root, require_governance_owned=True)
+                        load_target_pack(
+                            symlink, root=self.root, require_governance_owned=True
+                        )
                 finally:
                     try:
                         if symlink.exists() or symlink.is_symlink():
@@ -366,16 +485,25 @@ class TargetPackAndShadowTests(unittest.TestCase):
 
     def test_business_review_policy_produces_ask_business(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            target = _make_synthetic_repo(Path(tmp), evasion=False, behavior_change=True)
+            target = _make_synthetic_repo(
+                Path(tmp), evasion=False, behavior_change=True
+            )
             pack_path = _pack_copy(
                 self.root / "target_packs/synthetic_clean/v1/pack.json",
                 Path(tmp) / "pack.json",
                 target,
             )
             data = _mutable_pack(pack_path)
-            data["behavior_cases"][0]["comparison_policies"]["CANDIDATE_DYNAMIC"] = "BUSINESS_REVIEW_ON_CHANGE"
+            data["behavior_cases"][0]["comparison_policies"]["CANDIDATE_DYNAMIC"] = (
+                "BUSINESS_REVIEW_ON_CHANGE"
+            )
             pack_path.write_text(json.dumps(data), encoding="utf-8")
-            result = evaluate_target(pack_path, target["base"], target["head"], revision_mode="CANDIDATE_DYNAMIC")
+            result = evaluate_target(
+                pack_path,
+                target["base"],
+                target["head"],
+                revision_mode="CANDIDATE_DYNAMIC",
+            )
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_ASK_BUSINESS)
         self.assertEqual(result["case_counts"]["behavior_cases_business_ambiguous"], 1)
 
@@ -424,10 +552,15 @@ class TargetPackAndShadowTests(unittest.TestCase):
             result = evaluate_target(pack_path, target["base"], target["head"])
         self.assertEqual(result["real_target_shadow_decision"], SHADOW_BLOCK_TECHNICAL)
         delta = result["structural_delta"]
-        self.assertGreater(delta["weak_public_contracts"]["head_count"], delta["weak_public_contracts"]["base_count"])
+        self.assertGreater(
+            delta["weak_public_contracts"]["head_count"],
+            delta["weak_public_contracts"]["base_count"],
+        )
         self.assertIn("demo.api", delta["module_dependency_fanout"]["introduced"])
         self.assertTrue(delta["large_typed_god_modules"]["introduced"])
-        self.assertEqual(delta["publicized_private_helper_renames"]["status"], "MEASURED")
+        self.assertEqual(
+            delta["publicized_private_helper_renames"]["status"], "MEASURED"
+        )
         self.assertTrue(delta["publicized_private_helper_renames"]["introduced"])
 
 
@@ -453,10 +586,15 @@ def _pack_copy(source: Path, dest: Path, target: dict[str, str]) -> Path:
     return dest
 
 
-def _make_synthetic_repo(root: Path, evasion: bool, behavior_change: bool = False) -> dict[str, str]:
+def _make_synthetic_repo(
+    root: Path, evasion: bool, behavior_change: bool = False
+) -> dict[str, str]:
     repo = root / "target-repo"
     (repo / "src/demo").mkdir(parents=True)
-    _write(repo / "src/demo/api.py", "def _helper(value):\n    return 'ok'\n\n\ndef classify(value):\n    return _helper(value)\n")
+    _write(
+        repo / "src/demo/api.py",
+        "def _helper(value):\n    return 'ok'\n\n\ndef classify(value):\n    return _helper(value)\n",
+    )
     _git(repo, "init")
     _git(repo, "config", "user.email", "governance@example.invalid")
     _git(repo, "config", "user.name", "Governance Test")
@@ -477,11 +615,21 @@ def _make_synthetic_repo(root: Path, evasion: bool, behavior_change: bool = Fals
                 + "def classify(value):\n    return helper(value)\n\n"
                 + "def leaky(data: dict[str, Any]) -> dict[str, Any]:\n    return data\n",
             )
-            functions = "\n".join(f"def function_{index}(value: int) -> int:\n    return value + {index}\n" for index in range(21))
+            functions = "\n".join(
+                f"def function_{index}(value: int) -> int:\n    return value + {index}\n"
+                for index in range(21)
+            )
             padding = "\n".join(f"# line {index}" for index in range(410))
-            _write(repo / "src/demo/god.py", "from typing import TypedDict\n\nclass Row(TypedDict):\n    value: int\n\n" + functions + padding)
+            _write(
+                repo / "src/demo/god.py",
+                "from typing import TypedDict\n\nclass Row(TypedDict):\n    value: int\n\n"
+                + functions
+                + padding,
+            )
         else:
-            _write(repo / "src/demo/api.py", "def classify(value):\n    return 'changed'\n")
+            _write(
+                repo / "src/demo/api.py", "def classify(value):\n    return 'changed'\n"
+            )
         _git(repo, "add", ".")
         _git(repo, "commit", "-m", "head")
         head = _git(repo, "rev-parse", "HEAD").strip()
@@ -511,7 +659,9 @@ def _write(path: Path, text: str) -> None:
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.check_output(["git", *args], cwd=repo, text=True, stderr=subprocess.STDOUT)
+    return subprocess.check_output(
+        ["git", *args], cwd=repo, text=True, stderr=subprocess.STDOUT
+    )
 
 
 if __name__ == "__main__":

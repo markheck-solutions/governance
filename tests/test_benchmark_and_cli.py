@@ -27,9 +27,15 @@ class BenchmarkCliTests(unittest.TestCase):
         self.assertEqual(result["phase1_decision"], "BENCHMARK_PASS")
         self.assertEqual(result["acceptance_errors"], [])
         self.assertEqual(result["metrics"]["critical_defect_recall"], 1.0)
-        self.assertEqual(result["metrics"]["critical_defects_blocked"], result["metrics"]["critical_defect_count"])
+        self.assertEqual(
+            result["metrics"]["critical_defects_blocked"],
+            result["metrics"]["critical_defect_count"],
+        )
         self.assertEqual(result["metrics"]["negative_control_recall"], 1.0)
-        self.assertEqual(result["metrics"]["negative_controls_blocked"], result["metrics"]["negative_control_count"])
+        self.assertEqual(
+            result["metrics"]["negative_controls_blocked"],
+            result["metrics"]["negative_control_count"],
+        )
         self.assertEqual(result["metrics"]["false_block_rate"], 0.0)
         self.assertEqual(result["metrics"]["false_blocks"], 0)
         self.assertEqual(result["metrics"]["repeated_run_decision_stability"], 1.0)
@@ -50,7 +56,9 @@ class BenchmarkCliTests(unittest.TestCase):
         result = run_benchmark(self.root, repeat=1)
         rerun = copy.deepcopy(result)
         rerun["duration_seconds"] = result["duration_seconds"] + 10
-        rerun["metrics"]["execution_duration_seconds"] = result["metrics"]["execution_duration_seconds"] + 10
+        rerun["metrics"]["execution_duration_seconds"] = (
+            result["metrics"]["execution_duration_seconds"] + 10
+        )
 
         self.assertEqual(
             sha256_json(_stable_benchmark_payload(result)),
@@ -70,20 +78,28 @@ class BenchmarkCliTests(unittest.TestCase):
             validate_benchmark_result(result, self.root)
 
     def test_flake_metric_tracks_evidence_changes_not_only_decisions(self) -> None:
-        base_case = {"critical": True, "label": "REPRODUCED_BAD", "category": "historical_behavior"}
+        base_case = {
+            "critical": True,
+            "label": "REPRODUCED_BAD",
+            "category": "historical_behavior",
+        }
         repetitions = [
             [
                 {
                     "case": base_case,
                     "decision": {"decision": "BLOCK_TECHNICAL"},
-                    "evidence": [{"status": "FAIL", "detector_id": "route_interleaving"}],
+                    "evidence": [
+                        {"status": "FAIL", "detector_id": "route_interleaving"}
+                    ],
                 }
             ],
             [
                 {
                     "case": base_case,
                     "decision": {"decision": "BLOCK_TECHNICAL"},
-                    "evidence": [{"status": "PASS", "detector_id": "route_interleaving"}],
+                    "evidence": [
+                        {"status": "PASS", "detector_id": "route_interleaving"}
+                    ],
                 }
             ],
         ]
@@ -107,8 +123,14 @@ class BenchmarkCliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
         data = json.loads(completed.stdout)
         self.assertEqual(data["decision"]["decision"], "BLOCK_TECHNICAL")
-        route_evidence = next(item for item in data["evidence"] if item["detector_id"] == "route_interleaving")
-        self.assertEqual(route_evidence["observed"]["actual_sequence"], ["A1", "A3", "B1", "B3"])
+        route_evidence = next(
+            item
+            for item in data["evidence"]
+            if item["detector_id"] == "route_interleaving"
+        )
+        self.assertEqual(
+            route_evidence["observed"]["actual_sequence"], ["A1", "A3", "B1", "B3"]
+        )
 
 
 if __name__ == "__main__":

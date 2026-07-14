@@ -14,12 +14,23 @@ class StructuralDeltaTests(unittest.TestCase):
             root = Path(tmp)
             base = root / "base"
             head = root / "head"
-            _write(base / "src/pkg/a.py", "from pkg._private import _old\n\n\ndef stable():\n    return _old()\n")
+            _write(
+                base / "src/pkg/a.py",
+                "from pkg._private import _old\n\n\ndef stable():\n    return _old()\n",
+            )
             _write(base / "src/pkg/_private.py", "def _old():\n    return 1\n")
-            _write(head / "src/pkg/a.py", "from pkg._private import _old\nfrom pkg._private import _new\n\n\ndef stable():\n    return _old()\n")
-            _write(head / "src/pkg/_private.py", "def _old():\n    return 1\n\n\ndef _new():\n    return 2\n")
+            _write(
+                head / "src/pkg/a.py",
+                "from pkg._private import _old\nfrom pkg._private import _new\n\n\ndef stable():\n    return _old()\n",
+            )
+            _write(
+                head / "src/pkg/_private.py",
+                "def _old():\n    return 1\n\n\ndef _new():\n    return 2\n",
+            )
 
-            delta = structural_delta(scan_structural_metrics(base), scan_structural_metrics(head))
+            delta = structural_delta(
+                scan_structural_metrics(base), scan_structural_metrics(head)
+            )
 
         private = delta["cross_module_private_references"]
         self.assertEqual(private["status"], "MEASURED")
@@ -55,13 +66,18 @@ class StructuralDeltaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write(root / "app/pkg/api.py", "def _helper():\n    return 1\n")
-            _write(root / "spec/test_api.py", "import pkg.api\n\n\ndef test_api():\n    assert pkg.api._helper() == 1\n")
+            _write(
+                root / "spec/test_api.py",
+                "import pkg.api\n\n\ndef test_api():\n    assert pkg.api._helper() == 1\n",
+            )
 
             metrics = scan_structural_metrics(root, pack=pack)
 
         self.assertTrue(metrics["tests_private_production_internals"])
 
-    def test_production_private_attribute_access_after_module_import_is_detected(self) -> None:
+    def test_production_private_attribute_access_after_module_import_is_detected(
+        self,
+    ) -> None:
         pack = _pack()
         pack["structural_detectors"].append("cross_module_private_references")
         pack["detector_policies"]["cross_module_private_references"] = {
@@ -76,14 +92,23 @@ class StructuralDeltaTests(unittest.TestCase):
             head = root / "head"
             _write(base / "src/pkg/api.py", "def call():\n    return 1\n")
             _write(base / "src/pkg/util.py", "def _helper():\n    return 1\n")
-            _write(head / "src/pkg/api.py", "import pkg.util\n\n\ndef call():\n    return pkg.util._helper()\n")
+            _write(
+                head / "src/pkg/api.py",
+                "import pkg.util\n\n\ndef call():\n    return pkg.util._helper()\n",
+            )
             _write(head / "src/pkg/util.py", "def _helper():\n    return 1\n")
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         self.assertTrue(delta["cross_module_private_references"]["introduced"])
 
-    def test_gate_scope_narrowing_is_detected_without_headline_threshold_change(self) -> None:
+    def test_gate_scope_narrowing_is_detected_without_headline_threshold_change(
+        self,
+    ) -> None:
         pack = _pack()
         base_text = """
 [tool.ruff.lint]
@@ -121,20 +146,38 @@ files = ["src", "tests"]
             head = root / "head"
             _write(base / "pyproject.toml", base_text)
             _write(head / "pyproject.toml", head_text)
-            _write(base / ".github/workflows/validation.yml", "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n")
-            _write(head / ".github/workflows/validation.yml", "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src tests\n")
+            _write(
+                base / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n",
+            )
+            _write(
+                head / ".github/workflows/validation.yml",
+                "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src tests\n",
+            )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
         self.assertTrue(any("ruff.select_removed:C901" in item for item in introduced))
-        self.assertTrue(any("ruff.exclude_added:src/pkg/**" in item for item in introduced))
-        self.assertTrue(any("pytest.testpaths_removed:integration" in item for item in introduced))
-        self.assertTrue(any("mypy.files_removed:scripts" in item for item in introduced))
+        self.assertTrue(
+            any("ruff.exclude_added:src/pkg/**" in item for item in introduced)
+        )
+        self.assertTrue(
+            any("pytest.testpaths_removed:integration" in item for item in introduced)
+        )
+        self.assertTrue(
+            any("mypy.files_removed:scripts" in item for item in introduced)
+        )
 
     def test_required_command_comment_does_not_satisfy_gate_contract(self) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -149,14 +192,24 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        # run: python -m mypy src scripts tests\n        run: echo skipped\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
-    def test_required_command_disabled_step_does_not_satisfy_gate_contract(self) -> None:
+    def test_required_command_disabled_step_does_not_satisfy_gate_contract(
+        self,
+    ) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -171,14 +224,24 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        if: ${{ false }}\n        run: python -m mypy src scripts tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
-    def test_required_command_shorthand_disabled_step_does_not_satisfy_gate_contract(self) -> None:
+    def test_required_command_shorthand_disabled_step_does_not_satisfy_gate_contract(
+        self,
+    ) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -193,14 +256,24 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - if: false\n        run: python -m mypy src scripts tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
-    def test_required_command_step_if_after_run_does_not_satisfy_gate_contract(self) -> None:
+    def test_required_command_step_if_after_run_does_not_satisfy_gate_contract(
+        self,
+    ) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -215,14 +288,22 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n        if: false\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
     def test_required_command_disabled_job_does_not_satisfy_gate_contract(self) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -237,14 +318,24 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    if: false\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
-    def test_required_command_commented_in_multiline_run_does_not_satisfy_gate_contract(self) -> None:
+    def test_required_command_commented_in_multiline_run_does_not_satisfy_gate_contract(
+        self,
+    ) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -259,14 +350,22 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: |\n          # python -m mypy src scripts tests\n          echo skipped\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
     def test_required_command_active_step_satisfies_gate_contract(self) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -276,14 +375,22 @@ files = ["src", "tests"]
             _write(base / ".github/workflows/validation.yml", workflow)
             _write(head / ".github/workflows/validation.yml", workflow)
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertNotIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
     def test_required_command_shorthand_run_step_satisfies_gate_contract(self) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -293,14 +400,22 @@ files = ["src", "tests"]
             _write(base / ".github/workflows/validation.yml", workflow)
             _write(head / ".github/workflows/validation.yml", workflow)
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertNotIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
     def test_required_command_folded_scalar_satisfies_gate_contract(self) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -311,10 +426,16 @@ files = ["src", "tests"]
             _write(base / ".github/workflows/validation.yml", base_workflow)
             _write(head / ".github/workflows/validation.yml", folded_workflow)
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertNotIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertNotIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
     def test_commented_continue_on_error_does_not_weaken_workflow(self) -> None:
         pack = _pack()
@@ -331,10 +452,16 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      # continue-on-error: true\n      - name: Tests\n        run: python -m pytest\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertNotIn("workflow.continue-on-error_added:validation.yml:test", introduced)
+        self.assertNotIn(
+            "workflow.continue-on-error_added:validation.yml:test", introduced
+        )
 
     def test_ruff_include_and_workflow_path_narrowing_are_detected(self) -> None:
         pack = _pack()
@@ -342,8 +469,11 @@ files = ["src", "tests"]
             root = Path(tmp)
             base = root / "base"
             head = root / "head"
-            _write(base / "pyproject.toml", "[tool.ruff.lint]\nselect = [\"E\", \"F\"]\n")
-            _write(head / "pyproject.toml", "[tool.ruff]\ninclude = [\"src/pkg/*.py\"]\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\"]\n")
+            _write(base / "pyproject.toml", '[tool.ruff.lint]\nselect = ["E", "F"]\n')
+            _write(
+                head / "pyproject.toml",
+                '[tool.ruff]\ninclude = ["src/pkg/*.py"]\n\n[tool.ruff.lint]\nselect = ["E", "F"]\n',
+            )
             _write(
                 base / ".github/workflows/validation.yml",
                 "on:\n  pull_request:\n    paths:\n      - 'src/**'\n      - 'tests/**'\njobs:\n  test:\n    steps:\n      - name: Tests\n",
@@ -353,12 +483,28 @@ files = ["src", "tests"]
                 "on:\n  pull_request:\n    paths:\n      - 'docs/**'\njobs:\n  test:\n    steps:\n      - name: Tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertTrue(any("ruff.include_narrowed:src/pkg/*.py" in item for item in introduced))
-        self.assertTrue(any("workflow.paths_removed:validation.yml:src/**" in item for item in introduced))
-        self.assertTrue(any("workflow.paths_removed:validation.yml:tests/**" in item for item in introduced))
+        self.assertTrue(
+            any("ruff.include_narrowed:src/pkg/*.py" in item for item in introduced)
+        )
+        self.assertTrue(
+            any(
+                "workflow.paths_removed:validation.yml:src/**" in item
+                for item in introduced
+            )
+        )
+        self.assertTrue(
+            any(
+                "workflow.paths_removed:validation.yml:tests/**" in item
+                for item in introduced
+            )
+        )
 
     def test_commented_workflow_paths_do_not_hide_path_narrowing(self) -> None:
         pack = _pack()
@@ -375,15 +521,31 @@ files = ["src", "tests"]
                 "on:\n  pull_request:\n    # paths: ['src/**', 'tests/**']\n    paths: ['docs/**']\njobs:\n  test:\n    steps:\n      - name: Tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertTrue(any("workflow.paths_removed:validation.yml:src/**" in item for item in introduced))
-        self.assertTrue(any("workflow.paths_removed:validation.yml:tests/**" in item for item in introduced))
+        self.assertTrue(
+            any(
+                "workflow.paths_removed:validation.yml:src/**" in item
+                for item in introduced
+            )
+        )
+        self.assertTrue(
+            any(
+                "workflow.paths_removed:validation.yml:tests/**" in item
+                for item in introduced
+            )
+        )
 
     def test_echoed_required_workflow_command_is_not_executable_gate(self) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             base = root / "base"
@@ -395,14 +557,22 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: echo python -m mypy src scripts tests\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
     def test_required_command_with_or_true_does_not_satisfy_gate_contract(self) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -415,14 +585,24 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: python -m mypy src scripts tests || true\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
-    def test_required_command_in_false_shell_branch_does_not_satisfy_gate_contract(self) -> None:
+    def test_required_command_in_false_shell_branch_does_not_satisfy_gate_contract(
+        self,
+    ) -> None:
         pack = _pack()
-        pack["gate_contract"]["required_commands"] = ["python -m mypy src scripts tests"]
+        pack["gate_contract"]["required_commands"] = [
+            "python -m mypy src scripts tests"
+        ]
         pack["gate_contract"]["governed_roots"] = []
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -435,10 +615,16 @@ files = ["src", "tests"]
                 "jobs:\n  test:\n    steps:\n      - name: MyPy type check\n        run: if false; then python -m mypy src scripts tests; fi\n",
             )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         introduced = delta["gate_scope_or_threshold_weakening"]["introduced"]
-        self.assertIn("required_command_missing:python -m mypy src scripts tests", introduced)
+        self.assertIn(
+            "required_command_missing:python -m mypy src scripts tests", introduced
+        )
 
     def test_publicized_private_helper_rename_is_measured(self) -> None:
         pack = _pack()
@@ -446,10 +632,18 @@ files = ["src", "tests"]
             root = Path(tmp)
             base = root / "base"
             head = root / "head"
-            _write(base / "src/demo/api.py", "def _helper(value):\n    return value + 1\n")
-            _write(head / "src/demo/api.py", "def helper(value):\n    return value + 1\n")
+            _write(
+                base / "src/demo/api.py", "def _helper(value):\n    return value + 1\n"
+            )
+            _write(
+                head / "src/demo/api.py", "def helper(value):\n    return value + 1\n"
+            )
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         metric = delta["publicized_private_helper_renames"]
         self.assertEqual(metric["status"], "MEASURED")
@@ -502,13 +696,19 @@ files = ["src", "scripts", "tests"]
             _write(base / "pyproject.toml", text)
             _write(head / "pyproject.toml", text + "\n[tool.ruff]\nline-length = 100\n")
 
-            delta = structural_delta(scan_structural_metrics(base, pack=pack), scan_structural_metrics(head, pack=pack), pack)
+            delta = structural_delta(
+                scan_structural_metrics(base, pack=pack),
+                scan_structural_metrics(head, pack=pack),
+                pack,
+            )
 
         self.assertEqual(delta["gate_scope_or_threshold_weakening"]["introduced"], [])
 
     def test_growth_in_existing_over_threshold_modules_is_introduced_debt(self) -> None:
         pack = _pack()
-        pack["structural_detectors"].extend(["module_dependency_fanout", "production_module_size_function_count"])
+        pack["structural_detectors"].extend(
+            ["module_dependency_fanout", "production_module_size_function_count"]
+        )
         pack["detector_policies"]["module_dependency_fanout"] = {
             "required": True,
             "blocking": True,
@@ -530,13 +730,23 @@ files = ["src", "scripts", "tests"]
             "production_module_size_function_count": {
                 "threshold": {"max_lines": 5, "max_functions": 1},
                 "over_threshold": ["src/demo/api.py"],
-                "by_module": {"src/demo/api.py": {"lines": 8, "function_count": 2, "has_typing": False}},
+                "by_module": {
+                    "src/demo/api.py": {
+                        "lines": 8,
+                        "function_count": 2,
+                        "has_typing": False,
+                    }
+                },
             },
         }
         head = copy.deepcopy(base)
         head["module_dependency_fanout"]["by_module"]["demo.api"] = 3
-        head["production_module_size_function_count"]["by_module"]["src/demo/api.py"]["lines"] = 12
-        head["production_module_size_function_count"]["by_module"]["src/demo/api.py"]["function_count"] = 3
+        head["production_module_size_function_count"]["by_module"]["src/demo/api.py"][
+            "lines"
+        ] = 12
+        head["production_module_size_function_count"]["by_module"]["src/demo/api.py"][
+            "function_count"
+        ] = 3
 
         delta = structural_delta(base, head, pack)
 
@@ -560,10 +770,30 @@ def _pack() -> dict:
             "publicized_private_helper_renames",
         ],
         "detector_policies": {
-            "tests_private_production_internals": {"required": True, "blocking": True, "fail_on_unknown": True, "thresholds": {}},
-            "import_cycles": {"required": True, "blocking": True, "fail_on_unknown": True, "thresholds": {}},
-            "gate_scope_or_threshold_weakening": {"required": True, "blocking": True, "fail_on_unknown": True, "thresholds": {}},
-            "publicized_private_helper_renames": {"required": True, "blocking": True, "fail_on_unknown": True, "thresholds": {}},
+            "tests_private_production_internals": {
+                "required": True,
+                "blocking": True,
+                "fail_on_unknown": True,
+                "thresholds": {},
+            },
+            "import_cycles": {
+                "required": True,
+                "blocking": True,
+                "fail_on_unknown": True,
+                "thresholds": {},
+            },
+            "gate_scope_or_threshold_weakening": {
+                "required": True,
+                "blocking": True,
+                "fail_on_unknown": True,
+                "thresholds": {},
+            },
+            "publicized_private_helper_renames": {
+                "required": True,
+                "blocking": True,
+                "fail_on_unknown": True,
+                "thresholds": {},
+            },
         },
         "gate_contract": {
             "required_files": ["pyproject.toml", ".github/workflows"],

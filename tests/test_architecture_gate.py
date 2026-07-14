@@ -118,6 +118,22 @@ class ArchitectureGateTests(unittest.TestCase):
                 any("architecture_policy" in error for error in result["errors"])
             )
 
+    def test_non_object_policy_is_gate_implementation_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(Path(tmp), self.root, mode="block_all")
+            config_path = repo / ".github/governance/supportability.yml"
+            config = load_supportability_config(config_path)
+            config["architecture_policy"] = []
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result, code = run_architecture_gate(config_path, repo, "a" * 40, "b" * 40)
+
+            self.assertEqual(code, EXIT_CONFIG)
+            self.assertEqual(result["gate_implementation"], "FAIL")
+            self.assertTrue(
+                any("architecture_policy" in error for error in result["errors"])
+            )
+
     def test_root_tool_caches_skip_but_nested_exact_names_and_lookalikes_are_scanned(
         self,
     ) -> None:

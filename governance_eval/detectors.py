@@ -21,11 +21,21 @@ def run_detectors(case: dict[str, Any], root: Path) -> list[DetectorEvidence]:
     for detector_id in case["detectors"]:
         detector = DETECTORS.get(detector_id)
         if detector is None:
-            evidence.append(_unverifiable(case, detector_id, f"unknown detector {detector_id!r}"))
+            evidence.append(
+                _unverifiable(case, detector_id, f"unknown detector {detector_id!r}")
+            )
             continue
         try:
             evidence.append(detector(case, fixture_path))
-        except (OSError, json.JSONDecodeError, SyntaxError, ValueError, KeyError, TypeError, IndexError) as exc:
+        except (
+            OSError,
+            json.JSONDecodeError,
+            SyntaxError,
+            ValueError,
+            KeyError,
+            TypeError,
+            IndexError,
+        ) as exc:
             evidence.append(_malformed(case, detector_id, str(exc)))
     return evidence
 
@@ -34,7 +44,9 @@ def _evidence_id(case: dict[str, Any], detector_id: str) -> str:
     return f"{case['id']}::{detector_id}"
 
 
-def _unverifiable(case: dict[str, Any], detector_id: str, message: str) -> DetectorEvidence:
+def _unverifiable(
+    case: dict[str, Any], detector_id: str, message: str
+) -> DetectorEvidence:
     return DetectorEvidence(
         evidence_id=_evidence_id(case, detector_id),
         case_id=case["id"],
@@ -44,7 +56,9 @@ def _unverifiable(case: dict[str, Any], detector_id: str, message: str) -> Detec
     )
 
 
-def _malformed(case: dict[str, Any], detector_id: str, message: str) -> DetectorEvidence:
+def _malformed(
+    case: dict[str, Any], detector_id: str, message: str
+) -> DetectorEvidence:
     return DetectorEvidence(
         evidence_id=_evidence_id(case, detector_id),
         case_id=case["id"],
@@ -54,7 +68,9 @@ def _malformed(case: dict[str, Any], detector_id: str, message: str) -> Detector
     )
 
 
-def detect_route_interleaving(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
+def detect_route_interleaving(
+    case: dict[str, Any], fixture_path: Path
+) -> DetectorEvidence:
     data = _read_json(fixture_path / "behavior.json")
     expected = data["expected_sequence"]
     rows = data["rows"]
@@ -67,7 +83,11 @@ def detect_route_interleaving(case: dict[str, Any], fixture_path: Path) -> Detec
             detector_id="route_interleaving",
             status=EvidenceStatus.PASS,
             message="route order matched approved oracle",
-            observed={"expected_sequence": expected, "actual_sequence": actual, "strategy": strategy},
+            observed={
+                "expected_sequence": expected,
+                "actual_sequence": actual,
+                "strategy": strategy,
+            },
         )
     finding = ReviewFinding(
         id=f"{case['id']}-F001",
@@ -82,7 +102,11 @@ def detect_route_interleaving(case: dict[str, Any], fixture_path: Path) -> Detec
         detector_id="route_interleaving",
         status=EvidenceStatus.FAIL,
         message="route order mismatch reproduced",
-        observed={"expected_sequence": expected, "actual_sequence": actual, "strategy": strategy},
+        observed={
+            "expected_sequence": expected,
+            "actual_sequence": actual,
+            "strategy": strategy,
+        },
         findings=(finding,),
     )
 
@@ -119,7 +143,9 @@ def _route_sequence(rows: list[dict[str, Any]], strategy: str) -> list[str]:
             rows,
             key=lambda row: (
                 row["metadata_rank"] is None,
-                row["metadata_rank"] if row["metadata_rank"] is not None else row["original_position"],
+                row["metadata_rank"]
+                if row["metadata_rank"] is not None
+                else row["original_position"],
                 row["original_position"],
             ),
         )
@@ -128,7 +154,9 @@ def _route_sequence(rows: list[dict[str, Any]], strategy: str) -> list[str]:
     return [row["id"] for row in ordered]
 
 
-def detect_private_reexport(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
+def detect_private_reexport(
+    case: dict[str, Any], fixture_path: Path
+) -> DetectorEvidence:
     findings: list[ReviewFinding] = []
     for path in _python_files(fixture_path / "src"):
         if path.stem.startswith("_") and path.name != "__init__.py":
@@ -137,11 +165,24 @@ def detect_private_reexport(case: dict[str, Any], fixture_path: Path) -> Detecto
         exported_private = _exported_private_names(tree)
         private_imports = _imports_from_private_modules(tree)
         for name in sorted(exported_private | private_imports):
-            findings.append(_finding(case, "private_reexport", "P2", "private_helper_reexport", path, name))
-    return _structural_evidence(case, "private_reexport", findings, "public API exports no private helpers")
+            findings.append(
+                _finding(
+                    case,
+                    "private_reexport",
+                    "P2",
+                    "private_helper_reexport",
+                    path,
+                    name,
+                )
+            )
+    return _structural_evidence(
+        case, "private_reexport", findings, "public API exports no private helpers"
+    )
 
 
-def detect_private_test_dependency(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
+def detect_private_test_dependency(
+    case: dict[str, Any], fixture_path: Path
+) -> DetectorEvidence:
     findings: list[ReviewFinding] = []
     for path in _python_files(fixture_path / "tests"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -149,13 +190,38 @@ def detect_private_test_dependency(case: dict[str, Any], fixture_path: Path) -> 
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
                 imported = {alias.name for alias in node.names}
-                if "._" in f".{module}" or any(name.startswith("_") for name in imported):
-                    findings.append(_finding(case, "private_test_dependency", "P2", "test_private_dependency", path, module))
+                if "._" in f".{module}" or any(
+                    name.startswith("_") for name in imported
+                ):
+                    findings.append(
+                        _finding(
+                            case,
+                            "private_test_dependency",
+                            "P2",
+                            "test_private_dependency",
+                            path,
+                            module,
+                        )
+                    )
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     if "._" in f".{alias.name}":
-                        findings.append(_finding(case, "private_test_dependency", "P2", "test_private_dependency", path, alias.name))
-    return _structural_evidence(case, "private_test_dependency", findings, "tests use public production API only")
+                        findings.append(
+                            _finding(
+                                case,
+                                "private_test_dependency",
+                                "P2",
+                                "test_private_dependency",
+                                path,
+                                alias.name,
+                            )
+                        )
+    return _structural_evidence(
+        case,
+        "private_test_dependency",
+        findings,
+        "tests use public production API only",
+    )
 
 
 def detect_import_cycle(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
@@ -172,10 +238,14 @@ def detect_import_cycle(case: dict[str, Any], fixture_path: Path) -> DetectorEvi
                 evidence_id=_evidence_id(case, "import_cycle"),
             )
         )
-    return _structural_evidence(case, "import_cycle", findings, "import graph is acyclic", {"graph": graph})
+    return _structural_evidence(
+        case, "import_cycle", findings, "import graph is acyclic", {"graph": graph}
+    )
 
 
-def detect_untyped_dict_boundary(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
+def detect_untyped_dict_boundary(
+    case: dict[str, Any], fixture_path: Path
+) -> DetectorEvidence:
     findings: list[ReviewFinding] = []
     for path in _python_files(fixture_path / "src"):
         if path.stem.startswith("_") and path.name != "__init__.py":
@@ -183,16 +253,31 @@ def detect_untyped_dict_boundary(case: dict[str, Any], fixture_path: Path) -> De
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in tree.body:
             if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
-                if _is_raw_dict_annotation(node.returns) or any(_is_raw_dict_annotation(arg.annotation) for arg in node.args.args):
-                    findings.append(_finding(case, "untyped_public_dict", "P2", "untyped_public_boundary", path, node.name))
-    return _structural_evidence(case, "untyped_public_dict", findings, "public API avoids raw dict boundaries")
+                if _is_raw_dict_annotation(node.returns) or any(
+                    _is_raw_dict_annotation(arg.annotation) for arg in node.args.args
+                ):
+                    findings.append(
+                        _finding(
+                            case,
+                            "untyped_public_dict",
+                            "P2",
+                            "untyped_public_boundary",
+                            path,
+                            node.name,
+                        )
+                    )
+    return _structural_evidence(
+        case, "untyped_public_dict", findings, "public API avoids raw dict boundaries"
+    )
 
 
 def detect_gate_scope(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
     data = _read_json(fixture_path / "governance_gates.json")
     gates = data["gates"]
     required_files = sorted(set(data["changed_files"] + data["high_risk_files"]))
-    uncovered = [path for path in required_files if not _covered_by_any_gate(path, gates)]
+    uncovered = [
+        path for path in required_files if not _covered_by_any_gate(path, gates)
+    ]
     findings = [
         ReviewFinding(
             id=f"{case['id']}-gate_scope-{index:03d}",
@@ -203,8 +288,18 @@ def detect_gate_scope(case: dict[str, Any], fixture_path: Path) -> DetectorEvide
         )
         for index, path in enumerate(uncovered, start=1)
     ]
-    observed = {"required_files": required_files, "uncovered_files": uncovered, "gates": gates}
-    return _structural_evidence(case, "gate_scope", findings, "all changed and high-risk files covered by gates", observed)
+    observed = {
+        "required_files": required_files,
+        "uncovered_files": uncovered,
+        "gates": gates,
+    }
+    return _structural_evidence(
+        case,
+        "gate_scope",
+        findings,
+        "all changed and high-risk files covered by gates",
+        observed,
+    )
 
 
 def detect_thresholds(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
@@ -228,10 +323,18 @@ def detect_thresholds(case: dict[str, Any], fixture_path: Path) -> DetectorEvide
         )
         for index, item in enumerate(weakened, start=1)
     ]
-    return _structural_evidence(case, "thresholds", findings, "validation thresholds not weakened", {"weakened": weakened})
+    return _structural_evidence(
+        case,
+        "thresholds",
+        findings,
+        "validation thresholds not weakened",
+        {"weakened": weakened},
+    )
 
 
-def detect_required_evidence(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
+def detect_required_evidence(
+    case: dict[str, Any], fixture_path: Path
+) -> DetectorEvidence:
     manifest = fixture_path / "required_evidence.json"
     if not manifest.exists():
         return DetectorEvidence(
@@ -262,7 +365,9 @@ def detect_required_evidence(case: dict[str, Any], fixture_path: Path) -> Detect
     )
 
 
-def detect_business_ambiguity(case: dict[str, Any], fixture_path: Path) -> DetectorEvidence:
+def detect_business_ambiguity(
+    case: dict[str, Any], fixture_path: Path
+) -> DetectorEvidence:
     data = _read_json(fixture_path / "business_question.json")
     if data.get("requires_owner_decision") is True:
         return DetectorEvidence(
@@ -303,8 +408,17 @@ def _structural_evidence(
     )
 
 
-def _finding(case: dict[str, Any], detector_id: str, severity: str, category: str, path: Path, detail: str) -> ReviewFinding:
-    digest = hashlib.sha256(f"{case['id']}|{detector_id}|{path.as_posix()}|{detail}".encode("utf-8")).hexdigest()[:12]
+def _finding(
+    case: dict[str, Any],
+    detector_id: str,
+    severity: str,
+    category: str,
+    path: Path,
+    detail: str,
+) -> ReviewFinding:
+    digest = hashlib.sha256(
+        f"{case['id']}|{detector_id}|{path.as_posix()}|{detail}".encode("utf-8")
+    ).hexdigest()[:12]
     return ReviewFinding(
         id=f"{case['id']}-{detector_id}-{digest}",
         severity=severity,
@@ -330,10 +444,17 @@ def _exported_private_names(tree: ast.AST) -> set[str]:
     exported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
-            if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+            if any(
+                isinstance(target, ast.Name) and target.id == "__all__"
+                for target in node.targets
+            ):
                 if isinstance(node.value, (ast.List, ast.Tuple)):
                     for item in node.value.elts:
-                        if isinstance(item, ast.Constant) and isinstance(item.value, str) and item.value.startswith("_"):
+                        if (
+                            isinstance(item, ast.Constant)
+                            and isinstance(item.value, str)
+                            and item.value.startswith("_")
+                        ):
                             exported.add(item.value)
     return exported
 
@@ -429,7 +550,10 @@ def _scope_match(path: str, pattern: str) -> bool:
             return path_index == len(path_parts)
         token = pattern_parts[pattern_index]
         if token == "**":
-            return any(match_parts(next_index, pattern_index + 1) for next_index in range(path_index, len(path_parts) + 1))
+            return any(
+                match_parts(next_index, pattern_index + 1)
+                for next_index in range(path_index, len(path_parts) + 1)
+            )
         if path_index >= len(path_parts):
             return False
         if not fnmatch.fnmatchcase(path_parts[path_index], token):

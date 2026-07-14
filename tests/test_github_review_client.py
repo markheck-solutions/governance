@@ -280,7 +280,9 @@ class GitHubReviewPaginationTests(unittest.TestCase):
         payload = _connection("reviewThreads", [thread], has_next=False)
 
         with mock.patch.object(client, "_gh_graphql", return_value=payload):
-            with self.assertRaisesRegex(GitHubReviewTransportError, "at least one comment"):
+            with self.assertRaisesRegex(
+                GitHubReviewTransportError, "at least one comment"
+            ):
                 client._load_review_threads("example", "repo", 7)
 
     def test_shared_byte_and_elapsed_budgets_fail_closed(self) -> None:

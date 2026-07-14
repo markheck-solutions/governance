@@ -18,7 +18,11 @@ from governance_eval.models import Decision, Label
 from governance_eval.paths import repo_root
 from governance_eval.schemas import validate_named
 from governance_eval.schema_validator import SchemaValidationError
-from governance_eval.target_pack import dependency_lock_hash, schema_hashes, target_pack_hash
+from governance_eval.target_pack import (
+    dependency_lock_hash,
+    schema_hashes,
+    target_pack_hash,
+)
 
 
 BENCHMARK_PASS = "BENCHMARK_PASS"
@@ -70,7 +74,9 @@ def run_benchmark(
         "generated_at": run_id,
         "governance_repository_url": GOVERNANCE_REPOSITORY_URL,
         "governance_evaluator_git_sha": _git_sha(resolved_root),
-        "governance_target_pack_hash": target_pack_hash(resolved_root / DEFAULT_TARGET_PACK),
+        "governance_target_pack_hash": target_pack_hash(
+            resolved_root / DEFAULT_TARGET_PACK
+        ),
         "schema_hashes": schema_hashes(resolved_root),
         "dependency_lock_hash": dependency_lock_hash(resolved_root),
         "target_repository_url": target_lock.get("repository_url"),
@@ -79,7 +85,8 @@ def run_benchmark(
         "target_head_sha": target_lock.get("head_sha"),
         "target_merge_sha": target_lock.get("merge_commit_sha"),
         "revision_mode": "HISTORICAL_FIXED",
-        "exact_commands": exact_commands or _exact_commands("benchmark", repeat, artifacts_dir),
+        "exact_commands": exact_commands
+        or _exact_commands("benchmark", repeat, artifacts_dir),
         "operating_system": platform.platform(),
         "runner_os": os.environ.get("RUNNER_OS", platform.system()),
         "python_version": platform.python_version(),
@@ -97,29 +104,53 @@ def run_benchmark(
         "cases": case_results,
         "artifact_content_hash": "",
     }
-    output["deterministic_evidence_hash"] = sha256_json(_stable_benchmark_payload(output))
-    output["artifact_content_hash"] = sha256_json({**output, "artifact_content_hash": ""})
+    output["deterministic_evidence_hash"] = sha256_json(
+        _stable_benchmark_payload(output)
+    )
+    output["artifact_content_hash"] = sha256_json(
+        {**output, "artifact_content_hash": ""}
+    )
     validate_benchmark_result(output, resolved_root)
     if artifacts_dir is not None:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        artifact_path = artifacts_dir / f"governance-benchmark-{run_id.replace(':', '').replace('-', '')}.json"
-        artifact_path.write_text(json.dumps(output, indent=2, sort_keys=True), encoding="utf-8")
+        artifact_path = (
+            artifacts_dir
+            / f"governance-benchmark-{run_id.replace(':', '').replace('-', '')}.json"
+        )
+        artifact_path.write_text(
+            json.dumps(output, indent=2, sort_keys=True), encoding="utf-8"
+        )
         latest = artifacts_dir / "governance-benchmark-latest.json"
-        latest.write_text(json.dumps(output, indent=2, sort_keys=True), encoding="utf-8")
+        latest.write_text(
+            json.dumps(output, indent=2, sort_keys=True), encoding="utf-8"
+        )
         output["artifact_path"] = str(artifact_path)
     return output
+
 
 def validate_benchmark_result(result: dict[str, Any], root: Path | None = None) -> None:
     resolved_root = repo_root(root)
     validate_named("benchmark_run_result", result, resolved_root)
     target_lock = result["target_lock"]
-    required_lock_fields = {"base_sha", "head_sha", "merge_commit_sha", "approved_oracle_sha", "observed_main_sha"}
+    required_lock_fields = {
+        "base_sha",
+        "head_sha",
+        "merge_commit_sha",
+        "approved_oracle_sha",
+        "observed_main_sha",
+    }
     missing_lock_fields = sorted(required_lock_fields - set(target_lock))
     if missing_lock_fields:
-        raise SchemaValidationError(f"target_lock missing fields: {missing_lock_fields}")
+        raise SchemaValidationError(
+            f"target_lock missing fields: {missing_lock_fields}"
+        )
     for key in required_lock_fields:
         value = target_lock[key]
-        if not (isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)):
+        if not (
+            isinstance(value, str)
+            and len(value) == 40
+            and all(char in "0123456789abcdef" for char in value)
+        ):
             raise SchemaValidationError(f"target_lock.{key}: expected full SHA")
     top_level_shas = {
         "governance_evaluator_git_sha": result["governance_evaluator_git_sha"],
@@ -128,18 +159,28 @@ def validate_benchmark_result(result: dict[str, Any], root: Path | None = None) 
         "target_merge_sha": result["target_merge_sha"],
     }
     for key, value in top_level_shas.items():
-        if not (isinstance(value, str) and len(value) == 40 and all(char in "0123456789abcdef" for char in value)):
+        if not (
+            isinstance(value, str)
+            and len(value) == 40
+            and all(char in "0123456789abcdef" for char in value)
+        ):
             raise SchemaValidationError(f"{key}: expected full SHA")
     if result["target_repository_url"] != target_lock["repository_url"]:
-        raise SchemaValidationError("target_repository_url must match target_lock.repository_url")
+        raise SchemaValidationError(
+            "target_repository_url must match target_lock.repository_url"
+        )
     if result["target_pr_number"] != target_lock["pull_request"]:
-        raise SchemaValidationError("target_pr_number must match target_lock.pull_request")
+        raise SchemaValidationError(
+            "target_pr_number must match target_lock.pull_request"
+        )
     if result["target_base_sha"] != target_lock["base_sha"]:
         raise SchemaValidationError("target_base_sha must match target_lock.base_sha")
     if result["target_head_sha"] != target_lock["head_sha"]:
         raise SchemaValidationError("target_head_sha must match target_lock.head_sha")
     if result["target_merge_sha"] != target_lock["merge_commit_sha"]:
-        raise SchemaValidationError("target_merge_sha must match target_lock.merge_commit_sha")
+        raise SchemaValidationError(
+            "target_merge_sha must match target_lock.merge_commit_sha"
+        )
     for item in result["cases"]:
         validate_named("final_decision", item["decision"], resolved_root)
         for evidence in item["evidence"]:
@@ -165,14 +206,20 @@ def _case_result(item: dict[str, Any]) -> dict[str, Any]:
 def _metrics(repetitions: list[list[dict[str, Any]]]) -> dict[str, Any]:
     first = repetitions[0]
     historical_critical = [
-        item for item in first if item["case"]["critical"] and item["case"]["label"] == Label.REPRODUCED_BAD.value
+        item
+        for item in first
+        if item["case"]["critical"]
+        and item["case"]["label"] == Label.REPRODUCED_BAD.value
     ]
     synthetic_defects = [
         item
         for item in first
-        if item["case"]["category"] == "synthetic_structural" and item["case"]["label"] == Label.REPRODUCED_BAD.value
+        if item["case"]["category"] == "synthetic_structural"
+        and item["case"]["label"] == Label.REPRODUCED_BAD.value
     ]
-    verified_safe = [item for item in first if item["case"]["label"] == Label.VERIFIED_SAFE.value]
+    verified_safe = [
+        item for item in first if item["case"]["label"] == Label.VERIFIED_SAFE.value
+    ]
 
     stable_cases = 0
     flaking_cases = 0
@@ -180,7 +227,9 @@ def _metrics(repetitions: list[list[dict[str, Any]]]) -> dict[str, Any]:
         decisions = [run[index]["decision"]["decision"] for run in repetitions]
         if len(set(decisions)) == 1:
             stable_cases += 1
-        evidence_signatures = [_evidence_signature(run[index]["evidence"]) for run in repetitions]
+        evidence_signatures = [
+            _evidence_signature(run[index]["evidence"]) for run in repetitions
+        ]
         if len(set(evidence_signatures)) != 1:
             flaking_cases += 1
         else:
@@ -214,7 +263,11 @@ def _blocked_rate(items: list[dict[str, Any]]) -> float:
 
 
 def _blocked_count(items: list[dict[str, Any]]) -> int:
-    return sum(1 for item in items if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value)
+    return sum(
+        1
+        for item in items
+        if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value
+    )
 
 
 def _false_block_rate(items: list[dict[str, Any]]) -> float:
@@ -224,10 +277,18 @@ def _false_block_rate(items: list[dict[str, Any]]) -> float:
 
 
 def _false_block_count(items: list[dict[str, Any]]) -> int:
-    return sum(1 for item in items if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value)
+    return sum(
+        1
+        for item in items
+        if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value
+    )
 
 
-def _acceptance_errors(case_results: list[dict[str, Any]], metrics: dict[str, Any], lock_problems: list[str]) -> list[str]:
+def _acceptance_errors(
+    case_results: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    lock_problems: list[str],
+) -> list[str]:
     errors = list(lock_problems)
     for result in case_results:
         actual = result["decision"]["decision"]
@@ -253,7 +314,9 @@ def _acceptance_errors(case_results: list[dict[str, Any]], metrics: dict[str, An
 def _exact_commands(command: str, repeat: int, artifacts_dir: Path | None) -> list[str]:
     if artifacts_dir is None:
         return [f"python -m governance_eval {command} --repeat {repeat}"]
-    return [f"python -m governance_eval {command} --repeat {repeat} --artifacts-dir {artifacts_dir.as_posix()}"]
+    return [
+        f"python -m governance_eval {command} --repeat {repeat} --artifacts-dir {artifacts_dir.as_posix()}"
+    ]
 
 
 def _stable_benchmark_payload(result: dict[str, Any]) -> dict[str, Any]:
@@ -274,6 +337,8 @@ def _stable_benchmark_payload(result: dict[str, Any]) -> dict[str, Any]:
 
 def _git_sha(root: Path) -> str:
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
     except Exception:
         return "UNKNOWN"

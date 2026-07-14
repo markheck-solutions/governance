@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -594,6 +595,84 @@ class SupportabilityGateTests(unittest.TestCase):
             )
             self.assertTrue(
                 all(command["status"] == "SKIPPED" for command in result["commands"])
+            )
+
+    def test_protected_delivery_chain_accepts_current_remote_pinned_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow_dir = repo / ".github/workflows"
+            workflow_dir.mkdir(parents=True)
+            source = self.root / ".github/workflows/supportability-enforcement.yml"
+            target = workflow_dir / "supportability-enforcement.yml"
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+            errors = supportability_module._protected_delivery_chain_errors(repo)
+
+            self.assertEqual(errors, [])
+
+    def test_protected_delivery_chain_rejects_floating_candidate_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow_dir = repo / ".github/workflows"
+            workflow_dir.mkdir(parents=True)
+            source = self.root / ".github/workflows/supportability-enforcement.yml"
+            text = source.read_text(encoding="utf-8")
+            candidate_pins = list(
+                re.finditer(
+                    r"uses: markheck-solutions/governance/\.github/workflows/"
+                    r"supportability-gate\.yml@([0-9a-f]{40})",
+                    text,
+                )
+            )
+            self.assertEqual(len(candidate_pins), 2)
+            pin = candidate_pins[1]
+            text = text[: pin.start(1)] + "main" + text[pin.end(1) :]
+            (workflow_dir / "supportability-enforcement.yml").write_text(
+                text, encoding="utf-8"
+            )
+
+            errors = supportability_module._protected_delivery_chain_errors(repo)
+
+            self.assertIn(
+                "protected candidate-supportability workflow must use exact "
+                "supportability-gate.yml at a full immutable SHA",
+                errors,
+            )
+
+    def test_protected_pin_rotation_requires_matching_governance_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow_dir = repo / ".github/workflows"
+            workflow_dir.mkdir(parents=True)
+            source = self.root / ".github/workflows/supportability-enforcement.yml"
+            current = source.read_text(encoding="utf-8")
+            current_pins = re.findall(
+                r"(?:@|governance-ref:\s+)([0-9a-f]{40})", current
+            )
+            self.assertEqual(len(current_pins), 6)
+            self.assertEqual(len(set(current_pins)), 1)
+            head = current.replace(current_pins[0], "2" * 40)
+            self.assertEqual(head.count("2" * 40), 6)
+            (workflow_dir / "supportability-enforcement.yml").write_text(
+                head.replace(
+                    "governance-ref: " + "2" * 40, "governance-ref: " + "3" * 40, 1
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch(
+                "governance_eval.supportability._git_show_text",
+                return_value=current,
+            ):
+                errors = supportability_module._protected_enforcement_change_errors(
+                    repo,
+                    "2" * 40,
+                    ".github/workflows/supportability-enforcement.yml",
+                )
+
+            self.assertIn(
+                "protected enforcement workflow pins must equal trusted base SHA",
+                errors,
             )
 
     def test_gate_blocks_existing_copilot_review_evidence_checker_change(self) -> None:
