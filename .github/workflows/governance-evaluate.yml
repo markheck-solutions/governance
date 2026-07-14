@@ -41,7 +41,7 @@ jobs:
   evaluate:
     name: Non-blocking target shadow evaluation
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       TARGET_REPOSITORY_URL: ${{ inputs.target-repository-url }}
       TARGET_BASE_SHA: ${{ inputs.target-base-sha }}
@@ -116,7 +116,7 @@ jobs:
             --merge-sha "$TARGET_MERGE_SHA" \
             --revision-mode "$REVISION_MODE"
       - name: Run target evaluation
-        timeout-minutes: 15
+        timeout-minutes: 10
         shell: bash
         run: |
           cd governance

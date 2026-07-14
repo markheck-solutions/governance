@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "decision", "repository_url", "protection_url", "rulesets_url", "actor", "started_at", "completed_at", "expires_at", "candidate_sha", "pull_request_number", "pr_head_before_merge", "merge_sha", "rollback_sha", "resource_etags", "mutation_events", "evidence_digests", "checks", "errors", "content_hash"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "decision": {"type": "string", "enum": ["PASS", "BLOCK_TECHNICAL"]},
+    "repository_url": {"type": "string", "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "protection_url": {"type": "string", "pattern": "^https://api\\.github\\.com/repos/.+/branches/main/protection$"},
+    "rulesets_url": {"type": "string", "pattern": "^https://api\\.github\\.com/repos/.+/rulesets$"},
+    "actor": {"type": "string", "minLength": 1},
+    "started_at": {"type": "string", "pattern": "Z$"},
+    "completed_at": {"type": "string", "pattern": "Z$"},
+    "expires_at": {"type": "string", "pattern": "Z$"},
+    "candidate_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "pull_request_number": {"type": "integer", "minimum": 1},
+    "pr_head_before_merge": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "merge_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "rollback_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "resource_etags": {"type": "object", "additionalProperties": false, "required": ["pre_protection", "post_protection", "pre_rulesets", "post_rulesets"], "properties": {"pre_protection": {"type": ["string", "null"]}, "post_protection": {"type": ["string", "null"]}, "pre_rulesets": {"type": ["string", "null"]}, "post_rulesets": {"type": ["string", "null"]}}},
+    "mutation_events": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["action", "server_timestamp", "resource_url", "request_sha256", "response_sha256"], "properties": {"action": {"type": "string"}, "server_timestamp": {"type": "string"}, "resource_url": {"type": "string"}, "request_sha256": {"type": "string"}, "response_sha256": {"type": "string"}}}},
+    "evidence_digests": {"type": "object", "additionalProperties": false, "required": ["pre_protection_sha256", "post_protection_sha256", "pre_rulesets_sha256", "post_rulesets_sha256"], "properties": {"pre_protection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "post_protection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "pre_rulesets_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "post_rulesets_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "checks": {"type": "object", "additionalProperties": false, "required": ["candidate_matches_pr_head", "protection_restored", "rulesets_restored", "completed_before_expiry", "resource_urls_bound", "resource_etags_valid"], "properties": {"candidate_matches_pr_head": {"type": "boolean"}, "protection_restored": {"type": "boolean"}, "rulesets_restored": {"type": "boolean"}, "completed_before_expiry": {"type": "boolean"}, "resource_urls_bound": {"type": "boolean"}, "resource_etags_valid": {"type": "boolean"}}},
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

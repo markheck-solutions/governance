@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://markheck-solutions.github.io/governance/schemas/v1/codex_connector_snapshot.schema.json",
+  "title": "Codex Connector Review Snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "collection_complete", "repository", "pull_request", "issue_comments", "pull_request_reviews", "review_comments"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "collection_complete": {"type": "boolean", "enum": [true]},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "full_name"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}
+      }
+    },
+    "pull_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "state", "draft", "base_sha", "head_sha"],
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "state": {"type": "string", "enum": ["open", "closed"]},
+        "draft": {"type": "boolean"},
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "issue_comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "created_at", "body", "user", "performed_via_github_app"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1},
+          "created_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+          "body": {"type": "string", "maxLength": 65536},
+          "user": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["login", "id", "node_id", "type"],
+            "properties": {
+              "login": {"type": "string", "minLength": 1, "maxLength": 160},
+              "id": {"type": "integer", "minimum": 1},
+              "node_id": {"type": "string", "minLength": 1, "maxLength": 160},
+              "type": {"type": "string", "minLength": 1, "maxLength": 40}
+            }
+          },
+          "performed_via_github_app": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["id", "node_id", "slug"],
+            "properties": {
+              "id": {"type": "integer", "minimum": 1},
+              "node_id": {"type": "string", "minLength": 1, "maxLength": 160},
+              "slug": {"type": "string", "minLength": 1, "maxLength": 160}
+            }
+          }
+        }
+      }
+    },
+    "pull_request_reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "submitted_at", "state", "commit_id", "body", "user"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1},
+          "submitted_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+          "state": {"type": "string", "enum": ["COMMENTED", "CHANGES_REQUESTED", "DISMISSED", "APPROVED"]},
+          "commit_id": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "body": {"type": "string", "maxLength": 65536},
+          "user": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["login", "id", "node_id", "type"],
+            "properties": {
+              "login": {"type": "string", "minLength": 1, "maxLength": 160},
+              "id": {"type": "integer", "minimum": 1},
+              "node_id": {"type": "string", "minLength": 1, "maxLength": 160},
+              "type": {"type": "string", "minLength": 1, "maxLength": 40}
+            }
+          }
+        }
+      }
+    },
+    "review_comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "pull_request_review_id", "created_at", "commit_id", "original_commit_id", "path", "line", "body", "user"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1},
+          "pull_request_review_id": {"type": "integer", "minimum": 1},
+          "created_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+          "commit_id": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "original_commit_id": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+          "line": {"type": ["integer", "null"], "minimum": 1},
+          "body": {"type": "string", "maxLength": 65536},
+          "user": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["login", "id", "node_id", "type"],
+            "properties": {
+              "login": {"type": "string", "minLength": 1, "maxLength": 160},
+              "id": {"type": "integer", "minimum": 1},
+              "node_id": {"type": "string", "minLength": 1, "maxLength": 160},
+              "type": {"type": "string", "minLength": 1, "maxLength": 40}
+            }
+          }
+        }
+      }
+    }
+  }
+}

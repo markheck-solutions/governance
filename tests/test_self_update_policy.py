@@ -16,9 +16,6 @@ class SelfUpdatePolicyTests(unittest.TestCase):
         head = copy.deepcopy(base)
         for index, gate in enumerate(supportability.REQUIRED_COMMAND_GATES, start=1):
             head["required_gates"][gate] = [f'python -c "pass # {index}"']
-        head["ai_review"]["reviewer_login_patterns"] = [
-            "copilot-pull-request-reviewer[bot]"
-        ]
 
         errors = supportability._supportability_config_weakening_errors(base, head)
 
@@ -35,9 +32,6 @@ class SelfUpdatePolicyTests(unittest.TestCase):
             with self.subTest(suffix=suffix):
                 head = copy.deepcopy(base)
                 head["required_gates"].update(_semantic_gate_commands(suffix))
-                head["ai_review"]["reviewer_login_patterns"] = [
-                    "copilot-pull-request-reviewer[bot]"
-                ]
 
                 errors = supportability._supportability_config_weakening_errors(
                     base, head
@@ -52,9 +46,6 @@ class SelfUpdatePolicyTests(unittest.TestCase):
         for gate in commands:
             commands[gate][0] += " --collect-only" if gate == "tests" else " --help"
         head["required_gates"].update(commands)
-        head["ai_review"]["reviewer_login_patterns"] = [
-            "copilot-pull-request-reviewer[bot]"
-        ]
 
         errors = supportability._supportability_config_weakening_errors(base, head)
 
@@ -191,10 +182,11 @@ def _config() -> dict[str, Any]:
             "forbid_threshold_weakening": True,
         },
         "ai_review": {
-            "copilot_required": True,
-            "latest_head_required": True,
+            "provider": "codex_connector",
+            "adapter": "codex_connector_pr_signal_v2",
+            "review_window_seconds": 300,
+            "unavailable_after_cutoff": "non_blocking",
             "unresolved_p0_p1_p2_blocks": True,
-            "reviewer_login_patterns": ["*copilot*"],
         },
         "receipt": {"artifact_name": "receipt", "retention_days": 90},
     }

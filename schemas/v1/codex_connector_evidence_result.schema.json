@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://markheck-solutions.github.io/governance/schemas/v1/codex_connector_evidence_result.schema.json",
+  "title": "Codex Connector Evidence Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "capability", "adapter_id", "repository", "pull_request", "governance_evaluator_sha", "review_window_started_at", "review_deadline_at", "snapshot_file_sha256", "normalized_snapshot_sha256", "resolved_clean_commit_sha", "connector_identity", "capability_status", "reviewed_head_sha", "response", "reasons", "result_content_hash"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "capability": {"type": "string", "enum": ["CODEX_CONNECTOR_REVIEW_EVIDENCE"]},
+    "adapter_id": {"type": "string", "enum": ["codex_connector_issue_comment_v1"]},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "full_name"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}
+      }
+    },
+    "pull_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "base_sha", "head_sha"],
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "governance_evaluator_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "review_window_started_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+    "review_deadline_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+    "snapshot_file_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "normalized_snapshot_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "resolved_clean_commit_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "connector_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["login", "user_id", "user_node_id", "user_type", "app_id", "app_node_id", "app_slug"],
+      "properties": {
+        "login": {"type": "string", "enum": ["chatgpt-codex-connector[bot]"]},
+        "user_id": {"type": "integer", "enum": [199175422]},
+        "user_node_id": {"type": "string", "enum": ["BOT_kgDOC98s_g"]},
+        "user_type": {"type": "string", "enum": ["Bot"]},
+        "app_id": {"type": "integer", "enum": [1144995]},
+        "app_node_id": {"type": "string", "enum": ["A_kwHOAOQ6Gs4AEXij"]},
+        "app_slug": {"type": "string", "enum": ["chatgpt-codex-connector"]}
+      }
+    },
+    "capability_status": {"type": "string", "enum": ["PASS", "BLOCK_TECHNICAL"]},
+    "reviewed_head_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "response": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["response_type", "response_id", "created_at", "body_sha256"],
+      "properties": {
+        "response_type": {"type": "string", "enum": ["issue_comment", "pull_request_review"]},
+        "response_id": {"type": "integer", "minimum": 1},
+        "created_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+        "body_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "reasons": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"}
+    },
+    "result_content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -5,6 +5,8 @@ import re
 from datetime import datetime
 from typing import Any, Callable
 
+from governance_eval.ai_review_failures import is_ai_review_service_failure
+
 
 STRUCTURED_REVIEW_MARKER = "governance-review-evidence:v1"
 STRUCTURED_REVIEW_SCHEMA_VERSION = "governance-review-evidence.v1"
@@ -22,9 +24,7 @@ NATIVE_REVIEW_STATES = {
     "PENDING",
 }
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
-GITHUB_DATETIME_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
-)
+GITHUB_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 NATIVE_COPILOT_REVIEWER = "copilot-pull-request-reviewer"
 NATIVE_COPILOT_REVIEWER_ALIASES = {
     NATIVE_COPILOT_REVIEWER,
@@ -45,10 +45,13 @@ AuthorMatcher = Callable[[Any, list[str]], bool]
 
 def evaluate_review_evidence(payload: Any, head_sha: str) -> dict[str, Any]:
     source: dict[str, Any] = payload if isinstance(payload, dict) else {}
-    errors = [] if isinstance(payload, dict) else ["review payload must be a JSON object"]
+    errors = (
+        [] if isinstance(payload, dict) else ["review payload must be a JSON object"]
+    )
     errors.extend(_evidence_shape_errors(source))
     normalized = _normalized_payload(source)
     errors.extend(_head_binding_errors(normalized, head_sha))
+    errors.extend(_native_review_service_failure_errors(normalized, head_sha))
     errors.extend(
         structured_review_errors(
             normalized,
@@ -116,8 +119,12 @@ def _evidence_shape_errors(payload: dict[str, Any]) -> list[str]:
             continue
         if not isinstance(comment.get("isMinimized"), bool):
             errors.append("structured Copilot comment isMinimized must be boolean")
-        if not isinstance(comment.get("createdAt"), str) or not comment.get("createdAt"):
-            errors.append("structured Copilot comment createdAt must be a non-empty string")
+        if not isinstance(comment.get("createdAt"), str) or not comment.get(
+            "createdAt"
+        ):
+            errors.append(
+                "structured Copilot comment createdAt must be a non-empty string"
+            )
         if not isinstance(comment.get("body"), str):
             errors.append("structured Copilot comment body must be a string")
     for thread in _payload_objects(payload, "reviewThreads"):
@@ -133,7 +140,9 @@ def _native_review_shape_errors(review: dict[str, Any]) -> list[str]:
         errors.append("native Copilot review submittedAt must be a GitHub UTC DateTime")
     commit_oid = _review_commit_oid(review)
     if not isinstance(commit_oid, str) or not SHA1_RE.fullmatch(commit_oid):
-        errors.append("native Copilot review commitOid must be a full lowercase Git SHA")
+        errors.append(
+            "native Copilot review commitOid must be a full lowercase Git SHA"
+        )
     if not isinstance(review.get("body"), str):
         errors.append("native Copilot review body must be a string")
     return errors
@@ -147,8 +156,10 @@ def _review_thread_shape_errors(thread: dict[str, Any]) -> list[str]:
     if not isinstance(path, str) or not path.strip():
         errors.append("review thread path must be a non-empty string")
     authors = thread.get("authors")
-    if not isinstance(authors, list) or not authors or not all(
-        isinstance(author, str) and author.strip() for author in authors
+    if (
+        not isinstance(authors, list)
+        or not authors
+        or not all(isinstance(author, str) and author.strip() for author in authors)
     ):
         errors.append("review thread authors must contain non-empty strings")
     return errors
@@ -501,9 +512,18 @@ def _structured_review_finding_errors(open_findings: list[Any]) -> list[str]:
 def _normalized_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         **payload,
-        "reviews": [_normalized_review(review) for review in _payload_objects(payload, "reviews")],
-        "comments": [_normalized_comment(comment) for comment in _payload_objects(payload, "comments")],
-        "reviewThreads": [_normalized_thread(thread) for thread in _payload_objects(payload, "reviewThreads")],
+        "reviews": [
+            _normalized_review(review)
+            for review in _payload_objects(payload, "reviews")
+        ],
+        "comments": [
+            _normalized_comment(comment)
+            for comment in _payload_objects(payload, "comments")
+        ],
+        "reviewThreads": [
+            _normalized_thread(thread)
+            for thread in _payload_objects(payload, "reviewThreads")
+        ],
     }
 
 
@@ -523,6 +543,7 @@ def _normalized_review(review: dict[str, Any]) -> dict[str, Any]:
         "commitOid": _review_commit_oid(review),
         "author": canonical_ai_author(author.get("login") or review.get("author")),
         "body": _normalized_body(review.get("body")),
+        "failureBody": str(review.get("body") or ""),
     }
 
 
@@ -532,6 +553,7 @@ def _normalized_comment(comment: dict[str, Any]) -> dict[str, Any]:
     return {
         "author": canonical_ai_author(author.get("login") or comment.get("author")),
         "body": _normalized_body(comment.get("body")),
+        "failureBody": str(comment.get("body") or ""),
         "createdAt": comment.get("createdAt"),
         "isMinimized": comment.get("isMinimized"),
     }
@@ -601,8 +623,40 @@ def _latest_clean_native_review(
         and review.get("state") == "COMMENTED"
         and review.get("commitOid") == head_sha
         and _is_github_datetime(review.get("submittedAt"))
+        and not _native_review_service_failure(review)
     ]
     return max(clean, key=lambda item: item.get("submittedAt") or "") if clean else None
+
+
+def _native_review_service_failure_errors(
+    payload: dict[str, Any], head_sha: str
+) -> list[str]:
+    review_failures = [
+        review
+        for review in payload.get("reviews", [])
+        if native_review_author_matches(review.get("author"))
+        and (
+            review.get("commitOid") == head_sha
+            or not isinstance(review.get("commitOid"), str)
+            or not SHA1_RE.fullmatch(review["commitOid"])
+        )
+        and _native_review_service_failure(review)
+    ]
+    comment_failures = [
+        comment
+        for comment in payload.get("comments", [])
+        if structured_comment_author_matches(comment.get("author"), [])
+        and is_ai_review_service_failure(comment.get("failureBody"))
+    ]
+    return (
+        ["AI review service failure is present for latest head SHA"]
+        if review_failures or comment_failures
+        else []
+    )
+
+
+def _native_review_service_failure(review: dict[str, Any]) -> bool:
+    return is_ai_review_service_failure(review.get("failureBody"))
 
 
 def _blocking_review_errors(

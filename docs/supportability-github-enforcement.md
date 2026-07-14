@@ -1,352 +1,60 @@
-# GitHub-Enforced Supportability Governance
+# GitHub supportability enforcement
 
-This repo provides reusable GitHub workflows and Python validators that convert the Supportability Standard into objective GitHub evidence.
+This repository provides repo-agnostic, reusable GitHub Actions. Application repositories supply a typed supportability configuration and pin reusable workflows to an exact Governance commit SHA.
 
-The owner-facing rule is simple:
+## Merge decision
 
-```text
-GREEN: required gates passed, Copilot reviewed the latest head, no unresolved P0-P2 findings, and GitHub evidence can be verified.
-RED: any required gate, review, artifact, SHA, or remote proof is missing or failed.
-YELLOW: reserved for future non-blocking advisory receipts; current enforcement fails closed to RED.
-```
+GREEN requires:
 
-## Target Repo Opt-In
+- configured deterministic gates pass;
+- architecture implementation and behavior proof pass;
+- the Codex connector evidence snapshot is complete, fully paginated, exact-head bound, and collected after the five-minute review window;
+- every in-window Codex P0-P2 finding is resolved;
+- the delivery receipt binds the PR head, workflow run, and uploaded evidence artifact.
 
-Each target repo must add `.github/governance/supportability.yml` and copy the standard text into the path named by `standard.source`.
+Codex is evidence, not approval. A valid post-cutoff reconciliation with no exact-head Codex response records `AI_REVIEW_UNAVAILABLE` and does not block. Missing, malformed, incomplete, stale, or digest-invalid collection evidence is RED. Copilot is not a required reviewer, gate, receipt input, or dependency.
 
-The `standard.hash` value must be the SHA-256 of the adopted standard file. The workflow fails closed if the file is missing or the hash does not match.
+## Target configuration
 
 ```yaml
-standard:
-  name: supportability-standard
-  source: docs/reference/supportability-standard.md
-  hash: "<sha256 of adopted standard text>"
-
-required_gates:
-  lint:
-    - "..."
-  format_check:
-    - "..."
-  typecheck:
-    - "..."
-  complexity:
-    - "..."
-  architecture:
-    - "..."
-  tests:
-    - "..."
-  compile_or_build:
-    - "..."
-  package_audit: []
-  sql_supportability: auto
-
-coverage:
-  changed_files: required
-  high_risk_files: required
-  forbid_gate_scope_narrowing: true
-  forbid_threshold_weakening: true
-
 ai_review:
-  copilot_required: true
-  latest_head_required: true
+  provider: codex_connector
+  adapter: codex_connector_pr_signal_v2
+  review_window_seconds: 300
+  unavailable_after_cutoff: non_blocking
   unresolved_p0_p1_p2_blocks: true
-  reviewer_login_patterns:
-    - "*copilot*"
-    - "chatgpt-codex-connector*"
-
-receipt:
-  artifact_name: supportability-delivery-receipt
-  retention_days: 90
-
-architecture_policy:
-  version: 1
-  enforcement_mode: block_all
-  governed_roots:
-    - path: governance_eval
-      kind: production_python
-      owner: governance
-      purpose: executable governance evaluator
-  runtime_relevance:
-    production_globs:
-      - "**/*.py"
-      - "**/*.sql"
-    non_runtime_globs:
-      - "docs/**"
-      - "schemas/**"
-      - "artifacts/**"
-      - "**/*.md"
-      - "**/*.json"
-  vague_names:
-    forbidden:
-      - utils
-      - helpers
-      - common
-      - misc
-      - stuff
-      - shared
-  modules:
-    governance_eval:
-      path: governance_eval
-      owner: governance
-      purpose: evaluator runtime and CLI implementation
-      classification: application
-      domain: governance-evaluation
-      allowed_dependencies: []
-      forbidden_dependencies:
-        - tests
-      test_strategy: unittest coverage through tests/
-      limits:
-        max_file_lines: 700
-        max_function_lines: 120
-        max_class_lines: 240
-        max_functions_per_file: 45
-        max_classes_per_file: 12
-  known_debt: []
 ```
 
-If a repo contains SQL files and `sql_supportability` is `auto`, the gate returns RED until explicit SQL validation commands are configured.
+These values are fixed by schema. Target repositories cannot substitute reviewer identities, shorten the window, or turn blocking findings into advisory output.
 
-## Copilot Review Evidence
+## Event model
 
-Target repos should add `.github/copilot-instructions.md` so Copilot emits structured review evidence before the gate needs it.
+`supportability-enforcement.yml` uses `pull_request_target` so GitHub loads the caller from the protected base branch, not from candidate code. It runs only for pull-request head transitions:
 
-```markdown
-# Supportability Review Instructions
+- `opened`
+- `reopened`
+- `synchronize`
+- `ready_for_review`
 
-When reviewing pull requests in this repository, review against the adopted Supportability Standard.
+The workflow posts one `@codex review` request bound to the exact new head, then starts the evidence window. That bounded request job has `issues: write`; evaluator and receipt jobs remain read-only. Candidate code is checked out with `persist-credentials: false`, and configured commands receive an empty `GH_TOKEN`. There is no comment-triggered rerun loop and no `actions: write` permission. The protected baseline and delivery workflows are pinned to an exact publication commit; the candidate evaluator is separately exercised against the PR head. Each reusable workflow has a hard ten-minute timeout. The Codex collector performs at most one bounded sleep and one final recollection after the five-minute deadline.
 
-Use these severity labels exactly:
+## Required checks
 
-- `P0`: fake delivery, security or data-loss risk, wrong repository, wrong branch, wrong commit proof, forged or missing GitHub evidence.
-- `P1`: missing required gate, missing behavior proof, missing SQL gate, missing artifact, missing remote proof, stale review, or failed supportability receipt.
-- `P2`: supportability boundary, complexity, testability, architecture, or gate-coverage issue that should block merge until resolved.
-- `P3`: non-blocking cleanup, clarity, naming, or documentation improvement.
+Protect `main` with the existing four check contexts produced by the enforcement workflow. Do not rename or delete required contexts during bootstrap. Apply protection changes only through the controlled procedure in `TASK.md`.
 
-When the review is clean, end the response with this hidden evidence block using the exact reviewed head commit SHA:
+## Evidence artifacts
 
-<!-- governance-review-evidence:v1
-{"schema_version":"governance-review-evidence.v1","reviewed_commit_sha":"<HEAD_SHA>","verdict":"clean","open_findings":[]}
--->
+The supportability artifact contains:
 
-When the review is blocked, end with the same hidden evidence block using verdict `blocked` and list each open finding with `severity`, `title`, and `path`.
-```
+- `supportability-gate-result.json`
+- `architecture-gate-result.json`
+- `architecture-gate-result.md`
+- `codex-connector-snapshot.json`
+- `codex-connector-evidence-result.json`
+- `ai-review-gate-result.json`
 
-The reusable gate prefers the hidden evidence block. For old pinned adopters, the legacy `reviewed commit <sha>. No issues found.` style remains accepted as fallback evidence. The JSON artifact records `review_status.structured_evidence_present`, `review_status.structured_evidence_valid`, `review_status.reviewed_commit_sha`, `review_status.verdict`, `review_status.open_finding_count`, and `review_request.prompt`.
+The delivery workflow rejects missing artifacts, mismatched artifact digests, invalid nested status, claimed AI approval, and GitHub run or PR identity mismatches.
 
-Config changes are protected. A PR that weakens `.github/governance/supportability.yml` returns RED. Weakening includes changing away from `block_all`, removing governed roots, narrowing runtime production globs, broadening non-runtime globs, narrowing vague-name controls, broadening allowed dependencies, narrowing forbidden dependencies, increasing size limits, or adding/extending `known_debt`.
+## Adoption boundary
 
-The `receipt` block is validated as the target repo's declared contract. Reusable workflow inputs/defaults enforce the actual artifact names and 90-day retention during upload.
-
-The `architecture_policy` block is the repo-specific module/package boundary registry. The reusable workflow directly invokes `python -m governance_eval architecture-gate`; `required_gates.architecture` may add repo-specific checks, but it cannot replace the approved checker.
-
-Architecture enforcement is hard-stop only:
-
-- `block_all` is the only CI-valid mode.
-- `report_only` and `block_new` are rejected by schema/config validation.
-- `architecture_behavior_proof` is `PASS` only when positive, negative, and theater fixtures run and pass.
-- `known_debt` documents debt only. It does not suppress findings, lower violation count, or convert architecture supportability to GREEN.
-
-Architecture evidence is written as both `architecture-gate-result.json` and `architecture-gate-result.md`.
-
-## Protected Baseline State
-
-Protected baseline reusable workflows now exist on `main`. Missing proof is still RED: missing baseline artifact ID, missing baseline artifact digest, missing baseline evidence, missing candidate evidence, missing receipt verification, or failed receipt verification cannot produce GREEN.
-
-## Caller Workflow
-
-Target repos should pin the governance reusable workflow to an exact commit SHA, not to floating `main`.
-
-The governance repo also includes `.github/workflows/supportability-enforcement.yml` as its own caller. Governance PRs run two judges:
-
-- Baseline protected judge from an immutable known-good workflow ref, with `governance-ref` set to the PR base SHA. This must block merge.
-- Candidate judge from the PR head. This reports candidate behavior but cannot be the only authority.
-
-```yaml
-name: Governed PR
-
-on:
-  pull_request:
-  pull_request_review:
-    types:
-      - submitted
-      - edited
-  issue_comment:
-    types:
-      - created
-
-permissions:
-  actions: read
-  contents: read
-  pull-requests: read
-
-jobs:
-  rerun-supportability-on-evidence:
-    name: Rerun PR-head Supportability On Evidence
-    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'governance-review-evidence:v1') && github.event.comment.user.type == 'Bot' && (contains(github.event.comment.user.login, 'copilot') || startsWith(github.event.comment.user.login, 'chatgpt-codex-connector')) }}
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Rerun latest failed PR-head supportability
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-
-          MARKER = "governance-review-evidence:v1"
-
-          def gh_api(*args):
-              result = subprocess.run(["gh", "api", *args], check=True, text=True, capture_output=True)
-              return result.stdout
-
-          event = json.loads(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8").read())
-          issue = event.get("issue") if isinstance(event.get("issue"), dict) else {}
-          comment = event.get("comment") if isinstance(event.get("comment"), dict) else {}
-          body = str(comment.get("body") or "")
-          user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
-          author = str(user.get("login") or "").lower()
-          user_type = str(user.get("type") or "")
-          if not issue.get("pull_request") or MARKER not in body:
-              print("Comment is not structured PR review evidence; no rerun.")
-              raise SystemExit(0)
-          allowed_bot_author = (
-              "copilot" in author
-              or author.startswith("chatgpt-codex-connector")
-          )
-          if user_type != "Bot" or not allowed_bot_author:
-              print(f"Comment author {author!r} with type {user_type!r} is not an allowed AI reviewer bot; no rerun.")
-              raise SystemExit(0)
-
-          pr_number = int(issue.get("number") or 0)
-          if not pr_number:
-              print("PR number missing from issue_comment payload; no rerun.")
-              raise SystemExit(0)
-          pr = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/pulls/{pr_number}"))
-          base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
-          head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
-          if base.get("ref") != "main":
-              print("PR base is not main; no rerun.")
-              raise SystemExit(0)
-          head_sha = str(head.get("sha") or "")
-          if not head_sha:
-              raise SystemExit("PR head SHA missing; cannot rerun fail-closed gate.")
-
-          payload = json.loads(gh_api(f"repos/{os.environ['REPOSITORY']}/actions/workflows/supportability-enforcement.yml/runs?head_sha={head_sha}&per_page=100"))
-          runs = []
-          for run in payload.get("workflow_runs", []):
-              run_prs = run.get("pull_requests") if isinstance(run.get("pull_requests"), list) else []
-              run_matches_pr = any(int(run_pr.get("number") or 0) == pr_number for run_pr in run_prs)
-              if run.get("head_sha") == head_sha and run_matches_pr:
-                  runs.append(run)
-          if not runs:
-              print(f"No Supportability Enforcement run found for PR #{pr_number} at {head_sha}; no rerun.")
-              raise SystemExit(0)
-          def newest(items):
-              return sorted(items, key=lambda run: str(run.get("created_at") or ""), reverse=True)[0]
-
-          failed_runs = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "failure"]
-          if failed_runs:
-              run_id = newest(failed_runs)["id"]
-              gh_api("-X", "POST", f"repos/{os.environ['REPOSITORY']}/actions/runs/{run_id}/rerun-failed-jobs")
-              print(f"Requested failed-job rerun for PR-head supportability run {run_id}.")
-              raise SystemExit(0)
-
-          rerunnable_runs = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") != "success"]
-          if rerunnable_runs:
-              run_id = newest(rerunnable_runs)["id"]
-              gh_api("-X", "POST", f"repos/{os.environ['REPOSITORY']}/actions/runs/{run_id}/rerun")
-              print(f"Requested full rerun for PR-head supportability run {run_id}.")
-              raise SystemExit(0)
-
-          latest = newest(runs)
-          run_id = latest["id"]
-          status = latest.get("status")
-          if status != "completed":
-              print(f"Supportability run {run_id} is {status}; no rerun.")
-              raise SystemExit(0)
-          print(f"Supportability run {run_id} is already success; no rerun.")
-          PY
-
-  supportability:
-    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@<governance-commit-sha>
-    with:
-      target-repository: ${{ github.repository }}
-      target-repository-url: https://github.com/${{ github.repository }}.git
-      target-base-sha: ${{ github.event.pull_request.base.sha }}
-      target-head-sha: ${{ github.event.pull_request.head.sha }}
-      target-pr-number: ${{ github.event.pull_request.number }}
-      target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: <governance-commit-sha>
-
-  delivery-receipt:
-    needs: supportability
-    if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@<governance-commit-sha>
-    with:
-      target-repository: ${{ github.repository }}
-      target-repository-url: https://github.com/${{ github.repository }}.git
-      target-base-sha: ${{ github.event.pull_request.base.sha }}
-      target-head-sha: ${{ github.event.pull_request.head.sha }}
-      target-pr-number: ${{ github.event.pull_request.number }}
-      target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: <governance-commit-sha>
-      supportability-artifact-id: ${{ needs.supportability.outputs['artifact-id'] }}
-      supportability-artifact-digest: ${{ needs.supportability.outputs['artifact-digest'] }}
-```
-
-`issue_comment` is required because Copilot structured evidence is emitted as a PR comment. The comment-triggered job does not replace required checks and does not publish a separate required status. It only reruns the latest failed Supportability Enforcement run for the resolved PR head, so the required checks remain attached to the protected PR commit. The reusable gate still performs the deterministic author, SHA, verdict, and unresolved-finding checks.
-
-## Required Repository Rules
-
-The target repo ruleset should require:
-
-- Pull requests before merge to `main`.
-- Status check `Baseline Protected Supportability Gate`.
-- Status check `Baseline Protected Delivery Receipt`.
-- Branches up to date before merge.
-- Conversation resolution.
-- Auto-merge disabled until strict hard-stop checks are proven.
-- No bypass for AI or bot actors.
-
-Copilot review is required input to the receipt, not the only merge authority.
-
-## Rollout Canary
-
-After branch protection or required checks are changed, open a harmless documentation-only pull request against `main` before wider rollout.
-
-The canary proves:
-
-- Required checks attach to the pull request.
-- Baseline and candidate supportability evidence both run.
-- The delivery receipt consumes both evidence artifacts.
-- Failed or missing evidence stays RED.
-- Merge happens only through GitHub's protected pull request path.
-
-The canary does not weaken governance and does not create a bypass record.
-
-## What GitHub Enforces
-
-The workflows enforce objective proof:
-
-- Required commands exist and return success.
-- Required commands are not marked non-blocking.
-- Configured command strings do not contain known scope-narrowing or threshold-weakening markers.
-- Changed files and deterministic high-risk production files receive gate coverage.
-- The approved architecture checker runs directly and emits JSON plus Markdown evidence.
-- Workflow GREEN requires architecture owner status GREEN, gate implementation PASS, repo architecture supportability PASS, behavior proof PASS, no violations, no new violations, no known debt, no expired known debt, protected baseline judge evidence, candidate judge evidence, baseline and candidate receipts, and no errors.
-- Architecture policy covers runtime/production-relevant files with registered module ownership, allowed dependencies, forbidden dependencies, strict fingerprinted known debt records, and deterministic Python size/import checks. Known debt never forgives a violation.
-- The adopted standard file exists and matches the pinned hash.
-- Copilot or an allowed AI reviewer reviewed the latest head SHA.
-- Unresolved `P0`, `P1`, or `P2` AI review evidence blocks GREEN.
-- Artifacts are retained for 90 days.
-- Delivery receipts can be re-checked against GitHub PR, run, artifact, `git ls-remote`, and fresh-clone evidence.
-
-GitHub cannot guarantee perfect engineering judgment. It can block unsupported delivery claims when objective evidence is missing.
+Do not roll this framework into target repositories until Governance passes its own protected checks and positive/negative canaries. Target repositories remain read-only during Governance Phase 1 evaluation.

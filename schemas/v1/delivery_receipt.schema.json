@@ -13,7 +13,7 @@
     "changed_files",
     "gate_coverage",
     "supportability_gate",
-    "copilot_review",
+    "ai_review",
     "architecture",
     "required_judges",
     "bootstrap",
@@ -44,9 +44,16 @@
       "type": "object",
       "required": ["owner_status", "errors"]
     },
-    "copilot_review": {
+    "ai_review": {
       "type": "object",
-      "required": ["owner_status", "review_status", "errors"]
+      "required": ["owner_status", "evidence_status", "approval_provided", "observations"],
+      "properties": {
+        "owner_status": {"type": "string", "enum": ["GREEN", "RED"]},
+        "evidence_status": {"type": "string", "enum": ["CLEAN", "BLOCKING_FINDINGS_PRESENT", "AI_REVIEW_UNAVAILABLE", "INVALID_EVIDENCE"]},
+        "approval_provided": {"type": "boolean", "enum": [false]},
+        "observations": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
     },
     "architecture": {
       "type": "object",

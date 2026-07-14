@@ -36,11 +36,20 @@
     "ai_review": {
       "type": "object",
       "required": [
-        "copilot_required",
-        "latest_head_required",
-        "unresolved_p0_p1_p2_blocks",
-        "reviewer_login_patterns"
-      ]
+        "provider",
+        "adapter",
+        "review_window_seconds",
+        "unavailable_after_cutoff",
+        "unresolved_p0_p1_p2_blocks"
+      ],
+      "properties": {
+        "provider": {"type": "string", "enum": ["codex_connector"]},
+        "adapter": {"type": "string", "enum": ["codex_connector_pr_signal_v2"]},
+        "review_window_seconds": {"type": "integer", "enum": [300]},
+        "unavailable_after_cutoff": {"type": "string", "enum": ["non_blocking"]},
+        "unresolved_p0_p1_p2_blocks": {"type": "boolean", "enum": [true]}
+      },
+      "additionalProperties": false
     },
     "receipt": {
       "type": "object",

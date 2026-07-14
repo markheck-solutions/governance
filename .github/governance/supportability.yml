@@ -28,12 +28,11 @@ coverage:
   forbid_threshold_weakening: true
 
 ai_review:
-  copilot_required: true
-  latest_head_required: true
+  provider: codex_connector
+  adapter: codex_connector_pr_signal_v2
+  review_window_seconds: 300
+  unavailable_after_cutoff: non_blocking
   unresolved_p0_p1_p2_blocks: true
-  reviewer_login_patterns:
-    - "*copilot*"
-    - "chatgpt-codex-connector*"
 
 receipt:
   artifact_name: supportability-delivery-receipt

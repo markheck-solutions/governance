@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from governance_eval.paths import repo_root, schema_dir
+from governance_eval.paths import repo_root
 from governance_eval.schema_validator import validate
 
 
@@ -24,13 +24,25 @@ SCHEMA_FILES = {
     "judge_evidence_bundle": "judge_evidence_bundle.schema.json",
     "judge_evidence_pair": "judge_evidence_pair.schema.json",
     "delivery_receipt": "delivery_receipt.schema.json",
+    "bootstrap_audit_receipt": "bootstrap_audit_receipt.schema.json",
+    "codex_connector_snapshot": "codex_connector_snapshot.schema.json",
+    "codex_connector_evidence_result": "codex_connector_evidence_result.schema.json",
+    "codex_connector_snapshot_v2": "codex_connector_snapshot.schema.json",
+    "codex_connector_evidence_result_v2": "codex_connector_evidence_result.schema.json",
+}
+
+SCHEMA_VERSIONS = {
+    "codex_connector_snapshot_v2": "v2",
+    "codex_connector_evidence_result_v2": "v2",
 }
 
 
 def load_schema(name: str, root: Path | None = None) -> dict[str, Any]:
     if name not in SCHEMA_FILES:
         raise KeyError(f"unknown schema {name!r}")
-    path = schema_dir(repo_root(root)) / SCHEMA_FILES[name]
+    repository_root = repo_root(root)
+    version = SCHEMA_VERSIONS.get(name, "v1")
+    path = repository_root / "schemas" / version / SCHEMA_FILES[name]
     return json.loads(path.read_text(encoding="utf-8"))
 
 

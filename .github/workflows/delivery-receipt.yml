@@ -72,7 +72,7 @@ jobs:
   receipt:
     name: Delivery Receipt
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     outputs:
       owner-status: ${{ steps.summary.outputs.owner_status }}
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
@@ -203,7 +203,7 @@ jobs:
           def evidence_present(root):
               required = {
                   "supportability-gate-result.json",
-                  "copilot-review-gate-result.json",
+                  "ai-review-gate-result.json",
                   "architecture-gate-result.json",
               }
               found = {path.name for path in root.rglob("*.json")}
@@ -273,15 +273,15 @@ jobs:
           import shutil
 
           gate = Path("evidence/baseline/supportability-gate-result.json")
-          copilot = Path("evidence/baseline/copilot-review-gate-result.json")
+          ai_review = Path("evidence/baseline/ai-review-gate-result.json")
           architecture = Path("evidence/baseline/architecture-gate-result.json")
           gate_candidates = sorted(Path("evidence/baseline").rglob("supportability-gate-result.json"))
-          copilot_candidates = sorted(Path("evidence/baseline").rglob("copilot-review-gate-result.json"))
+          ai_review_candidates = sorted(Path("evidence/baseline").rglob("ai-review-gate-result.json"))
           architecture_candidates = sorted(Path("evidence/baseline").rglob("architecture-gate-result.json"))
           if not gate.exists() and gate_candidates:
               shutil.copyfile(gate_candidates[0], gate)
-          if not copilot.exists() and copilot_candidates:
-              shutil.copyfile(copilot_candidates[0], copilot)
+          if not ai_review.exists() and ai_review_candidates:
+              shutil.copyfile(ai_review_candidates[0], ai_review)
           if not architecture.exists() and architecture_candidates:
               shutil.copyfile(architecture_candidates[0], architecture)
           if not gate.exists():
@@ -296,11 +296,12 @@ jobs:
                   "coverage": {},
                   "errors": ["supportability gate evidence artifact missing"],
               }), encoding="utf-8")
-          if not copilot.exists():
-              copilot.write_text(json.dumps({
+          if not ai_review.exists():
+              ai_review.write_text(json.dumps({
                   "owner_status": "RED",
-                  "review_status": {},
-                  "errors": ["Copilot review evidence artifact missing"],
+                  "evidence_status": "INVALID_EVIDENCE",
+                  "approval_provided": False,
+                  "observations": ["AI review evidence artifact missing"],
               }), encoding="utf-8")
           if not architecture.exists():
               architecture.write_text(json.dumps({
@@ -326,7 +327,7 @@ jobs:
           fi
           python -m governance_eval delivery-receipt \
             --gate-result ../evidence/baseline/supportability-gate-result.json \
-            --copilot-result ../evidence/baseline/copilot-review-gate-result.json \
+            --ai-review-result ../evidence/baseline/ai-review-gate-result.json \
             --architecture-result ../evidence/baseline/architecture-gate-result.json \
             --output-dir ../artifacts/supportability \
             --repository-url "$TARGET_REPOSITORY_URL" \
