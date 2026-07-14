@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -18,6 +17,25 @@ from governance_eval.architecture_policy import (
 from governance_eval.architecture_policy import (
     architecture_policy_weakening_errors as _architecture_policy_weakening_errors,
 )
+from governance_eval.architecture_policy import duplicate_module_path_errors
+from governance_eval.architecture_policy import duplicate_governed_root_errors
+from governance_eval.gate_command_policy import (
+    ALL_COMMAND_GATES,
+    NON_BLOCKING_MARKERS,
+    OPTIONAL_COMMAND_GATES,
+    PRODUCTION_SUFFIXES,
+    REQUIRED_COMMAND_GATES,
+    SCOPE_NARROWING_MARKERS,
+)
+from governance_eval.gate_command_policy import (
+    looks_like_scope_token as _looks_like_scope_token,
+)
+from governance_eval.gate_command_policy import normalize_scope as _normalize_scope
+from governance_eval.gate_command_policy import (
+    required_gate_transition_errors as _required_gate_transition_errors,
+)
+from governance_eval.gate_command_policy import split_command as _split_command
+from governance_eval.gate_command_policy import weakens_threshold as _weakens_threshold
 from governance_eval.hashing import sha256_file
 from governance_eval.legacy_copilot_gate import evaluate_copilot_review_gate
 from governance_eval.paths import repo_root
@@ -25,19 +43,6 @@ from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
 
 
-REQUIRED_COMMAND_GATES = (
-    "lint",
-    "format_check",
-    "typecheck",
-    "complexity",
-    "architecture",
-    "tests",
-    "compile_or_build",
-)
-OPTIONAL_COMMAND_GATES = ("package_audit",)
-ALL_COMMAND_GATES = (
-    REQUIRED_COMMAND_GATES + OPTIONAL_COMMAND_GATES + ("sql_supportability",)
-)
 STATUS_GREEN = "GREEN"
 STATUS_RED = "RED"
 GIT_NETWORK_TIMEOUT_SECONDS = 60
@@ -47,20 +52,6 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
 LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
-PRODUCTION_SUFFIXES = {
-    ".py",
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx",
-    ".sql",
-    ".ps1",
-    ".sh",
-    ".go",
-    ".rs",
-    ".java",
-    ".cs",
-}
 SKIPPED_DIRS = {
     ".git",
     ".venv",
@@ -71,32 +62,6 @@ SKIPPED_DIRS = {
     "coverage",
     "artifacts",
 }
-NON_BLOCKING_MARKERS = (
-    "|| true",
-    "|| :",
-    "continue-on-error",
-    "--exit-zero",
-    "exit 0",
-)
-SCOPE_NARROWING_MARKERS = (
-    "--changed",
-    "--staged",
-    "--since",
-    "--only",
-    "--grep",
-    "--filter",
-    "--include",
-    "--exclude",
-    "--ignore-pattern",
-    "--ignore-path",
-)
-THRESHOLD_WEAKENING_MARKERS = (
-    "--extend-ignore",
-    "--ignore",
-    "--disable",
-    "--max-warnings=-1",
-    "--pass-with-no-tests",
-)
 
 
 class SupportabilityError(ValueError):
@@ -627,17 +592,20 @@ def _architecture_policy_errors(policy: Any) -> list[str]:
         errors.append("architecture_policy.version must be 1")
     if policy.get("enforcement_mode") != "block_all":
         errors.append("architecture_policy.enforcement_mode must be block_all")
-    if (
-        not isinstance(policy.get("governed_roots"), list)
-        or not policy["governed_roots"]
-    ):
+    governed_roots = policy.get("governed_roots")
+    if not isinstance(governed_roots, list) or not governed_roots:
         errors.append("architecture_policy.governed_roots must be a non-empty list")
+    else:
+        errors.extend(duplicate_governed_root_errors(governed_roots))
     if not isinstance(policy.get("runtime_relevance"), dict):
         errors.append("architecture_policy.runtime_relevance must be an object")
     if not isinstance(policy.get("vague_names"), dict):
         errors.append("architecture_policy.vague_names must be an object")
-    if not isinstance(policy.get("modules"), dict) or not policy["modules"]:
+    modules = policy.get("modules")
+    if not isinstance(modules, dict) or not modules:
         errors.append("architecture_policy.modules must be a non-empty object")
+    else:
+        errors.extend(duplicate_module_path_errors(modules))
     if LEGACY_POLICY_DEBT_FIELD in policy:
         errors.append(
             "legacy architecture debt field is not supported; use architecture_policy.known_debt"
@@ -782,130 +750,19 @@ def _required_gate_change_errors(
     base_gates = base_config.get("required_gates")
     gates = head_config.get("required_gates")
     errors = _required_gate_errors(gates)
-    if not isinstance(gates, dict):
+    if not isinstance(gates, dict) or errors:
         return errors
-    commands = [
-        command
-        for gate in ALL_COMMAND_GATES
-        for command in _command_list(gates.get(gate))
-    ]
-    duplicates = sorted(
-        {command for command in commands if commands.count(command) > 1}
+    if gates == base_gates:
+        return []
+    policy = _dict_or_empty(head_config.get("architecture_policy"))
+    roots = policy.get("governed_roots")
+    root_records = roots if isinstance(roots, list) else []
+    scope_roots = tuple(
+        str(root["path"])
+        for root in root_records
+        if isinstance(root, dict) and isinstance(root.get("path"), str)
     )
-    errors.extend(
-        f"required gate command duplicated across capabilities: {command}"
-        for command in duplicates
-    )
-    runner = r"(?:(?:uv|poetry|pipenv)\s+run\s+)?"
-    js_runner = r"(?:npx\s+|pnpm\s+(?:exec\s+)?|yarn\s+)?"
-    required_semantics = {
-        "lint": (
-            runner + r"(?:python\s+-m\s+)?ruff\s+check\b",
-            runner + js_runner + r"(?:eslint|biome\s+check)\b",
-            r"(?:golangci-lint|cargo\s+clippy|dotnet\s+format)\b",
-            r"(?:mvn|gradle)\b.*\bcheckstyle\b",
-        ),
-        "format_check": (
-            runner + r"(?:python\s+-m\s+)?(?:ruff\s+format|black)\s+--check\b",
-            runner + js_runner + r"(?:prettier\s+--check|biome\s+format)\b",
-            r"(?:cargo\s+fmt|gofmt|dotnet\s+format\s+--verify-no-changes)\b",
-        ),
-        "typecheck": (
-            runner + r"(?:python\s+-m\s+)?(?:mypy|pyright)\b",
-            runner + js_runner + r"tsc\s+--noemit\b",
-            r"(?:cargo\s+check|go\s+vet|dotnet\s+build)\b",
-            r"(?:mvn|gradle)\b.*\bcompile\b",
-        ),
-        "complexity": (
-            runner
-            + r"(?:python\s+-m\s+)?ruff\s+check\b.*(?:--select(?:=|\s+)C901|--extend-select(?:=|\s+)C901)",
-            runner + r"(?:python\s+-m\s+)?radon\b",
-            r"(?:lizard|gocyclo|cognitive-complexity)\b",
-            runner + js_runner + r"eslint\b.*\bcomplexity\b",
-        ),
-        "architecture": (
-            runner + r"python\s+-m\s+governance_eval\s+architecture-gate\b",
-        ),
-        "tests": (
-            runner + r"python\s+-m\s+(?:pytest|unittest)\b",
-            runner + r"pytest\b",
-            r"(?:npm|pnpm|yarn)\s+(?:run\s+)?test\b",
-            js_runner + r"(?:vitest|jest)\b",
-            r"(?:go|cargo|dotnet|mvn|gradle)\s+test\b",
-        ),
-        "compile_or_build": (
-            runner + r"python\s+-m\s+build\b",
-            r"(?:npm|pnpm|yarn)\s+(?:run\s+)?build\b",
-            r"(?:go|cargo|dotnet)\s+build\b",
-            r"mvn\b.*\bpackage\b",
-            r"gradle\b.*\bbuild\b",
-        ),
-    }
-    for gate, markers in required_semantics.items():
-        gate_commands = _command_list(gates.get(gate))
-        base_commands = (
-            _command_list(base_gates.get(gate)) if isinstance(base_gates, dict) else []
-        )
-        if (
-            gate_commands != base_commands
-            and gate_commands
-            and not any(
-                _command_invokes_capability(command, markers)
-                for command in gate_commands
-            )
-        ):
-            errors.append(f"required_gates.{gate} lacks required capability semantics")
-    package_commands = _command_list(gates.get("package_audit"))
-    base_package_commands = (
-        _command_list(base_gates.get("package_audit"))
-        if isinstance(base_gates, dict)
-        else []
-    )
-    audit_markers = (
-        runner + r"(?:python\s+-m\s+)?pip\s+check\b",
-        r"(?:npm|pnpm|yarn|cargo)\s+audit\b",
-        r"(?:govulncheck|osv-scanner)\b",
-        r"dotnet\s+list\b.*\bpackage\b",
-    )
-    if (
-        package_commands != base_package_commands
-        and package_commands
-        and not any(
-            _command_invokes_capability(command, audit_markers)
-            for command in package_commands
-        )
-    ):
-        errors.append(
-            "required_gates.package_audit lacks required capability semantics"
-        )
-    for command in commands:
-        lowered = command.lower()
-        tokens = {token.lower() for token in _split_command(command)}
-        if any(
-            marker in command
-            for marker in (";", "|", ">", "<", "&", "`", "$(", "\n", "\r")
-        ):
-            errors.append(
-                f"required gate command contains shell control syntax: {command}"
-            )
-        if tokens & {
-            "--help",
-            "-h",
-            "--version",
-            "--collect-only",
-            "--list",
-            "--list-tests",
-            "--dry-run",
-            "--no-run",
-        }:
-            errors.append(f"required gate command uses non-execution mode: {command}")
-        if any(marker in lowered for marker in NON_BLOCKING_MARKERS):
-            errors.append(f"required gate command is non-blocking: {command}")
-        if any(marker in lowered for marker in SCOPE_NARROWING_MARKERS):
-            errors.append(f"required gate command narrows scope: {command}")
-        if any(marker in lowered for marker in THRESHOLD_WEAKENING_MARKERS):
-            errors.append(f"required gate command weakens thresholds: {command}")
-    return errors
+    return _required_gate_transition_errors(base_gates, gates, scope_roots=scope_roots)
 
 
 def _ai_review_change_errors(
@@ -916,17 +773,6 @@ def _ai_review_change_errors(
     if not isinstance(base, dict) or not isinstance(head, dict):
         return ["ai_review must remain an object"]
     return _ai_review_errors(head)
-
-
-def _command_list(value: Any) -> list[str]:
-    return [str(item) for item in value] if isinstance(value, list) else []
-
-
-def _command_invokes_capability(command: str, patterns: tuple[str, ...]) -> bool:
-    normalized = command.strip()
-    return any(
-        re.match(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns
-    )
 
 
 def _architecture_governance_change_errors(
@@ -941,6 +787,7 @@ def _architecture_governance_change_errors(
         "governance_eval/supportability.py",
         "governance_eval/architecture_policy.py",
         "governance_eval/architecture_gate.py",
+        "governance_eval/gate_command_policy.py",
         "governance_eval/ai_review_gate.py",
         "governance_eval/bootstrap_audit.py",
         "governance_eval/codex_connector_collector.py",
@@ -1248,13 +1095,6 @@ def _single_command_policy_errors(
     return errors
 
 
-def _weakens_threshold(lowered: str) -> bool:
-    if any(marker in lowered for marker in THRESHOLD_WEAKENING_MARKERS):
-        return True
-    match = re.search(r"max[-_]complexity[=\s]+([0-9]+)", lowered)
-    return bool(match and int(match.group(1)) > 10)
-
-
 def _path_scope_excludes_files(command: str, files: list[str]) -> bool:
     tokens = _split_command(command)
     scopes = [
@@ -1264,31 +1104,6 @@ def _path_scope_excludes_files(command: str, files: list[str]) -> bool:
     if not scopes or "." in scopes:
         return False
     return any(not _file_is_in_any_scope(path, scopes) for path in files)
-
-
-def _split_command(command: str) -> list[str]:
-    try:
-        return shlex.split(command, posix=os.name != "nt")
-    except ValueError:
-        return command.split()
-
-
-def _looks_like_scope_token(token: str) -> bool:
-    clean = token.strip("'\"")
-    if clean in {".", "./"}:
-        return True
-    if clean.startswith("-") or "=" in clean or "*" in clean:
-        return False
-    if "/" in clean or "\\" in clean:
-        return True
-    return Path(clean).suffix in PRODUCTION_SUFFIXES or clean in {"src", "app", "lib"}
-
-
-def _normalize_scope(token: str) -> str:
-    clean = token.strip("'\"").replace("\\", "/").rstrip("/")
-    if clean in {"", ".", "./", "...", "./..."}:
-        return "."
-    return clean[2:] if clean.startswith("./") else clean
 
 
 def _file_is_in_any_scope(path: str, scopes: list[str]) -> bool:
@@ -1749,14 +1564,22 @@ def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
         errors.append("receipt ai_review.owner_status must be GREEN")
     if ai_review.get("approval_provided") is not False:
         errors.append("receipt ai_review.approval_provided must be false")
-    expected_architecture = {
+    errors.extend(_architecture_receipt_status_errors(architecture))
+    errors.extend(_required_judge_errors(required_judges))
+    errors.extend(_bootstrap_receipt_status_errors(bootstrap))
+    return errors
+
+
+def _architecture_receipt_status_errors(architecture: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    expected = {
         "owner_status": STATUS_GREEN,
         "gate_implementation": "PASS",
         "repo_architecture_supportability": "PASS",
         "architecture_behavior_proof": "PASS",
         "enforcement_mode": "block_all",
     }
-    for key, value in expected_architecture.items():
+    for key, value in expected.items():
         if architecture.get(key) != value:
             errors.append(f"receipt architecture.{key} must be {value}")
     for key in (
@@ -1779,14 +1602,20 @@ def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
             errors.append(f"receipt architecture.{key} must be empty")
     if architecture.get("errors"):
         errors.append("receipt architecture.errors must be empty")
-    errors.extend(_required_judge_errors(required_judges))
-    if (
-        bootstrap.get("governance_pass") is False
-        or bootstrap.get("gate_result") == STATUS_RED
-        or bootstrap.get("reason")
-    ):
-        errors.append("receipt bootstrap must not indicate active bootstrap RED state")
     return errors
+
+
+def _bootstrap_receipt_status_errors(bootstrap: dict[str, Any]) -> list[str]:
+    is_red = any(
+        (
+            bootstrap.get("governance_pass") is False,
+            bootstrap.get("gate_result") == STATUS_RED,
+            bool(bootstrap.get("reason")),
+        )
+    )
+    if is_red:
+        return ["receipt bootstrap must not indicate active bootstrap RED state"]
+    return []
 
 
 def _receipt_sha_errors(receipt: dict[str, Any]) -> list[str]:

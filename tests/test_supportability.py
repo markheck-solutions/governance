@@ -732,6 +732,84 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertTrue(seen)
             self.assertIn("python -m ruff check .", seen)
 
+    def test_non_gate_config_change_grandfathers_unchanged_legacy_commands(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = _valid_config(repo)
+            _set_legacy_gate_commands(base_config)
+            head_config = json.loads(json.dumps(base_config))
+            _add_runtime_architecture_module(head_config)
+            (repo / ".github/governance/supportability.yml").write_text(
+                json.dumps(head_config), encoding="utf-8"
+            )
+            seen: list[str] = []
+
+            def runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+                del cwd
+                seen.append(command)
+                return subprocess.CompletedProcess(
+                    args=command, returncode=0, stdout="", stderr=""
+                )
+
+            with mock.patch(
+                "governance_eval.supportability._base_supportability_config",
+                return_value=(base_config, []),
+            ):
+                result = run_supportability_gate(
+                    repo / ".github/governance/supportability.yml",
+                    repo,
+                    "a" * 40,
+                    "b" * 40,
+                    changed_files=[".github/governance/supportability.yml"],
+                    command_runner=runner,
+                )
+
+            self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
+            self.assertEqual(
+                seen.count("python -m compileall -q ."),
+                4,
+            )
+
+    def test_grandfathered_commands_do_not_allow_changed_command_defects(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = _valid_config(repo)
+            _set_legacy_gate_commands(base_config)
+            head_config = json.loads(json.dumps(base_config))
+            _add_runtime_architecture_module(head_config)
+            head_config["required_gates"]["lint"] = ["python -m compileall -q .; true"]
+            (repo / ".github/governance/supportability.yml").write_text(
+                json.dumps(head_config), encoding="utf-8"
+            )
+            seen: list[str] = []
+
+            with mock.patch(
+                "governance_eval.supportability._base_supportability_config",
+                return_value=(base_config, []),
+            ):
+                result = run_supportability_gate(
+                    repo / ".github/governance/supportability.yml",
+                    repo,
+                    "a" * 40,
+                    "b" * 40,
+                    changed_files=[".github/governance/supportability.yml"],
+                    command_runner=lambda command, cwd: seen.append(command),
+                )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(
+                any("shell control syntax" in error for error in result["errors"]),
+                result["errors"],
+            )
+            self.assertEqual(seen, [])
+            self.assertTrue(
+                all(command["status"] == "SKIPPED" for command in result["commands"])
+            )
+
     def test_config_change_rejects_unclassified_key_and_unapproved_reviewer(
         self,
     ) -> None:
@@ -868,6 +946,247 @@ class SupportabilityGateTests(unittest.TestCase):
             (repo / "sql/report.sql").write_text("select 1;\n", encoding="utf-8")
 
             self.assertTrue(supportability_module._repo_has_sql(repo))
+
+
+class ConfigTransitionAdversarialTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = repo_root(Path(__file__).resolve())
+
+    def test_gate_blocks_duplicate_normalized_governed_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = load_supportability_config(
+                repo / ".github/governance/supportability.yml"
+            )
+            head_config = json.loads(json.dumps(base_config))
+            duplicate = json.loads(
+                json.dumps(head_config["architecture_policy"]["governed_roots"][0])
+            )
+            duplicate["path"] = duplicate["path"] + "/"
+            duplicate["kind"] = "docs"
+            head_config["architecture_policy"]["governed_roots"].insert(0, duplicate)
+            (repo / ".github/governance/supportability.yml").write_text(
+                json.dumps(head_config), encoding="utf-8"
+            )
+
+            result = _run_config_change_with_base(repo, base_config)
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(
+                any("duplicate normalized path" in error for error in result["errors"]),
+                result["errors"],
+            )
+            self.assertTrue(
+                all(command["status"] == "SKIPPED" for command in result["commands"])
+            )
+
+    def test_changed_string_sql_command_cannot_bypass_command_validation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = _valid_config(repo)
+            _set_semantic_gate_commands(base_config)
+            head_config = json.loads(json.dumps(base_config))
+            head_config["required_gates"]["sql_supportability"] = (
+                "python -m governance_eval sql-gate; malicious-command"
+            )
+            (repo / ".github/governance/supportability.yml").write_text(
+                json.dumps(head_config), encoding="utf-8"
+            )
+            seen: list[str] = []
+
+            with mock.patch(
+                "governance_eval.supportability._base_supportability_config",
+                return_value=(base_config, []),
+            ):
+                result = run_supportability_gate(
+                    repo / ".github/governance/supportability.yml",
+                    repo,
+                    "a" * 40,
+                    "b" * 40,
+                    changed_files=[".github/governance/supportability.yml"],
+                    command_runner=lambda command, cwd: seen.append(command),
+                )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(
+                any("shell control syntax" in error for error in result["errors"]),
+                result["errors"],
+            )
+            self.assertEqual(seen, [])
+            self.assertTrue(
+                all(command["status"] == "SKIPPED" for command in result["commands"])
+            )
+
+    def test_changed_commands_reject_remaining_transition_bypasses(self) -> None:
+        cases = (
+            (
+                "no-op SQL",
+                "sql_supportability",
+                "echo pass",
+                "sql_supportability lacks required capability semantics",
+            ),
+            (
+                "positional scope",
+                "lint",
+                "python -m ruff check src",
+                "positional scope",
+            ),
+            (
+                "numeric threshold",
+                "complexity",
+                "python -m radon cc --max-complexity 99 .",
+                "weakens thresholds",
+            ),
+            (
+                "whitespace duplicate",
+                "lint",
+                "python  -m ruff check --select C901 .",
+                "duplicated across capabilities",
+            ),
+            (
+                "radon report only",
+                "complexity",
+                "python -m radon cc .",
+                "lacks required capability semantics",
+            ),
+            (
+                "radon max rank report only",
+                "complexity",
+                "python -m radon cc --max F .",
+                "lacks required capability semantics",
+            ),
+            (
+                "radon exclude rank report only",
+                "complexity",
+                "python -m radon cc -x F .",
+                "lacks required capability semantics",
+            ),
+        )
+        for name, gate, command, expected_error in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                repo = _synthetic_repo(Path(tmp), self.root)
+                base_config = _valid_config(repo)
+                _set_semantic_gate_commands(base_config)
+                head_config = json.loads(json.dumps(base_config))
+                head_config["required_gates"][gate] = command
+                if gate != "sql_supportability":
+                    head_config["required_gates"][gate] = [command]
+                (repo / ".github/governance/supportability.yml").write_text(
+                    json.dumps(head_config), encoding="utf-8"
+                )
+                seen: list[str] = []
+
+                with mock.patch(
+                    "governance_eval.supportability._base_supportability_config",
+                    return_value=(base_config, []),
+                ):
+                    result = run_supportability_gate(
+                        repo / ".github/governance/supportability.yml",
+                        repo,
+                        "a" * 40,
+                        "b" * 40,
+                        changed_files=[".github/governance/supportability.yml"],
+                        command_runner=lambda command, cwd: seen.append(command),
+                    )
+
+                self.assertEqual(result["owner_status"], STATUS_RED)
+                self.assertTrue(
+                    any(expected_error in error for error in result["errors"]),
+                    result["errors"],
+                )
+                self.assertEqual(seen, [])
+                self.assertTrue(
+                    all(item["status"] == "SKIPPED" for item in result["commands"])
+                )
+
+    def test_bare_configured_root_is_positional_scope_narrowing(self) -> None:
+        base_config = load_supportability_config(
+            self.root / ".github/governance/supportability.yml"
+        )
+        _set_semantic_gate_commands(base_config)
+        head_config = json.loads(json.dumps(base_config))
+        head_config["required_gates"]["lint"] = ["python -m ruff check governance_eval"]
+
+        errors = supportability_module._required_gate_change_errors(
+            base_config, head_config
+        )
+
+        self.assertTrue(
+            any("positional scope narrowing" in error for error in errors), errors
+        )
+
+    def test_module_path_shadowing_cannot_weaken_protected_module(self) -> None:
+        cases = ("duplicate", "nested_weaker")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                repo = _synthetic_repo(Path(tmp), self.root)
+                base_config = _valid_config(repo)
+                _set_semantic_gate_commands(base_config)
+                head_config = json.loads(json.dumps(base_config))
+                source = head_config["architecture_policy"]["modules"]["src"]
+                shadow = json.loads(json.dumps(source))
+                if case == "duplicate":
+                    expected = "duplicate normalized path"
+                else:
+                    shadow["path"] = "src/nested"
+                    shadow["allowed_dependencies"] = ["tests"]
+                    shadow["forbidden_dependencies"] = []
+                    shadow["limits"]["max_file_lines"] += 1
+                    expected = "new nested module shadow weakens"
+                head_config["architecture_policy"]["modules"]["shadow"] = shadow
+                (repo / ".github/governance/supportability.yml").write_text(
+                    json.dumps(head_config), encoding="utf-8"
+                )
+
+                result = _run_config_change_with_base(repo, base_config)
+
+                self.assertEqual(result["owner_status"], STATUS_RED)
+                self.assertTrue(
+                    any(expected in error for error in result["errors"]),
+                    result["errors"],
+                )
+                self.assertTrue(
+                    all(item["status"] == "SKIPPED" for item in result["commands"])
+                )
+
+    def test_named_repo_sql_gate_is_valid_transition_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = _valid_config(repo)
+            _set_semantic_gate_commands(base_config)
+            head_config = json.loads(json.dumps(base_config))
+            sql_command = "python scripts/check_sql.py"
+            head_config["required_gates"]["sql_supportability"] = sql_command
+            (repo / ".github/governance/supportability.yml").write_text(
+                json.dumps(head_config), encoding="utf-8"
+            )
+            seen: list[str] = []
+
+            def runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+                del cwd
+                seen.append(command)
+                return subprocess.CompletedProcess(
+                    args=command, returncode=0, stdout="", stderr=""
+                )
+
+            with mock.patch(
+                "governance_eval.supportability._base_supportability_config",
+                return_value=(base_config, []),
+            ):
+                result = run_supportability_gate(
+                    repo / ".github/governance/supportability.yml",
+                    repo,
+                    "a" * 40,
+                    "b" * 40,
+                    changed_files=[".github/governance/supportability.yml"],
+                    command_runner=runner,
+                )
+
+            self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
+            self.assertTrue(seen)
+            self.assertNotIn(sql_command, seen)
 
 
 class DeliveryReceiptTests(unittest.TestCase):
@@ -1885,6 +2204,47 @@ def _set_semantic_gate_commands(config: dict) -> None:
             "package_audit": ["python -m pip check"],
         }
     )
+
+
+def _set_legacy_gate_commands(config: dict) -> None:
+    config["required_gates"].update(
+        {
+            "lint": ["python -m compileall -q ."],
+            "format_check": [
+                'python -c "import os, subprocess, sys; '
+                "sys.exit(subprocess.run(['git', 'diff', '--check', "
+                "os.environ['TARGET_BASE_SHA'], "
+                "os.environ['TARGET_HEAD_SHA']]).returncode)\""
+            ],
+            "typecheck": ["python -m compileall -q ."],
+            "complexity": ["python -m compileall -q ."],
+            "architecture": ["python -m unittest discover -s tests -p test_*.py"],
+            "tests": ["python -m unittest discover -s tests -p test_*.py"],
+            "compile_or_build": ["python -m compileall -q ."],
+            "package_audit": [],
+        }
+    )
+
+
+def _add_runtime_architecture_module(config: dict) -> None:
+    policy = config["architecture_policy"]
+    policy["governed_roots"].append(
+        {
+            "path": "runtime",
+            "kind": "production_python",
+            "owner": "test",
+            "purpose": "isolated runtime",
+        }
+    )
+    module = json.loads(json.dumps(policy["modules"]["src"]))
+    module.update(
+        {
+            "path": "runtime",
+            "purpose": "isolated runtime",
+            "domain": "governance-execution",
+        }
+    )
+    policy["modules"]["runtime"] = module
 
 
 def _passing_runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:

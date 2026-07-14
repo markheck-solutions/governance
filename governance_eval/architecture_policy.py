@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import posixpath
 from typing import Any
 
 
@@ -8,6 +9,40 @@ def architecture_command_lines(workflow_text: str) -> list[str]:
         line.strip()
         for line in workflow_text.splitlines()
         if "python -m governance_eval architecture-gate" in line
+    ]
+
+
+def duplicate_governed_root_errors(roots: Any) -> list[str]:
+    if not isinstance(roots, list):
+        return []
+    paths = [
+        _normalized_policy_path(root.get("path"))
+        for root in roots
+        if isinstance(root, dict)
+        and isinstance(root.get("path"), str)
+        and root["path"].strip()
+    ]
+    duplicates = sorted({path for path in paths if paths.count(path) > 1})
+    return [
+        f"architecture_policy.governed_roots contains duplicate normalized path: {path}"
+        for path in duplicates
+    ]
+
+
+def duplicate_module_path_errors(modules: Any) -> list[str]:
+    if not isinstance(modules, dict):
+        return []
+    paths = [
+        _normalized_policy_path(module.get("path"))
+        for module in modules.values()
+        if isinstance(module, dict)
+        and isinstance(module.get("path"), str)
+        and module["path"].strip()
+    ]
+    duplicates = sorted({path for path in paths if paths.count(path) > 1})
+    return [
+        f"architecture_policy.modules contains duplicate normalized path: {path}"
+        for path in duplicates
     ]
 
 
@@ -113,7 +148,87 @@ def _module_policy_weakening_errors(
                 f"architecture_policy.modules.{module_id}.forbidden_dependencies narrowed"
             )
         errors.extend(_limit_weakening_errors(module_id, base_module, head_module))
+    errors.extend(_added_nested_module_weakening_errors(base_modules, head_modules))
     return errors
+
+
+def _added_nested_module_weakening_errors(
+    base_modules: dict[str, Any], head_modules: dict[str, Any]
+) -> list[str]:
+    errors: list[str] = []
+    for module_id, head_module in sorted(head_modules.items()):
+        if module_id in base_modules or not isinstance(head_module, dict):
+            continue
+        base_match = _most_specific_base_module(base_modules, head_module.get("path"))
+        if base_match is None:
+            continue
+        base_id, base_module = base_match
+        errors.extend(
+            _nested_module_policy_errors(module_id, head_module, base_id, base_module)
+        )
+    return errors
+
+
+def _most_specific_base_module(
+    base_modules: dict[str, Any], head_path_value: Any
+) -> tuple[str, dict[str, Any]] | None:
+    head_path = _norm_policy_path(head_path_value)
+    matches = [
+        (module_id, module)
+        for module_id, module in base_modules.items()
+        if isinstance(module, dict)
+        and _path_is_under(head_path, _norm_policy_path(module.get("path")))
+    ]
+    return max(
+        matches,
+        key=lambda item: len(_norm_policy_path(item[1].get("path"))),
+        default=None,
+    )
+
+
+def _nested_module_policy_errors(
+    module_id: str,
+    head_module: dict[str, Any],
+    base_id: str,
+    base_module: dict[str, Any],
+) -> list[str]:
+    prefix = f"new nested module {module_id} weakens protected module {base_id}:"
+    errors: list[str] = []
+    if not set(head_module.get("allowed_dependencies") or []).issubset(
+        set(base_module.get("allowed_dependencies") or [])
+    ):
+        errors.append(f"{prefix} allowed_dependencies")
+    if not set(base_module.get("forbidden_dependencies") or []).issubset(
+        set(head_module.get("forbidden_dependencies") or [])
+    ):
+        errors.append(f"{prefix} forbidden_dependencies")
+    if head_module.get("classification") != base_module.get("classification"):
+        errors.append(f"{prefix} classification")
+    errors.extend(
+        _nested_module_limit_errors(module_id, head_module, base_id, base_module)
+    )
+    return errors
+
+
+def _nested_module_limit_errors(
+    module_id: str,
+    head_module: dict[str, Any],
+    base_id: str,
+    base_module: dict[str, Any],
+) -> list[str]:
+    head_limits = _dict_value(head_module.get("limits"))
+    base_limits = _dict_value(base_module.get("limits"))
+    return [
+        f"new nested module {module_id} weakens protected module {base_id}: {key}"
+        for key, base_value in base_limits.items()
+        if isinstance(base_value, int)
+        and isinstance(head_limits.get(key), int)
+        and head_limits[key] > base_value
+    ]
+
+
+def _path_is_under(path: str, root: str) -> bool:
+    return bool(root) and (path == root or path.startswith(root.rstrip("/") + "/"))
 
 
 def _limit_weakening_errors(
@@ -176,6 +291,11 @@ def _known_debt_identity(item: dict[str, Any]) -> tuple[Any, ...]:
 
 def _norm_policy_path(value: Any) -> str:
     return str(value or "").replace("\\", "/").strip("/")
+
+
+def _normalized_policy_path(value: Any) -> str:
+    normalized = str(value or "").replace("\\", "/")
+    return posixpath.normpath(normalized).strip("/").casefold()
 
 
 def _dict_value(value: Any) -> dict[str, Any]:

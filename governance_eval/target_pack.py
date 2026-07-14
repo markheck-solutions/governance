@@ -37,9 +37,12 @@ def resolve_pack_path(
             raise SchemaValidationError(
                 f"target pack path traversal is not allowed: {path}"
             )
-        resolved = (root / path).resolve(strict=True)
+        candidate = root / path
     else:
-        resolved = path.resolve(strict=True)
+        candidate = path
+    if candidate.is_symlink():
+        raise SchemaValidationError(f"target pack symlink is not allowed: {path}")
+    resolved = candidate.resolve(strict=True)
     if require_governance_owned or not path.is_absolute():
         try:
             resolved.relative_to(root.resolve(strict=True))
@@ -47,8 +50,6 @@ def resolve_pack_path(
             raise SchemaValidationError(
                 f"target pack must stay inside governance repository: {path}"
             ) from exc
-    if resolved.is_symlink():
-        raise SchemaValidationError(f"target pack symlink is not allowed: {path}")
     return resolved
 
 
@@ -238,27 +239,11 @@ def _validate_requested_revisions(
             raise ValueError(f"invalid target {label} SHA: {value}")
     if merge_sha and not SHA_RE.fullmatch(merge_sha):
         raise ValueError(f"invalid target merge SHA: {merge_sha}")
-    revisions = pack["immutable_revisions"]
     if revision_mode == "HISTORICAL_FIXED":
-        if base_sha != revisions["base_sha"] or head_sha != revisions["head_sha"]:
-            raise ValueError(
-                f"HISTORICAL_FIXED requires pinned target revisions for pack {pack['id']}"
-            )
-        expected_merge = revisions.get("merge_sha")
-        if expected_merge and merge_sha != expected_merge:
-            raise ValueError(
-                f"HISTORICAL_FIXED requires pinned merge SHA for pack {pack['id']}: {expected_merge}"
-            )
+        _validate_historical_revisions(pack, base_sha, head_sha, merge_sha)
         return
     if revision_mode == "SAFE_FIXED":
-        if (
-            base_sha != revisions.get("safe_base_sha")
-            or head_sha != revisions.get("safe_head_sha")
-            or merge_sha
-        ):
-            raise ValueError(
-                f"SAFE_FIXED requires pinned safe base/head and no merge SHA for pack {pack['id']}"
-            )
+        _validate_safe_revisions(pack, base_sha, head_sha, merge_sha)
         return
     if revision_mode == "CANDIDATE_DYNAMIC":
         if merge_sha:
@@ -267,6 +252,38 @@ def _validate_requested_revisions(
             )
         return
     raise ValueError(f"unknown revision mode: {revision_mode}")
+
+
+def _validate_historical_revisions(
+    pack: dict[str, Any], base_sha: str, head_sha: str, merge_sha: str | None
+) -> None:
+    revisions = pack["immutable_revisions"]
+    if base_sha != revisions["base_sha"] or head_sha != revisions["head_sha"]:
+        raise ValueError(
+            f"HISTORICAL_FIXED requires pinned target revisions for pack {pack['id']}"
+        )
+    expected_merge = revisions.get("merge_sha")
+    if expected_merge and merge_sha != expected_merge:
+        raise ValueError(
+            f"HISTORICAL_FIXED requires pinned merge SHA for pack {pack['id']}: {expected_merge}"
+        )
+
+
+def _validate_safe_revisions(
+    pack: dict[str, Any], base_sha: str, head_sha: str, merge_sha: str | None
+) -> None:
+    revisions = pack["immutable_revisions"]
+    mismatched = any(
+        (
+            base_sha != revisions.get("safe_base_sha"),
+            head_sha != revisions.get("safe_head_sha"),
+            bool(merge_sha),
+        )
+    )
+    if mismatched:
+        raise ValueError(
+            f"SAFE_FIXED requires pinned safe base/head and no merge SHA for pack {pack['id']}"
+        )
 
 
 def infer_revision_mode(

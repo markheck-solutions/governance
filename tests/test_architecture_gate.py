@@ -102,6 +102,93 @@ class ArchitectureGateTests(unittest.TestCase):
                 )
             )
 
+    def test_duplicate_normalized_governed_root_is_config_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(Path(tmp), self.root, mode="block_all")
+            config_path = repo / ".github/governance/supportability.yml"
+            config = load_supportability_config(config_path)
+            duplicate = json.loads(
+                json.dumps(config["architecture_policy"]["governed_roots"][0])
+            )
+            duplicate["path"] = duplicate["path"] + "/"
+            duplicate["kind"] = "docs"
+            config["architecture_policy"]["governed_roots"].insert(0, duplicate)
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result, code = run_architecture_gate(
+                config_path,
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=["src/app.py"],
+            )
+
+            self.assertEqual(code, EXIT_CONFIG)
+            self.assertEqual(result["owner_status"], "RED")
+            self.assertTrue(
+                any("duplicate normalized path" in error for error in result["errors"]),
+                result["errors"],
+            )
+
+    def test_duplicate_normalized_module_path_is_config_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(Path(tmp), self.root, mode="block_all")
+            config_path = repo / ".github/governance/supportability.yml"
+            config = load_supportability_config(config_path)
+            source = config["architecture_policy"]["modules"]["src"]
+            duplicate = json.loads(json.dumps(source))
+            duplicate["path"] = duplicate["path"] + "/"
+            config["architecture_policy"]["modules"]["shadow"] = duplicate
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result, code = run_architecture_gate(
+                config_path,
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=["src/app.py"],
+            )
+
+            self.assertEqual(code, EXIT_CONFIG)
+            self.assertTrue(
+                any("duplicate normalized path" in error for error in result["errors"]),
+                result["errors"],
+            )
+
+    def test_nested_module_selection_uses_longest_module_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(Path(tmp), self.root, mode="block_all")
+            nested_file = repo / "src/nested/app.py"
+            nested_file.parent.mkdir(parents=True)
+            nested_file.write_text("first = 1\nsecond = 2\n", encoding="utf-8")
+            config_path = repo / ".github/governance/supportability.yml"
+            config = load_supportability_config(config_path)
+            nested = json.loads(
+                json.dumps(config["architecture_policy"]["modules"]["src"])
+            )
+            nested["path"] = "src/nested"
+            nested["limits"]["max_file_lines"] = 1
+            config["architecture_policy"]["modules"]["n"] = nested
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result, code = run_architecture_gate(
+                config_path,
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=["src/nested/app.py"],
+            )
+
+            self.assertEqual(code, EXIT_BLOCKED)
+            self.assertTrue(
+                any(
+                    item["rule_id"] == "python_file_lines"
+                    and item["source_module"] == "n"
+                    for item in result["violations"]
+                ),
+                result["violations"],
+            )
+
     def test_missing_policy_is_gate_implementation_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")

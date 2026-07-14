@@ -471,11 +471,30 @@ class TargetPackAndShadowTests(unittest.TestCase):
                     try:
                         os.symlink(outside, symlink)
                     except OSError as exc:
-                        self.skipTest(f"symlink creation unavailable: {exc}")
-                    with self.assertRaises(SchemaValidationError):
-                        load_target_pack(
-                            symlink, root=self.root, require_governance_owned=True
-                        )
+                        with (
+                            mock.patch.object(
+                                Path,
+                                "is_symlink",
+                                autospec=True,
+                                side_effect=lambda value: value == symlink,
+                            ),
+                            self.assertRaisesRegex(
+                                SchemaValidationError, "symlink is not allowed"
+                            ),
+                        ):
+                            load_target_pack(
+                                symlink,
+                                root=self.root,
+                                require_governance_owned=True,
+                            )
+                        self.assertIsInstance(exc, OSError)
+                    else:
+                        with self.assertRaises(SchemaValidationError):
+                            load_target_pack(
+                                symlink,
+                                root=self.root,
+                                require_governance_owned=True,
+                            )
                 finally:
                     try:
                         if symlink.exists() or symlink.is_symlink():

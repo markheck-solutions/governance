@@ -55,6 +55,7 @@ class SelfUpdatePolicyTests(unittest.TestCase):
         for checker in (
             "governance_eval/supportability.py",
             "governance_eval/architecture_policy.py",
+            "governance_eval/gate_command_policy.py",
         ):
             with self.subTest(checker=checker), tempfile.TemporaryDirectory() as tmp:
                 errors = supportability._architecture_governance_change_errors(

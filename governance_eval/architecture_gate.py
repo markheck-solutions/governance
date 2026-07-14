@@ -12,6 +12,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from governance_eval.architecture_policy import (
+    duplicate_governed_root_errors,
+    duplicate_module_path_errors,
+)
 from governance_eval.supportability import (
     SHA1_RE,
     STATUS_GREEN,
@@ -289,7 +293,7 @@ def _architecture_policy_errors(policy: Any) -> list[str]:
 def _governed_root_errors(value: Any) -> list[str]:
     if not isinstance(value, list) or not value:
         return ["architecture_policy.governed_roots must be a non-empty list"]
-    errors: list[str] = []
+    errors = duplicate_governed_root_errors(value)
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             errors.append(
@@ -333,7 +337,7 @@ def _vague_name_errors(value: Any) -> list[str]:
 def _module_registry_errors(value: Any) -> list[str]:
     if not isinstance(value, dict) or not value:
         return ["architecture_policy.modules must be a non-empty object"]
-    errors: list[str] = []
+    errors = duplicate_module_path_errors(value)
     for module_id, module in value.items():
         if (
             not isinstance(module_id, str)
@@ -342,44 +346,59 @@ def _module_registry_errors(value: Any) -> list[str]:
         ):
             errors.append("architecture_policy.modules entries must be named objects")
             continue
-        for key in (
-            "path",
-            "owner",
-            "purpose",
-            "classification",
-            "domain",
-            "test_strategy",
-        ):
-            if not isinstance(module.get(key), str) or not module[key].strip():
-                errors.append(
-                    f"architecture_policy.modules.{module_id}.{key} must be a non-empty string"
-                )
-        if module.get("classification") not in CLASSIFICATIONS:
+        errors.extend(_module_identity_errors(module_id, module))
+        errors.extend(_module_dependency_errors(module_id, module))
+        errors.extend(_module_limit_errors(module_id, module))
+    return errors
+
+
+def _module_identity_errors(module_id: str, module: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for key in (
+        "path",
+        "owner",
+        "purpose",
+        "classification",
+        "domain",
+        "test_strategy",
+    ):
+        if not isinstance(module.get(key), str) or not module[key].strip():
             errors.append(
-                f"architecture_policy.modules.{module_id}.classification is unsupported"
+                f"architecture_policy.modules.{module_id}.{key} must be a non-empty string"
             )
-        for key in ("allowed_dependencies", "forbidden_dependencies"):
-            if not _string_list(module.get(key), allow_empty=True):
-                errors.append(
-                    f"architecture_policy.modules.{module_id}.{key} must be a list of strings"
-                )
-        limits = module.get("limits")
-        if not isinstance(limits, dict):
+    if module.get("classification") not in CLASSIFICATIONS:
+        errors.append(
+            f"architecture_policy.modules.{module_id}.classification is unsupported"
+        )
+    return errors
+
+
+def _module_dependency_errors(module_id: str, module: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for key in ("allowed_dependencies", "forbidden_dependencies"):
+        if not _string_list(module.get(key), allow_empty=True):
             errors.append(
-                f"architecture_policy.modules.{module_id}.limits must be an object"
+                f"architecture_policy.modules.{module_id}.{key} must be a list of strings"
             )
-            continue
-        for key in (
-            "max_file_lines",
-            "max_function_lines",
-            "max_class_lines",
-            "max_functions_per_file",
-            "max_classes_per_file",
-        ):
-            if not isinstance(limits.get(key), int) or limits[key] < 0:
-                errors.append(
-                    f"architecture_policy.modules.{module_id}.limits.{key} must be a non-negative integer"
-                )
+    return errors
+
+
+def _module_limit_errors(module_id: str, module: dict[str, Any]) -> list[str]:
+    limits = module.get("limits")
+    if not isinstance(limits, dict):
+        return [f"architecture_policy.modules.{module_id}.limits must be an object"]
+    errors: list[str] = []
+    for key in (
+        "max_file_lines",
+        "max_function_lines",
+        "max_class_lines",
+        "max_functions_per_file",
+        "max_classes_per_file",
+    ):
+        if not isinstance(limits.get(key), int) or limits[key] < 0:
+            errors.append(
+                f"architecture_policy.modules.{module_id}.limits.{key} must be a non-negative integer"
+            )
     return errors
 
 
@@ -396,28 +415,34 @@ def _known_debt_shape_errors(policy: dict[str, Any]) -> list[str]:
         if not isinstance(item, dict):
             errors.append(f"architecture_policy.known_debt[{index}] must be an object")
             continue
-        for key in ("rule", "path", "owner", "reason", "expires_on"):
-            if not isinstance(item.get(key), str) or not item[key].strip():
-                errors.append(
-                    f"architecture_policy.known_debt[{index}].{key} must be a non-empty string"
-                )
-        for key in ("source_module", "target_module", "symbol_name", "detail"):
-            if not isinstance(item.get(key), str):
-                errors.append(
-                    f"architecture_policy.known_debt[{index}].{key} must be a string"
-                )
-        if not isinstance(item.get("fingerprint"), str) or not re_full_sha256(
-            item.get("fingerprint")
-        ):
+        errors.extend(_known_debt_entry_errors(index, item))
+    return errors
+
+
+def _known_debt_entry_errors(index: int, item: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for key in ("rule", "path", "owner", "reason", "expires_on"):
+        if not isinstance(item.get(key), str) or not item[key].strip():
             errors.append(
-                f"architecture_policy.known_debt[{index}].fingerprint must be a 64-character SHA-256"
+                f"architecture_policy.known_debt[{index}].{key} must be a non-empty string"
             )
-        try:
-            date.fromisoformat(str(item.get("expires_on", "")))
-        except ValueError:
+    for key in ("source_module", "target_module", "symbol_name", "detail"):
+        if not isinstance(item.get(key), str):
             errors.append(
-                f"architecture_policy.known_debt[{index}].expires_on must be YYYY-MM-DD"
+                f"architecture_policy.known_debt[{index}].{key} must be a string"
             )
+    if not isinstance(item.get("fingerprint"), str) or not re_full_sha256(
+        item.get("fingerprint")
+    ):
+        errors.append(
+            f"architecture_policy.known_debt[{index}].fingerprint must be a 64-character SHA-256"
+        )
+    try:
+        date.fromisoformat(str(item.get("expires_on", "")))
+    except ValueError:
+        errors.append(
+            f"architecture_policy.known_debt[{index}].expires_on must be YYYY-MM-DD"
+        )
     return errors
 
 
@@ -717,7 +742,11 @@ def _module_for_path(path: str, modules: dict[str, dict[str, Any]]) -> str | Non
         for module_id, module in modules.items()
         if _under(path, module["path"])
     ]
-    return max(matches, key=len, default=None)
+    return max(
+        matches,
+        key=lambda module_id: len(modules[module_id]["path"]),
+        default=None,
+    )
 
 
 def _runtime_relevant(policy: dict[str, Any], path: str) -> bool:
