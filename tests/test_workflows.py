@@ -294,6 +294,22 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-enforcement.yml"],
         )
 
+    def test_enforcement_jobs_use_pull_request_target_conditions(self) -> None:
+        enforcement = (
+            self.root / ".github/workflows/supportability-enforcement.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            enforcement.count(
+                "if: ${{ github.event.pull_request.base.ref == 'main' }}"
+            ),
+            3,
+        )
+        self.assertIn(
+            "if: ${{ always() && github.event.pull_request.base.ref == 'main' }}",
+            enforcement,
+        )
+
     def test_delivery_receipt_workflow_is_bound_and_fail_closed(self) -> None:
         workflows = {
             path.name: path.read_text(encoding="utf-8")

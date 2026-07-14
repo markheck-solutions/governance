@@ -577,7 +577,14 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(evaluate(noise)["capability_status"], "PASS")
 
-        for content in ("eyes", "rocket", "-1"):
+        eyes = reaction_snapshot()
+        eyes["issue_reactions"] = [connector_reaction(content="eyes")]
+        result = evaluate(eyes)
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(result["reasons"], ["NO_IN_WINDOW_RESPONSE"])
+
+        for content in ("rocket", "-1"):
             with self.subTest(content=content):
                 value = reaction_snapshot()
                 value["issue_reactions"] = [connector_reaction(content=content)]

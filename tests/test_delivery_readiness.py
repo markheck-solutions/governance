@@ -492,6 +492,8 @@ class DeliveryReadinessTests(unittest.TestCase):
             )
         )
 
+
+class DeliveryReadinessBenchmarkTests(unittest.TestCase):
     def test_green_workflow_but_missing_phase1_decision_blocks(self) -> None:
         sha = "8" * 40
         benchmark = _benchmark()

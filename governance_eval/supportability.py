@@ -1022,15 +1022,16 @@ def _protected_delivery_chain_errors(target_repo: Path) -> list[str]:
         if not block
     ]
     expected_conditions = {
-        "baseline-supportability": "${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
-        "candidate-supportability": "${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
-        "delivery-receipt": "${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}",
+        "baseline-supportability": "${{ github.event.pull_request.base.ref == 'main' }}",
+        "candidate-supportability": "${{ github.event.pull_request.base.ref == 'main' }}",
+        "delivery-receipt": "${{ always() && github.event.pull_request.base.ref == 'main' }}",
     }
     for name, expected in expected_conditions.items():
         if jobs[name] and _job_condition(jobs[name]) != expected:
             errors.append(f"protected {name} workflow condition is missing or changed")
     pinned_workflows = {
         "baseline-supportability": "supportability-gate.yml",
+        "candidate-supportability": "supportability-gate.yml",
         "delivery-receipt": "delivery-receipt.yml",
     }
     for name, workflow in pinned_workflows.items():
@@ -1041,11 +1042,6 @@ def _protected_delivery_chain_errors(target_repo: Path) -> list[str]:
             errors.append(
                 f"protected {name} workflow must use exact {workflow} at a full immutable SHA"
             )
-    if jobs["candidate-supportability"] and not re.search(
-        r"(?m)^\s+uses:\s+\./\.github/workflows/supportability-gate\.yml\s*$",
-        jobs["candidate-supportability"],
-    ):
-        errors.append("candidate supportability workflow is missing")
     delivery = jobs["delivery-receipt"]
     if delivery and not all(
         _job_needs(delivery, dependency)

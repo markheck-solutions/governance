@@ -77,6 +77,7 @@ _CONNECTOR_REACTION_USER = {
     "node_id": "BOT_kgDOC98s_g",
     "type": "User",
 }
+_CONNECTOR_REACTION_CONTENTS = frozenset({"+1", "eyes"})
 _CONNECTOR_APP = {
     "id": 1144995,
     "node_id": "A_kwHOAOQ6Gs4AEXij",
@@ -480,7 +481,10 @@ def _collection_reasons(
         reasons.append("CONNECTOR_IDENTITY_MISMATCH")
     if len(connector_reactions) > 1:
         reasons.append("CONNECTOR_REACTION_AMBIGUOUS")
-    if any(reaction["content"] != "+1" for reaction in connector_reactions):
+    if any(
+        reaction["content"] not in _CONNECTOR_REACTION_CONTENTS
+        for reaction in connector_reactions
+    ):
         reasons.append("CONNECTOR_REACTION_UNRECOGNIZED")
     current_connector_review_ids = {
         review["id"]

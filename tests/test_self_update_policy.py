@@ -202,7 +202,9 @@ def _protected_enforcement_workflow(sha: str) -> str:
         + "\n"
         "  candidate-supportability:\n"
         "    if: " + _pull_request_condition() + "\n"
-        "    uses: ./.github/workflows/supportability-gate.yml\n"
+        "    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@"
+        + sha
+        + "\n"
         "  delivery-receipt:\n"
         "    needs:\n"
         "      - baseline-supportability\n"
@@ -227,11 +229,11 @@ def _semantic_gate_commands(suffix: str) -> dict[str, list[str]]:
 
 
 def _pull_request_condition() -> str:
-    return "${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}"
+    return "${{ github.event.pull_request.base.ref == 'main' }}"
 
 
 def _delivery_condition() -> str:
-    return "${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}"
+    return "${{ always() && github.event.pull_request.base.ref == 'main' }}"
 
 
 if __name__ == "__main__":

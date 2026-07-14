@@ -596,6 +596,50 @@ class SupportabilityGateTests(unittest.TestCase):
                 all(command["status"] == "SKIPPED" for command in result["commands"])
             )
 
+    def test_protected_delivery_chain_accepts_current_remote_pinned_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow_dir = repo / ".github/workflows"
+            workflow_dir.mkdir(parents=True)
+            source = self.root / ".github/workflows/supportability-enforcement.yml"
+            target = workflow_dir / "supportability-enforcement.yml"
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+            errors = supportability_module._protected_delivery_chain_errors(repo)
+
+            self.assertEqual(errors, [])
+
+    def test_protected_delivery_chain_rejects_floating_candidate_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow_dir = repo / ".github/workflows"
+            workflow_dir.mkdir(parents=True)
+            source = self.root / ".github/workflows/supportability-enforcement.yml"
+            text = source.read_text(encoding="utf-8")
+            marker = (
+                "uses: markheck-solutions/governance/.github/workflows/"
+                "supportability-gate.yml@931c4a39ab8936f3104d731694bce2df890309b2"
+            )
+            first = text.find(marker)
+            second = text.find(marker, first + len(marker))
+            self.assertGreaterEqual(second, 0)
+            text = (
+                text[:second]
+                + marker.replace(marker.rsplit("@", 1)[1], "main")
+                + text[second + len(marker) :]
+            )
+            (workflow_dir / "supportability-enforcement.yml").write_text(
+                text, encoding="utf-8"
+            )
+
+            errors = supportability_module._protected_delivery_chain_errors(repo)
+
+            self.assertIn(
+                "protected candidate-supportability workflow must use exact "
+                "supportability-gate.yml at a full immutable SHA",
+                errors,
+            )
+
     def test_gate_blocks_existing_copilot_review_evidence_checker_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
