@@ -591,6 +591,32 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
 
+    def test_exact_head_workflow_request_does_not_poison_reconciliation(self) -> None:
+        value = reaction_snapshot()
+        value["issue_comments"] = [
+            comment(
+                "@codex review\n\nGovernance review request for exact head "
+                f"`{HEAD_SHA}`.",
+                user={
+                    "login": "github-actions[bot]",
+                    "id": 41898282,
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "type": "Bot",
+                },
+                app={
+                    "id": 15368,
+                    "node_id": "MDM6QXBwMTUzNjg=",
+                    "slug": "github-actions",
+                },
+            )
+        ]
+
+        result = evaluate(value)
+
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertNotIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
     def test_p0_p1_p2_findings_block_reaction_before_or_after_signal(self) -> None:
         for severity in ("P0", "P1", "P2"):
             for submitted_at in (

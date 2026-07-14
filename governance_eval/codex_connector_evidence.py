@@ -432,7 +432,7 @@ def _collection_reasons(
         )
     ):
         reasons.append("SNAPSHOT_ITEM_AFTER_CAPTURE")
-    if _manual_request_present(comments):
+    if _manual_request_present(comments, trusted.head_sha):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
 
     def in_window(value: str) -> bool:
@@ -688,11 +688,30 @@ def _safe_product_trailer(trailer: str) -> bool:
     return normalized == _PRODUCT_TRAILER
 
 
-def _manual_request_present(comments: list[dict[str, Any]]) -> bool:
+def _manual_request_present(comments: list[dict[str, Any]], head_sha: str) -> bool:
     return any(
         not _exact_connector_issue_comment(comment)
+        and not _authorized_workflow_request(comment, head_sha)
         and _MANUAL_REQUEST_RE.search(comment["body"])
         for comment in comments
+    )
+
+
+def _authorized_workflow_request(comment: dict[str, Any], head_sha: str) -> bool:
+    user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+    app = (
+        comment.get("performed_via_github_app")
+        if isinstance(comment.get("performed_via_github_app"), dict)
+        else {}
+    )
+    expected_body = (
+        f"@codex review\n\nGovernance review request for exact head `{head_sha}`."
+    )
+    return bool(
+        user.get("login") == "github-actions[bot]"
+        and user.get("type") == "Bot"
+        and app.get("slug") == "github-actions"
+        and comment.get("body") == expected_body
     )
 
 

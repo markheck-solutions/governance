@@ -29,14 +29,14 @@ These values are fixed by schema. Target repositories cannot substitute reviewer
 
 ## Event model
 
-`supportability-enforcement.yml` runs only for pull-request head transitions:
+`supportability-enforcement.yml` uses `pull_request_target` so GitHub loads the caller from the protected base branch, not from candidate code. It runs only for pull-request head transitions:
 
 - `opened`
 - `reopened`
 - `synchronize`
 - `ready_for_review`
 
-The workflow posts one `@codex review` request bound to the exact new head, then starts the evidence window. That bounded request job has `issues: write`; evaluator and receipt jobs remain read-only. There is no comment-triggered rerun loop and no `actions: write` permission. Baseline and candidate evaluations run in parallel. Each reusable workflow has a hard ten-minute timeout. The Codex collector performs at most one bounded sleep and one final recollection after the five-minute deadline.
+The workflow posts one `@codex review` request bound to the exact new head, then starts the evidence window. That bounded request job has `issues: write`; evaluator and receipt jobs remain read-only. Candidate code is checked out with `persist-credentials: false`, and configured commands receive an empty `GH_TOKEN`. There is no comment-triggered rerun loop and no `actions: write` permission. The protected baseline and delivery workflows are pinned to an exact publication commit; the candidate evaluator is separately exercised against the PR head. Each reusable workflow has a hard ten-minute timeout. The Codex collector performs at most one bounded sleep and one final recollection after the five-minute deadline.
 
 ## Required checks
 

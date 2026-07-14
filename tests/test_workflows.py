@@ -58,8 +58,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("supportability-gate.yml", workflows)
         self.assertIn("delivery-receipt.yml", workflows)
         self.assertIn("supportability-enforcement.yml", workflows)
-        for text in workflows.values():
-            self.assertNotIn("pull_request_target", text)
+        for name, text in workflows.items():
+            if name == "supportability-enforcement.yml":
+                self.assertIn("pull_request_target:", text)
+            else:
+                self.assertNotIn("pull_request_target", text)
             self.assertIn("contents: read", text)
             self.assertNotIn("secrets: inherit", text)
         for name in (
@@ -148,7 +151,7 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-gate.yml"],
         )
         enforcement = workflows["supportability-enforcement.yml"]
-        self.assertIn("pull_request:", enforcement)
+        self.assertIn("pull_request_target:", enforcement)
         self.assertNotIn("pull_request_review:", enforcement)
         self.assertNotIn("issue_comment:", enforcement)
         top_permissions = enforcement.split("jobs:", 1)[0].split("permissions:", 1)[1]
@@ -175,16 +178,23 @@ class WorkflowTests(unittest.TestCase):
             r"(?m)^    uses: markheck-solutions/governance/\.github/workflows/(supportability-gate|delivery-receipt)\.yml@([0-9a-f]{40})$",
             workflows["supportability-enforcement.yml"],
         )
-        self.assertEqual(protected_refs, [])
+        self.assertEqual(
+            protected_refs,
+            [
+                ("supportability-gate", "7034dc85b8bf3e63eacbb525199a8cc239299779"),
+                ("supportability-gate", "7034dc85b8bf3e63eacbb525199a8cc239299779"),
+                ("delivery-receipt", "7034dc85b8bf3e63eacbb525199a8cc239299779"),
+            ],
+        )
         self.assertNotIn(
             "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@main",
             workflows["supportability-enforcement.yml"],
         )
-        self.assertIn(
+        self.assertNotIn(
             "uses: ./.github/workflows/supportability-gate.yml",
             workflows["supportability-enforcement.yml"],
         )
-        self.assertIn(
+        self.assertNotIn(
             "uses: ./.github/workflows/delivery-receipt.yml",
             workflows["supportability-enforcement.yml"],
         )
@@ -235,7 +245,8 @@ class WorkflowTests(unittest.TestCase):
             "  delivery-receipt:", 1
         )
         self.assertIn(
-            "uses: ./.github/workflows/supportability-gate.yml", baseline_block
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@7034dc85b8bf3e63eacbb525199a8cc239299779",
+            baseline_block,
         )
         self.assertIn(
             "target-base-sha: ${{ github.event.pull_request.base.sha }}", baseline_block
@@ -244,24 +255,28 @@ class WorkflowTests(unittest.TestCase):
             "target-head-sha: ${{ github.event.pull_request.head.sha }}", baseline_block
         )
         self.assertIn(
-            "governance-ref: ${{ github.event.pull_request.head.sha }}", baseline_block
+            "governance-ref: 7034dc85b8bf3e63eacbb525199a8cc239299779", baseline_block
         )
         self.assertIn(
-            "uses: ./.github/workflows/supportability-gate.yml", candidate_block
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@7034dc85b8bf3e63eacbb525199a8cc239299779",
+            candidate_block,
         )
         self.assertIn(
             "target-head-sha: ${{ github.event.pull_request.head.sha }}",
             candidate_block,
         )
         self.assertIn(
-            "governance-ref: ${{ github.event.pull_request.head.sha }}", candidate_block
+            "governance-ref: 7034dc85b8bf3e63eacbb525199a8cc239299779", candidate_block
+        )
+        self.assertNotIn(
+            "governance-ref: ${{ github.event.pull_request.head.sha }}", enforcement
         )
         self.assertIn("supportability-artifact-id", delivery_block)
         self.assertIn("supportability-artifact-digest", delivery_block)
         self.assertIn("candidate-supportability-artifact-id", delivery_block)
         self.assertIn("candidate-supportability-artifact-digest", delivery_block)
         self.assertIn(
-            "governance-ref: ${{ github.event.pull_request.head.sha }}", delivery_block
+            "governance-ref: 7034dc85b8bf3e63eacbb525199a8cc239299779", delivery_block
         )
         self.assertIn(
             "if: ${{ github.event.pull_request.base.ref == 'main' }}",
@@ -271,6 +286,12 @@ class WorkflowTests(unittest.TestCase):
             "if: ${{ always() && github.event.pull_request.base.ref == 'main' }}",
             workflows["supportability-enforcement.yml"],
         )
+
+    def test_delivery_receipt_workflow_is_bound_and_fail_closed(self) -> None:
+        workflows = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in (self.root / ".github/workflows").glob("*.yml")
+        }
         self.assertIn(
             "architecture_violation_count", workflows["supportability-gate.yml"]
         )
@@ -284,12 +305,6 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertIn("ai_review_evidence_status", workflows["supportability-gate.yml"])
         self.assertNotIn("Copilot review request", workflows["supportability-gate.yml"])
-
-    def test_delivery_receipt_workflow_is_bound_and_fail_closed(self) -> None:
-        workflows = {
-            path.name: path.read_text(encoding="utf-8")
-            for path in (self.root / ".github/workflows").glob("*.yml")
-        }
         self.assertIn("workflow_call:", workflows["delivery-receipt.yml"])
         self.assertIn("Delivery Receipt", workflows["delivery-receipt.yml"])
         self.assertIn(
