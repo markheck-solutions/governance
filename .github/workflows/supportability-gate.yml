@@ -166,6 +166,8 @@ jobs:
         id: ai-review
         continue-on-error: true
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd governance
           python -m governance_eval.codex_review_gate \
