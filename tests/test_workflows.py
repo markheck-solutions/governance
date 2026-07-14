@@ -125,6 +125,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(
             "governance_eval.codex_review_gate", workflows["supportability-gate.yml"]
         )
+        self.assertRegex(
+            workflows["supportability-gate.yml"],
+            r"(?s)- name: Reconcile Codex review evidence.*?env:\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}.*?python -m governance_eval\.codex_review_gate",
+        )
         self.assertIn(
             "ai-review-gate-result.json", workflows["supportability-gate.yml"]
         )
