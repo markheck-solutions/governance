@@ -29,6 +29,7 @@ SCHEMA_FILES = {
     "codex_connector_evidence_result": "codex_connector_evidence_result.schema.json",
     "codex_connector_snapshot_v2": "codex_connector_snapshot.schema.json",
     "codex_connector_evidence_result_v2": "codex_connector_evidence_result.schema.json",
+    "execution_plan": "execution_plan.schema.json",
 }
 
 SCHEMA_VERSIONS = {
