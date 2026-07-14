@@ -200,11 +200,15 @@ def _protected_enforcement_workflow(sha: str) -> str:
         "    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@"
         + sha
         + "\n"
+        "    with:\n"
+        "      governance-ref: " + sha + "\n"
         "  candidate-supportability:\n"
         "    if: " + _pull_request_condition() + "\n"
         "    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@"
         + sha
         + "\n"
+        "    with:\n"
+        "      governance-ref: " + sha + "\n"
         "  delivery-receipt:\n"
         "    needs:\n"
         "      - baseline-supportability\n"
@@ -213,6 +217,8 @@ def _protected_enforcement_workflow(sha: str) -> str:
         "    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@"
         + sha
         + "\n"
+        "    with:\n"
+        "      governance-ref: " + sha + "\n"
     )
 
 

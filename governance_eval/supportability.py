@@ -1082,13 +1082,25 @@ def _protected_enforcement_change_errors(
         return ["protected enforcement workflow base or head is missing"]
     head_text = path.read_text(encoding="utf-8")
     sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
-    if sha_ref.sub("<PIN>", base_text) != sha_ref.sub("<PIN>", head_text):
+    governance_ref = re.compile(r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)")
+
+    def normalized(text: str) -> str:
+        text = sha_ref.sub("<PIN>", text)
+        return governance_ref.sub(r"\1<PIN>\3", text)
+
+    if normalized(base_text) != normalized(head_text):
         return [
             "protected enforcement workflow change is not an exact SHA pin rotation"
         ]
     errors = _protected_delivery_chain_errors(target_repo)
-    replacement_pins = sha_ref.findall(head_text)
-    if not replacement_pins or any(pin != base_sha for pin in replacement_pins):
+    workflow_pins = sha_ref.findall(head_text)
+    governance_pins = [match.group(2) for match in governance_ref.finditer(head_text)]
+    replacement_pins = workflow_pins + governance_pins
+    if (
+        len(workflow_pins) != 3
+        or len(governance_pins) != 3
+        or any(pin != base_sha for pin in replacement_pins)
+    ):
         errors.append("protected enforcement workflow pins must equal trusted base SHA")
     return errors
 

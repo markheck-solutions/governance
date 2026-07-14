@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -616,18 +617,16 @@ class SupportabilityGateTests(unittest.TestCase):
             workflow_dir.mkdir(parents=True)
             source = self.root / ".github/workflows/supportability-enforcement.yml"
             text = source.read_text(encoding="utf-8")
-            marker = (
-                "uses: markheck-solutions/governance/.github/workflows/"
-                "supportability-gate.yml@931c4a39ab8936f3104d731694bce2df890309b2"
+            candidate_pins = list(
+                re.finditer(
+                    r"uses: markheck-solutions/governance/\.github/workflows/"
+                    r"supportability-gate\.yml@([0-9a-f]{40})",
+                    text,
+                )
             )
-            first = text.find(marker)
-            second = text.find(marker, first + len(marker))
-            self.assertGreaterEqual(second, 0)
-            text = (
-                text[:second]
-                + marker.replace(marker.rsplit("@", 1)[1], "main")
-                + text[second + len(marker) :]
-            )
+            self.assertEqual(len(candidate_pins), 2)
+            pin = candidate_pins[1]
+            text = text[: pin.start(1)] + "main" + text[pin.end(1) :]
             (workflow_dir / "supportability-enforcement.yml").write_text(
                 text, encoding="utf-8"
             )
@@ -637,6 +636,42 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertIn(
                 "protected candidate-supportability workflow must use exact "
                 "supportability-gate.yml at a full immutable SHA",
+                errors,
+            )
+
+    def test_protected_pin_rotation_requires_matching_governance_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow_dir = repo / ".github/workflows"
+            workflow_dir.mkdir(parents=True)
+            source = self.root / ".github/workflows/supportability-enforcement.yml"
+            current = source.read_text(encoding="utf-8")
+            current_pins = re.findall(
+                r"(?:@|governance-ref:\s+)([0-9a-f]{40})", current
+            )
+            self.assertEqual(len(current_pins), 6)
+            self.assertEqual(len(set(current_pins)), 1)
+            head = current.replace(current_pins[0], "2" * 40)
+            self.assertEqual(head.count("2" * 40), 6)
+            (workflow_dir / "supportability-enforcement.yml").write_text(
+                head.replace(
+                    "governance-ref: " + "2" * 40, "governance-ref: " + "3" * 40, 1
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch(
+                "governance_eval.supportability._git_show_text",
+                return_value=current,
+            ):
+                errors = supportability_module._protected_enforcement_change_errors(
+                    repo,
+                    "2" * 40,
+                    ".github/workflows/supportability-enforcement.yml",
+                )
+
+            self.assertIn(
+                "protected enforcement workflow pins must equal trusted base SHA",
                 errors,
             )
 
