@@ -259,9 +259,7 @@ def _bundle_integrity_errors(label: str, evidence: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _archive_identity(
-    path: Any, errors: list[str]
-) -> tuple[Path, str, bytes]:
+def _archive_identity(path: Any, errors: list[str]) -> tuple[Path, str, bytes]:
     if not isinstance(path, Path):
         errors.append("artifact archive path must be a Path")
         return Path(), "", b""
@@ -327,7 +325,9 @@ def _archive_entry_errors(infos: list[zipfile.ZipInfo]) -> list[str]:
             or str(path) != info.filename
             or "\\" in info.filename
         ):
-            errors.append(f"artifact archive entry is not root-contained: {info.filename}")
+            errors.append(
+                f"artifact archive entry is not root-contained: {info.filename}"
+            )
         if info.is_dir() or mode == stat.S_IFDIR:
             errors.append(f"artifact archive entry must be a file: {info.filename}")
         elif mode not in {0, stat.S_IFREG}:
@@ -338,7 +338,9 @@ def _archive_entry_errors(infos: list[zipfile.ZipInfo]) -> list[str]:
         if info.file_size > MAX_ENTRY_BYTES:
             errors.append(f"artifact archive entry is too large: {info.filename}")
         if info.file_size > MAX_COMPRESSION_RATIO * max(info.compress_size, 1):
-            errors.append(f"artifact archive entry compression ratio is unsafe: {info.filename}")
+            errors.append(
+                f"artifact archive entry compression ratio is unsafe: {info.filename}"
+            )
         total_size += info.file_size
     if total_size > MAX_TOTAL_BYTES:
         errors.append("artifact archive expanded size exceeds limit")
@@ -437,7 +439,11 @@ def _target_binding_errors(
         errors.append("repository_url must be a canonical GitHub repository URL")
     if pr_match is None:
         errors.append("pr_url must be a canonical GitHub pull request URL")
-    if repository_match and pr_match and repository_match.group("slug") != pr_match.group("slug"):
+    if (
+        repository_match
+        and pr_match
+        and repository_match.group("slug") != pr_match.group("slug")
+    ):
         errors.append("pr_url repository must match repository_url")
     if not SHA_RE.fullmatch(base_sha):
         errors.append("base_sha must be a full lowercase Git SHA")
@@ -591,7 +597,9 @@ def _semantic_evidence(
         architecture.get("changed_files"), "architecture.changed_files", errors
     )
     if changed != architecture_changed:
-        errors.append("architecture changed_files must match supportability changed_files")
+        errors.append(
+            "architecture changed_files must match supportability changed_files"
+        )
     coverage = _coverage_evidence(gate.get("coverage"), changed, high_risk, errors)
     behavior_fixtures = _behavior_fixture_evidence(
         architecture.get("behavior_fixtures"), errors
@@ -759,15 +767,16 @@ def _copilot_errors(copilot: dict[str, Any], head_sha: str) -> list[str]:
     return errors
 
 
-def _copilot_review_status_errors(
-    review: dict[str, Any], head_sha: str
-) -> list[str]:
+def _copilot_review_status_errors(review: dict[str, Any], head_sha: str) -> list[str]:
     errors: list[str] = []
     if review.get("latest_head_reviewed") is not True:
         errors.append("Copilot review must cover latest head")
     if review.get("reviewed_commit_sha") != head_sha:
         errors.append("Copilot reviewed commit does not match head")
-    if review.get("blocking_thread_count") != 0 or review.get("blocking_comment_count") != 0:
+    if (
+        review.get("blocking_thread_count") != 0
+        or review.get("blocking_comment_count") != 0
+    ):
         errors.append("Copilot review contains blocking evidence")
     if review.get("open_finding_count") not in {0, None}:
         errors.append("Copilot review contains open findings")
@@ -775,9 +784,7 @@ def _copilot_review_status_errors(
     return errors
 
 
-def _copilot_verdict_errors(
-    review: dict[str, Any], head_sha: str
-) -> list[str]:
+def _copilot_verdict_errors(review: dict[str, Any], head_sha: str) -> list[str]:
     errors: list[str] = []
     verdict = review.get("verdict")
     if verdict == "native_clean":
@@ -788,7 +795,10 @@ def _copilot_verdict_errors(
     elif verdict == "clean":
         if review.get("reviewer") != STRUCTURED_COPILOT_COMMENTER:
             errors.append("structured Copilot reviewer identity is invalid")
-        if review.get("structured_evidence_present") is not True or review.get("structured_evidence_valid") is not True:
+        if (
+            review.get("structured_evidence_present") is not True
+            or review.get("structured_evidence_valid") is not True
+        ):
             errors.append("structured Copilot evidence must be present and valid")
     else:
         errors.append("Copilot review verdict must be clean evidence")

@@ -100,11 +100,13 @@ def generate_bootstrap_audit_receipt(
                     errors.append(f"mutation event {index} {payload_key} is missing")
                 elif sha256_json(event[payload_key]) != event.get(digest_key):
                     errors.append(f"mutation event {index} {digest_key} mismatch")
-            request = (
-                event.get("request") if isinstance(event.get("request"), dict) else {}
+            raw_request = event.get("request")
+            raw_response = event.get("response")
+            request: dict[str, Any] = (
+                raw_request if isinstance(raw_request, dict) else {}
             )
-            response = (
-                event.get("response") if isinstance(event.get("response"), dict) else {}
+            response: dict[str, Any] = (
+                raw_response if isinstance(raw_response, dict) else {}
             )
             endpoint = f"{expected_protection_url}/enforce_admins"
             expected_method = "DELETE" if index == 0 else "POST"

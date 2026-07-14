@@ -27,9 +27,15 @@ class DetectorDecisionTests(unittest.TestCase):
     def test_pr_141_defect_is_executable_and_blocked(self) -> None:
         case = self.cases["SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-DEFECT"]
         evidence = run_detectors(case, self.root)
-        route_evidence = next(item for item in evidence if item.detector_id == "route_interleaving")
-        self.assertEqual(route_evidence.observed["actual_sequence"], ["A1", "A3", "B1", "B3"])
-        self.assertEqual(route_evidence.observed["expected_sequence"], ["A1", "B1", "A3", "B3"])
+        route_evidence = next(
+            item for item in evidence if item.detector_id == "route_interleaving"
+        )
+        self.assertEqual(
+            route_evidence.observed["actual_sequence"], ["A1", "A3", "B1", "B3"]
+        )
+        self.assertEqual(
+            route_evidence.observed["expected_sequence"], ["A1", "B1", "A3", "B3"]
+        )
         self.assertEqual(decide(case, evidence).decision, Decision.BLOCK_TECHNICAL)
 
     def test_pr_141_clean_oracle_passes(self) -> None:
@@ -42,7 +48,8 @@ class DetectorDecisionTests(unittest.TestCase):
         defective = [
             case_id
             for case_id, case in self.cases.items()
-            if case["category"] == "synthetic_structural" and case["label"] == "REPRODUCED_BAD"
+            if case["category"] == "synthetic_structural"
+            and case["label"] == "REPRODUCED_BAD"
         ]
         self.assertEqual(len(defective), 6)
         for case_id in defective:
@@ -90,7 +97,9 @@ class DetectorDecisionTests(unittest.TestCase):
         self.assertTrue(decision.fail_closed)
 
     def test_wrong_case_evidence_fails_closed(self) -> None:
-        defect_case = self.cases["SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-DEFECT"]
+        defect_case = self.cases[
+            "SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-DEFECT"
+        ]
         clean_case = self.cases["SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-CLEAN"]
         clean_evidence = run_detectors(clean_case, self.root)
         decision = decide(defect_case, clean_evidence)
@@ -101,15 +110,23 @@ class DetectorDecisionTests(unittest.TestCase):
         gates = [{"name": "ruff", "scope": ["src/*"]}]
         self.assertFalse(_covered_by_any_gate("src/app/public_api.py", gates))
         self.assertTrue(_covered_by_any_gate("src/public_api.py", gates))
-        self.assertTrue(_covered_by_any_gate("src/app/public_api.py", [{"name": "ruff", "scope": ["src/**"]}]))
+        self.assertTrue(
+            _covered_by_any_gate(
+                "src/app/public_api.py", [{"name": "ruff", "scope": ["src/**"]}]
+            )
+        )
 
     def test_malformed_fixture_is_evidence_not_crash(self) -> None:
-        case = copy.deepcopy(self.cases["SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-DEFECT"])
+        case = copy.deepcopy(
+            self.cases["SPAGHETTI-PR-141-PARTIAL-METADATA-INTERLEAVING-DEFECT"]
+        )
         case["detectors"] = ["route_interleaving"]
         with tempfile.TemporaryDirectory(dir=self.root) as tmp:
             fixture = Path(tmp) / "fixture"
             fixture.mkdir()
-            (fixture / "behavior.json").write_text(json.dumps({"rows": []}), encoding="utf-8")
+            (fixture / "behavior.json").write_text(
+                json.dumps({"rows": []}), encoding="utf-8"
+            )
             case["fixture_path"] = str(fixture.relative_to(self.root))
             evidence = run_detectors(case, self.root)
         self.assertEqual(evidence[0].status.value, "MALFORMED")

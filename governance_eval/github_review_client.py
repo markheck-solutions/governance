@@ -374,7 +374,9 @@ def _normalize_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
         created_at = comment.get("createdAt")
         is_minimized = comment.get("isMinimized")
         if not isinstance(body, str):
-            raise GitHubReviewTransportError("GitHub issue comment body must be a string")
+            raise GitHubReviewTransportError(
+                "GitHub issue comment body must be a string"
+            )
         if not isinstance(created_at, str) or not created_at:
             raise GitHubReviewTransportError(
                 "GitHub issue comment createdAt must be a non-empty string"

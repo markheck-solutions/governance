@@ -197,6 +197,11 @@ def _evaluate(
     )
     if review_state == "AI_REVIEW_UNAVAILABLE":
         response = None
+    evidence_cutoff = (
+        snapshot.get("captured_at")
+        if snapshot is not None and normalized_digest is not None
+        else None
+    )
     result = {
         "schema_version": "2.0",
         "capability": "CODEX_CONNECTOR_REVIEW_EVIDENCE",
@@ -215,9 +220,7 @@ def _evaluate(
         "governance_evaluator_sha": trusted.governance_evaluator_sha,
         "review_window_started_at": trusted.review_window_started_at,
         "review_deadline_at": trusted.review_deadline_at,
-        "evidence_cutoff_at": (
-            snapshot.get("captured_at") if normalized_digest is not None else None
-        ),
+        "evidence_cutoff_at": evidence_cutoff,
         "snapshot_file_sha256": observed_digest,
         "normalized_snapshot_sha256": normalized_digest,
         "resolved_clean_commit_sha": trusted.resolved_clean_commit_sha,
@@ -698,12 +701,10 @@ def _manual_request_present(comments: list[dict[str, Any]], head_sha: str) -> bo
 
 
 def _authorized_workflow_request(comment: dict[str, Any], head_sha: str) -> bool:
-    user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
-    app = (
-        comment.get("performed_via_github_app")
-        if isinstance(comment.get("performed_via_github_app"), dict)
-        else {}
-    )
+    raw_user = comment.get("user")
+    raw_app = comment.get("performed_via_github_app")
+    user: dict[str, Any] = raw_user if isinstance(raw_user, dict) else {}
+    app: dict[str, Any] = raw_app if isinstance(raw_app, dict) else {}
     expected_body = (
         f"@codex review\n\nGovernance review request for exact head `{head_sha}`."
     )

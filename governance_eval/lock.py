@@ -92,13 +92,21 @@ def validate_spaghetti_lock(path: Path) -> list[str]:
         if name.endswith("_sha") and not _is_full_sha(value):
             problems.append(f"{name} is not a full immutable SHA: {value!r}")
     expected = PINNED_SPAGHETTI_LOCK.to_json()
-    for name in ("base_sha", "head_sha", "merge_commit_sha", "approved_oracle_sha", "observed_main_sha"):
+    for name in (
+        "base_sha",
+        "head_sha",
+        "merge_commit_sha",
+        "approved_oracle_sha",
+        "observed_main_sha",
+    ):
         if lock.to_json()[name] != expected[name]:
             problems.append(f"{name} does not match resolved PR #141 evidence")
     if lock.pull_request != 141:
         problems.append(f"unexpected pull request: {lock.pull_request}")
     if lock.approved_oracle_sha != lock.base_sha:
-        problems.append("approved oracle SHA must equal PR base SHA for Phase 1 historical oracle")
+        problems.append(
+            "approved oracle SHA must equal PR base SHA for Phase 1 historical oracle"
+        )
     return problems
 
 
