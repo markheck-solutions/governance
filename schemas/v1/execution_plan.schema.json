@@ -1,0 +1,61 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "plan_id",
+    "repository",
+    "pull_request",
+    "base_sha",
+    "head_sha",
+    "evaluator_sha",
+    "config_sha256",
+    "steps"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "pull_request": {"type": "integer", "minimum": 1},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "evaluator_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "step_id",
+          "capability",
+          "adapter_id",
+          "runtime_id",
+          "module",
+          "arguments",
+          "working_directory",
+          "timeout_seconds",
+          "output_limit_bytes"
+        ],
+        "properties": {
+          "step_id": {"type": "string", "enum": ["lint"]},
+          "capability": {"type": "string", "enum": ["lint"]},
+          "adapter_id": {"type": "string", "enum": ["python.ruff-check.v1"]},
+          "runtime_id": {"type": "string", "enum": ["evaluator.python-isolated.v1"]},
+          "module": {"type": "string", "enum": ["ruff"]},
+          "arguments": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "working_directory": {"type": "string", "enum": ["."]},
+          "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
+          "output_limit_bytes": {"type": "integer", "minimum": 1, "maximum": 65536}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
