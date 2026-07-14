@@ -41,9 +41,14 @@ jobs:
           body="@codex review
 
           Governance review request for exact head \`${HEAD_SHA}\`."
-          gh api --method POST \
+          error_file="$(mktemp)"
+          if ! gh api --method POST \
             "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            -f body="$body" > /dev/null
+            -f body="$body" > /dev/null 2>"$error_file"; then
+            error="$(tr '\r\n' '  ' < "$error_file")"
+            echo "::warning title=Codex review request transport unavailable::${error}"
+            echo "The deterministic evaluators will reconcile the exact head after the cutoff and record AI_REVIEW_UNAVAILABLE if Codex does not respond."
+          fi
 
   baseline-supportability:
     name: Baseline Protected Supportability Gate
