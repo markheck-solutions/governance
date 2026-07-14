@@ -125,6 +125,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(
             "governance_eval.codex_review_gate", workflows["supportability-gate.yml"]
         )
+        self.assertRegex(
+            workflows["supportability-gate.yml"],
+            r"(?s)- name: Reconcile Codex review evidence.*?env:\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}.*?python -m governance_eval\.codex_review_gate",
+        )
         self.assertIn(
             "ai-review-gate-result.json", workflows["supportability-gate.yml"]
         )
@@ -184,9 +188,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             protected_refs,
             [
-                ("supportability-gate", "7034dc85b8bf3e63eacbb525199a8cc239299779"),
-                ("supportability-gate", "7034dc85b8bf3e63eacbb525199a8cc239299779"),
-                ("delivery-receipt", "7034dc85b8bf3e63eacbb525199a8cc239299779"),
+                ("supportability-gate", "931c4a39ab8936f3104d731694bce2df890309b2"),
+                ("supportability-gate", "931c4a39ab8936f3104d731694bce2df890309b2"),
+                ("delivery-receipt", "931c4a39ab8936f3104d731694bce2df890309b2"),
             ],
         )
         self.assertNotIn(
@@ -248,7 +252,7 @@ class WorkflowTests(unittest.TestCase):
             "  delivery-receipt:", 1
         )
         self.assertIn(
-            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@7034dc85b8bf3e63eacbb525199a8cc239299779",
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@931c4a39ab8936f3104d731694bce2df890309b2",
             baseline_block,
         )
         self.assertIn(
@@ -258,10 +262,10 @@ class WorkflowTests(unittest.TestCase):
             "target-head-sha: ${{ github.event.pull_request.head.sha }}", baseline_block
         )
         self.assertIn(
-            "governance-ref: 7034dc85b8bf3e63eacbb525199a8cc239299779", baseline_block
+            "governance-ref: 931c4a39ab8936f3104d731694bce2df890309b2", baseline_block
         )
         self.assertIn(
-            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@7034dc85b8bf3e63eacbb525199a8cc239299779",
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@931c4a39ab8936f3104d731694bce2df890309b2",
             candidate_block,
         )
         self.assertIn(
@@ -269,7 +273,7 @@ class WorkflowTests(unittest.TestCase):
             candidate_block,
         )
         self.assertIn(
-            "governance-ref: 7034dc85b8bf3e63eacbb525199a8cc239299779", candidate_block
+            "governance-ref: 931c4a39ab8936f3104d731694bce2df890309b2", candidate_block
         )
         self.assertNotIn(
             "governance-ref: ${{ github.event.pull_request.head.sha }}", enforcement
@@ -279,7 +283,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("candidate-supportability-artifact-id", delivery_block)
         self.assertIn("candidate-supportability-artifact-digest", delivery_block)
         self.assertIn(
-            "governance-ref: 7034dc85b8bf3e63eacbb525199a8cc239299779", delivery_block
+            "governance-ref: 931c4a39ab8936f3104d731694bce2df890309b2", delivery_block
         )
         self.assertIn(
             "if: ${{ github.event.pull_request.base.ref == 'main' }}",
