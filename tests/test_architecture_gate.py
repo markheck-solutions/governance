@@ -29,7 +29,9 @@ class ArchitectureGateTests(unittest.TestCase):
     def test_architecture_policy_comparison_rejects_limit_increase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
-            config = load_supportability_config(repo / ".github/governance/supportability.yml")
+            config = load_supportability_config(
+                repo / ".github/governance/supportability.yml"
+            )
         base = {"architecture_policy": config["architecture_policy"]}
         head = json.loads(json.dumps(base))
         head["architecture_policy"]["modules"]["src"]["limits"]["max_file_lines"] += 1
@@ -53,8 +55,14 @@ class ArchitectureGateTests(unittest.TestCase):
 
             self.assertEqual(code, EXIT_OK)
             self.assertEqual(result["owner_status"], "GREEN")
-            self.assertTrue((repo / "artifacts/supportability/architecture-gate-result.json").exists())
-            self.assertTrue((repo / "artifacts/supportability/architecture-gate-result.md").exists())
+            self.assertTrue(
+                (
+                    repo / "artifacts/supportability/architecture-gate-result.json"
+                ).exists()
+            )
+            self.assertTrue(
+                (repo / "artifacts/supportability/architecture-gate-result.md").exists()
+            )
 
     def test_block_new_mode_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,7 +76,12 @@ class ArchitectureGateTests(unittest.TestCase):
             )
 
             self.assertEqual(code, EXIT_CONFIG)
-            self.assertTrue(any("enforcement_mode must be block_all" in error for error in result["errors"]))
+            self.assertTrue(
+                any(
+                    "enforcement_mode must be block_all" in error
+                    for error in result["errors"]
+                )
+            )
 
     def test_report_only_mode_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -82,7 +95,12 @@ class ArchitectureGateTests(unittest.TestCase):
             )
 
             self.assertEqual(code, EXIT_CONFIG)
-            self.assertTrue(any("enforcement_mode must be block_all" in error for error in result["errors"]))
+            self.assertTrue(
+                any(
+                    "enforcement_mode must be block_all" in error
+                    for error in result["errors"]
+                )
+            )
 
     def test_missing_policy_is_gate_implementation_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -96,9 +114,13 @@ class ArchitectureGateTests(unittest.TestCase):
 
             self.assertEqual(code, EXIT_CONFIG)
             self.assertEqual(result["gate_implementation"], "FAIL")
-            self.assertTrue(any("architecture_policy" in error for error in result["errors"]))
+            self.assertTrue(
+                any("architecture_policy" in error for error in result["errors"])
+            )
 
-    def test_root_tool_caches_skip_but_nested_exact_names_and_lookalikes_are_scanned(self) -> None:
+    def test_root_tool_caches_skip_but_nested_exact_names_and_lookalikes_are_scanned(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
             subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True)
@@ -262,12 +284,19 @@ class ArchitectureGateTests(unittest.TestCase):
             )
 
             self.assertEqual(code, EXIT_BLOCKED)
-            self.assertTrue(any(item["rule_id"] == "vague_folder_name" for item in result["violations"]))
+            self.assertTrue(
+                any(
+                    item["rule_id"] == "vague_folder_name"
+                    for item in result["violations"]
+                )
+            )
 
     def test_python_parse_failure_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
-            (repo / "src/bad_parse.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
+            (repo / "src/bad_parse.py").write_text(
+                "def broken(:\n    pass\n", encoding="utf-8"
+            )
 
             result, code = run_architecture_gate(
                 repo / ".github/governance/supportability.yml",
@@ -278,7 +307,12 @@ class ArchitectureGateTests(unittest.TestCase):
             )
 
             self.assertEqual(code, EXIT_BLOCKED)
-            self.assertTrue(any(item["rule_id"] == "python_parse_failure" for item in result["violations"]))
+            self.assertTrue(
+                any(
+                    item["rule_id"] == "python_parse_failure"
+                    for item in result["violations"]
+                )
+            )
 
     def test_python_dependency_direction_cycle_dynamic_parse_and_size_rules(
         self,
@@ -287,7 +321,8 @@ class ArchitectureGateTests(unittest.TestCase):
             repo = _repo(Path(tmp), self.root, mode="block_all")
             (repo / "tests/leak.py").write_text("import src.app\n", encoding="utf-8")
             (repo / "src/app.py").write_text(
-                "import tests.leak\nimport importlib\nimportlib.import_module('src.runtime')\nclass Oversized:\n" + "    x = 1\n" * 10,
+                "import tests.leak\nimport importlib\nimportlib.import_module('src.runtime')\nclass Oversized:\n"
+                + "    x = 1\n" * 10,
                 encoding="utf-8",
             )
 
@@ -348,7 +383,9 @@ class ArchitectureGateTests(unittest.TestCase):
             self.assertEqual(code, EXIT_OK)
             self.assertEqual(result["architecture_behavior_proof"], "PASS")
             self.assertTrue(result["behavior_fixtures"])
-            self.assertTrue(all(item["status"] == "PASS" for item in result["behavior_fixtures"]))
+            self.assertTrue(
+                all(item["status"] == "PASS" for item in result["behavior_fixtures"])
+            )
 
     def test_behavior_fixture_failure_keeps_gate_red(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -385,7 +422,9 @@ class ArchitectureGateTests(unittest.TestCase):
                     "python_file_count": len(files),
                 }
 
-            with mock.patch("governance_eval.architecture_gate._scan_files", side_effect=fake_scan):
+            with mock.patch(
+                "governance_eval.architecture_gate._scan_files", side_effect=fake_scan
+            ):
                 result, code = run_architecture_gate(
                     repo / ".github/governance/supportability.yml",
                     repo,
@@ -396,7 +435,9 @@ class ArchitectureGateTests(unittest.TestCase):
 
             self.assertEqual(code, EXIT_BLOCKED)
             self.assertEqual(result["architecture_behavior_proof"], "FAIL")
-            self.assertTrue(any("negative_vague_folder" in error for error in result["errors"]))
+            self.assertTrue(
+                any("negative_vague_folder" in error for error in result["errors"])
+            )
 
 
 def _repo(path: Path, root: Path, *, mode: str) -> Path:
@@ -408,7 +449,9 @@ def _repo(path: Path, root: Path, *, mode: str) -> Path:
     target_standard = path / "docs/reference/supportability-standard.md"
     target_standard.write_text(standard.read_text(encoding="utf-8"), encoding="utf-8")
     (path / "src/app.py").write_text("def app():\n    return 1\n", encoding="utf-8")
-    (path / "tests/test_app.py").write_text("from src.app import app\n", encoding="utf-8")
+    (path / "tests/test_app.py").write_text(
+        "from src.app import app\n", encoding="utf-8"
+    )
     (path / ".github/governance/supportability.yml").write_text(
         _config_yaml(sha256_file(target_standard), mode),
         encoding="utf-8",
@@ -416,7 +459,9 @@ def _repo(path: Path, root: Path, *, mode: str) -> Path:
     return path
 
 
-def _add_known_debt(repo: Path, violation: dict, *, expires_on: str = "2099-12-31") -> None:
+def _add_known_debt(
+    repo: Path, violation: dict, *, expires_on: str = "2099-12-31"
+) -> None:
     config_path = repo / ".github/governance/supportability.yml"
     config = load_supportability_config(config_path)
     fingerprint = _fingerprint(violation)
@@ -465,11 +510,11 @@ coverage:
   forbid_gate_scope_narrowing: true
   forbid_threshold_weakening: true
 ai_review:
-  copilot_required: true
-  latest_head_required: true
+  provider: codex_connector
+  adapter: codex_connector_pr_signal_v2
+  review_window_seconds: 300
+  unavailable_after_cutoff: non_blocking
   unresolved_p0_p1_p2_blocks: true
-  reviewer_login_patterns:
-    - "*copilot*"
 receipt:
   artifact_name: supportability-delivery-receipt
   retention_days: 90

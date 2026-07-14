@@ -9,13 +9,6 @@ on:
       - reopened
       - synchronize
       - ready_for_review
-  pull_request_review:
-    types:
-      - submitted
-      - edited
-  issue_comment:
-    types:
-      - created
 
 permissions:
   actions: read
@@ -23,125 +16,39 @@ permissions:
   pull-requests: read
 
 jobs:
-  rerun-supportability-on-evidence:
-    name: Rerun PR-head Supportability On Evidence
-    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'governance-review-evidence:v1') && github.event.comment.user.type == 'Bot' && (contains(github.event.comment.user.login, 'copilot') || startsWith(github.event.comment.user.login, 'chatgpt-codex-connector')) }}
+  request-codex-review:
+    name: Request Codex Review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     permissions:
-      actions: write
       contents: read
+      issues: write
       pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Rerun latest failed PR-head supportability
+      - name: Request exact-head Codex review
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid pull-request head SHA" >&2
+            exit 64
+          fi
+          body="@codex review
 
-          MARKER = "governance-review-evidence:v1"
-
-          def gh_api(*args):
-              result = subprocess.run(
-                  ["gh", "api", *args],
-                  check=True,
-                  text=True,
-                  capture_output=True,
-              )
-              return result.stdout
-
-          event_path = os.environ["GITHUB_EVENT_PATH"]
-          repository = os.environ["REPOSITORY"]
-          event = json.loads(open(event_path, encoding="utf-8").read())
-
-          issue = event.get("issue") if isinstance(event.get("issue"), dict) else {}
-          comment = event.get("comment") if isinstance(event.get("comment"), dict) else {}
-          body = str(comment.get("body") or "")
-          user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
-          author = str(user.get("login") or "").lower()
-          user_type = str(user.get("type") or "")
-          if not issue.get("pull_request") or MARKER not in body:
-              print("Comment is not structured PR review evidence; no rerun.")
-              raise SystemExit(0)
-          allowed_bot_author = (
-              "copilot" in author
-              or author.startswith("chatgpt-codex-connector")
-          )
-          if user_type != "Bot" or not allowed_bot_author:
-              print(f"Comment author {author!r} with type {user_type!r} is not an allowed AI reviewer bot; no rerun.")
-              raise SystemExit(0)
-
-          pr_number = int(issue.get("number") or 0)
-          if not pr_number:
-              print("PR number missing from issue_comment payload; no rerun.")
-              raise SystemExit(0)
-          pr = json.loads(gh_api(f"repos/{repository}/pulls/{pr_number}"))
-          base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
-          head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
-          if base.get("ref") != "main":
-              print("PR base is not main; no rerun.")
-              raise SystemExit(0)
-          head_sha = str(head.get("sha") or "")
-          if not head_sha:
-              raise SystemExit("PR head SHA missing; cannot rerun fail-closed gate.")
-
-          payload = json.loads(gh_api(f"repos/{repository}/actions/workflows/supportability-enforcement.yml/runs?head_sha={head_sha}&per_page=100"))
-          runs = []
-          for run in payload.get("workflow_runs", []):
-              run_prs = run.get("pull_requests") if isinstance(run.get("pull_requests"), list) else []
-              run_matches_pr = any(int(run_pr.get("number") or 0) == pr_number for run_pr in run_prs)
-              if run.get("head_sha") == head_sha and run_matches_pr:
-                  runs.append(run)
-          if not runs:
-              print(f"No Supportability Enforcement run found for PR #{pr_number} at {head_sha}; no rerun.")
-              raise SystemExit(0)
-          def newest(items):
-              return sorted(items, key=lambda run: str(run.get("created_at") or ""), reverse=True)[0]
-
-          failed_runs = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "failure"]
-          if failed_runs:
-              run_id = newest(failed_runs)["id"]
-              gh_api("-X", "POST", f"repos/{repository}/actions/runs/{run_id}/rerun-failed-jobs")
-              print(f"Requested failed-job rerun for PR-head supportability run {run_id}.")
-              raise SystemExit(0)
-
-          rerunnable_runs = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") != "success"]
-          if rerunnable_runs:
-              run_id = newest(rerunnable_runs)["id"]
-              gh_api("-X", "POST", f"repos/{repository}/actions/runs/{run_id}/rerun")
-              print(f"Requested full rerun for PR-head supportability run {run_id}.")
-              raise SystemExit(0)
-
-          latest = newest(runs)
-          run_id = latest["id"]
-          status = latest.get("status")
-          if status != "completed":
-              print(f"Supportability run {run_id} is {status}; no rerun.")
-              raise SystemExit(0)
-          print(f"Supportability run {run_id} is already success; no rerun.")
-          PY
+          Governance review request for exact head \`${HEAD_SHA}\`."
+          gh api --method POST \
+            "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="$body" > /dev/null
 
   baseline-supportability:
     name: Baseline Protected Supportability Gate
-    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@ba6666911e3b035b1e9b08d88b075dd98371a741
-    with:
-      target-repository: ${{ github.repository }}
-      target-repository-url: https://github.com/${{ github.repository }}.git
-      target-base-sha: ${{ github.event.pull_request.base.sha }}
-      target-head-sha: ${{ github.event.pull_request.head.sha }}
-      target-pr-number: ${{ github.event.pull_request.number }}
-      target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: ${{ github.event.pull_request.base.sha }}
-      artifact-name: baseline-supportability-gate-evidence
-
-  candidate-supportability:
-    name: Candidate Supportability Gate
-    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}
+    needs: request-codex-review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
     uses: ./.github/workflows/supportability-gate.yml
     with:
       target-repository: ${{ github.repository }}
@@ -150,6 +57,23 @@ jobs:
       target-head-sha: ${{ github.event.pull_request.head.sha }}
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
+      review-window-started-at: ${{ github.event.pull_request.updated_at }}
+      governance-ref: ${{ github.event.pull_request.head.sha }}
+      artifact-name: baseline-supportability-gate-evidence
+
+  candidate-supportability:
+    name: Candidate Supportability Gate
+    needs: request-codex-review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    uses: ./.github/workflows/supportability-gate.yml
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      review-window-started-at: ${{ github.event.pull_request.updated_at }}
       governance-ref: ${{ github.event.pull_request.head.sha }}
       artifact-name: candidate-supportability-gate-evidence
 
@@ -158,8 +82,8 @@ jobs:
     needs:
       - baseline-supportability
       - candidate-supportability
-    if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@ba6666911e3b035b1e9b08d88b075dd98371a741
+    if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
+    uses: ./.github/workflows/delivery-receipt.yml
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
@@ -167,7 +91,7 @@ jobs:
       target-head-sha: ${{ github.event.pull_request.head.sha }}
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: ${{ github.event.pull_request.base.sha }}
+      governance-ref: ${{ github.event.pull_request.head.sha }}
       supportability-artifact-name: baseline-supportability-gate-evidence
       supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] || 'missing-baseline-supportability-artifact-id' }}
       supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] || 'missing-baseline-supportability-artifact-digest' }}

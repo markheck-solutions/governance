@@ -116,7 +116,7 @@ class CodexConnectorCollectorTests(unittest.TestCase):
 
         self.assertEqual(calls, [base, pull_url])
 
-    def test_fresh_cutoff_recollection_blocks_late_finding(self) -> None:
+    def test_fresh_cutoff_recollection_ignores_post_deadline_finding(self) -> None:
         api = "https://api.github.com"
         base = f"{api}/repos/{REPOSITORY}"
         pull_url = f"{base}/pulls/35"
@@ -204,8 +204,9 @@ class CodexConnectorCollectorTests(unittest.TestCase):
 
         self.assertEqual(first["capability_status"], "PASS")
         self.assertEqual(first["evidence_cutoff_at"], "2026-07-13T22:12:10Z")
-        self.assertEqual(refreshed["capability_status"], "BLOCK_TECHNICAL")
-        self.assertIn("BLOCKING_FINDINGS_PRESENT", refreshed["reasons"])
+        self.assertEqual(refreshed["capability_status"], "PASS")
+        self.assertEqual(refreshed["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(refreshed["reasons"], ["ONLY_LATE_RESPONSE"])
 
     def test_collector_follows_every_page_and_emits_terminal_receipts(self) -> None:
         api = "https://api.github.com"

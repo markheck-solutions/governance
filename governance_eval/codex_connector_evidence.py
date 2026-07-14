@@ -185,7 +185,18 @@ def _evaluate(
             )
             reasons.extend(evidence_reasons)
     reasons = sorted(set(reasons))
-    passed = not reasons and reviewed_head == trusted.head_sha and response is not None
+    review_state = _classify_review_state(
+        reasons, reviewed_head, response, trusted.head_sha
+    )
+    passed = review_state in {"CLEAN", "AI_REVIEW_UNAVAILABLE"}
+    reconciled = review_state != "INVALID_EVIDENCE"
+    result_reviewed_head = (
+        trusted.head_sha
+        if review_state in {"CLEAN", "BLOCKING_FINDINGS_PRESENT"}
+        else None
+    )
+    if review_state == "AI_REVIEW_UNAVAILABLE":
+        response = None
     result = {
         "schema_version": "2.0",
         "capability": "CODEX_CONNECTOR_REVIEW_EVIDENCE",
@@ -211,15 +222,41 @@ def _evaluate(
         "normalized_snapshot_sha256": normalized_digest,
         "resolved_clean_commit_sha": trusted.resolved_clean_commit_sha,
         "connector_identity": deepcopy(_CONNECTOR_RESULT_IDENTITY),
+        "review_state": review_state,
         "capability_status": "PASS" if passed else "BLOCK_TECHNICAL",
-        "reviewed_head_sha": reviewed_head if passed else None,
+        "reconciled_head_sha": trusted.head_sha if reconciled else None,
+        "reviewed_head_sha": result_reviewed_head,
         "response": response,
-        "reasons": [] if passed else reasons,
+        "reasons": [] if review_state == "CLEAN" else reasons,
         "result_content_hash": "",
     }
     result["result_content_hash"] = sha256_json(result)
     _validate_result_shape(result)
     return result
+
+
+def _classify_review_state(
+    reasons: list[str],
+    reviewed_head: str | None,
+    response: dict[str, Any] | None,
+    head_sha: str,
+) -> str:
+    if not reasons and reviewed_head == head_sha and response is not None:
+        return "CLEAN"
+    reason_set = set(reasons)
+    if "BLOCKING_FINDINGS_PRESENT" in reason_set and reason_set <= {
+        "BLOCKING_FINDINGS_PRESENT",
+        "RESPONSE_BODY_UNRECOGNIZED",
+    }:
+        return "BLOCKING_FINDINGS_PRESENT"
+    if reason_set and reason_set <= {"NO_IN_WINDOW_RESPONSE", "ONLY_LATE_RESPONSE"}:
+        return "AI_REVIEW_UNAVAILABLE"
+    if "CONNECTOR_FAILURE_PRESENT" in reason_set and reason_set <= {
+        "CONNECTOR_FAILURE_PRESENT",
+        "RESPONSE_BODY_UNRECOGNIZED",
+    }:
+        return "AI_REVIEW_UNAVAILABLE"
+    return "INVALID_EVIDENCE"
 
 
 def _load_snapshot(raw: Any) -> tuple[dict[str, Any] | None, list[str]]:
@@ -243,48 +280,57 @@ def _evaluate_snapshot(
     comments = snapshot["issue_comments"]
     reviews = snapshot["pull_request_reviews"]
     review_comments = snapshot["review_comments"]
-    reactions = snapshot.get("issue_reactions", [])
     events = snapshot.get("pull_request_events", [])
     reasons = _collection_reasons(
-        snapshot, trusted, comments, reviews, review_comments, reactions, events
+        snapshot,
+        trusted,
+        comments,
+        reviews,
+        review_comments,
+        snapshot.get("issue_reactions", []),
+        events,
     )
-    responses = (
-        [
-            ("issue_comment", item)
-            for item in comments
-            if _exact_connector_issue_comment(item)
-        ]
-        + [
-            ("pull_request_review", item)
-            for item in reviews
-            if _exact_connector_user(item)
-        ]
-        + [
-            ("pull_request_reaction", item)
-            for item in reactions
-            if _exact_connector_reaction_user(item)
-        ]
-    )
+    responses = [
+        ("issue_comment", item)
+        for item in comments
+        if _exact_connector_issue_comment(item)
+    ] + [
+        ("pull_request_review", item) for item in reviews if _exact_connector_user(item)
+    ]
     valid_responses = [
         item
         for item in responses
         if _valid_timestamp(_response_timestamp(item[0], item[1]))
     ]
-    if not valid_responses:
-        reasons.append("NO_CONNECTOR_RESPONSE")
+    in_window_responses = [
+        item
+        for item in valid_responses
+        if _timestamp(trusted.review_window_started_at)
+        < _timestamp(_response_timestamp(item[0], item[1]))
+        <= _timestamp(trusted.review_deadline_at)
+    ]
+    if not in_window_responses:
+        reasons.append(
+            "ONLY_LATE_RESPONSE"
+            if any(
+                _timestamp(_response_timestamp(item[0], item[1]))
+                > _timestamp(trusted.review_deadline_at)
+                for item in valid_responses
+            )
+            else "NO_IN_WINDOW_RESPONSE"
+        )
         return None, reasons, None
     response_type, latest = max(
-        valid_responses,
+        in_window_responses,
         key=lambda item: (
             _timestamp(_response_timestamp(item[0], item[1])),
             item[1]["id"],
             item[0],
         ),
     )
-    reaction_response = response_type == "pull_request_reaction"
     app_provenance = (
         "NOT_EXPOSED_BY_GITHUB_API"
-        if reaction_response or response_type == "pull_request_review"
+        if response_type == "pull_request_review"
         else "VERIFIED_PERFORMED_VIA_GITHUB_APP"
     )
     response = {
@@ -292,9 +338,7 @@ def _evaluate_snapshot(
         "response_id": latest["id"],
         "response_node_id": latest.get("node_id"),
         "created_at": _response_timestamp(response_type, latest),
-        "payload_sha256": sha256(
-            latest["content" if reaction_response else "body"].encode("utf-8")
-        ).hexdigest(),
+        "payload_sha256": sha256(latest["body"].encode("utf-8")).hexdigest(),
         "user_type": latest["user"]["type"],
         "app_provenance": app_provenance,
         "app_id": None
@@ -307,12 +351,6 @@ def _evaluate_snapshot(
         if app_provenance == "NOT_EXPOSED_BY_GITHUB_API"
         else _CONNECTOR_APP["slug"],
     }
-    if _timestamp(response["created_at"]) <= _timestamp(
-        trusted.review_window_started_at
-    ):
-        reasons.append("RESPONSE_NOT_AFTER_WINDOW")
-    if _timestamp(response["created_at"]) > _timestamp(trusted.review_deadline_at):
-        reasons.append("RESPONSE_AFTER_DEADLINE")
     if response_type == "pull_request_review":
         if latest["commit_id"] != trusted.head_sha:
             reasons.append("REVIEWED_COMMIT_NOT_HEAD")
@@ -321,44 +359,6 @@ def _evaluate_snapshot(
         else:
             reasons.append("RESPONSE_BODY_UNRECOGNIZED")
         return response, reasons, None
-    if response_type == "pull_request_reaction":
-        pull_request = snapshot["pull_request"]
-        captured_at = snapshot.get("captured_at")
-        if not {"captured_at", "issue_reactions", "pull_request_events"}.issubset(
-            snapshot
-        ):
-            reasons.append("REACTION_COLLECTION_INCOMPLETE")
-        if latest["content"] != "+1":
-            reasons.append("CONNECTOR_REACTION_UNRECOGNIZED")
-        if trusted.resolved_clean_commit_sha is not None:
-            reasons.append("REACTION_COMMIT_RESOLUTION_NOT_APPLICABLE")
-        if pull_request.get("created_at") != trusted.review_window_started_at:
-            reasons.append("REACTION_WINDOW_NOT_BOUND_TO_OPENED_HEAD")
-        if not isinstance(captured_at, str) or not _valid_timestamp(captured_at):
-            reasons.append("REACTION_COLLECTION_NOT_FINAL")
-        elif _timestamp(captured_at) < _timestamp(trusted.review_deadline_at):
-            reasons.append("REACTION_COLLECTION_NOT_FINAL")
-        disqualifying_events = {
-            "closed",
-            "reopened",
-            "merged",
-            "head_ref_force_pushed",
-            "head_ref_deleted",
-            "head_ref_restored",
-            "base_ref_changed",
-            "base_ref_force_pushed",
-            "converted_to_draft",
-            "ready_for_review",
-        }
-        if any(
-            event["event"] in disqualifying_events
-            and _valid_timestamp(event["created_at"])
-            and _timestamp(event["created_at"])
-            >= _timestamp(trusted.review_window_started_at)
-            for event in events
-        ):
-            reasons.append("PULL_REQUEST_HEAD_NOT_IMMUTABLE")
-        return response, reasons, trusted.head_sha if not reasons else None
     commit_identity = _clean_commit_identity(latest["body"])
     if commit_identity is None:
         reasons.append("RESPONSE_BODY_UNRECOGNIZED")
@@ -434,12 +434,21 @@ def _collection_reasons(
         reasons.append("SNAPSHOT_ITEM_AFTER_CAPTURE")
     if _manual_request_present(comments):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
+
+    def in_window(value: str) -> bool:
+        return _valid_timestamp(value) and _timestamp(
+            trusted.review_window_started_at
+        ) < _timestamp(value) <= _timestamp(trusted.review_deadline_at)
+
     connector_failure = any(
         _exact_connector_issue_comment(comment)
         and is_ai_review_service_failure(comment["body"])
+        and in_window(comment["created_at"])
         for comment in comments
     ) or any(
-        _exact_connector_user(review) and is_ai_review_service_failure(review["body"])
+        _exact_connector_user(review)
+        and is_ai_review_service_failure(review["body"])
+        and in_window(review["submitted_at"])
         for review in reviews
     )
     if connector_failure:
@@ -447,11 +456,15 @@ def _collection_reasons(
     if any(
         _exact_connector_issue_comment(comment)
         and _BLOCKING_SEVERITY_RE.search(comment["body"])
+        and in_window(comment["created_at"])
         for comment in comments
     ):
         reasons.append("BLOCKING_FINDINGS_PRESENT")
     connector_reactions = [
-        reaction for reaction in reactions if _exact_connector_reaction_user(reaction)
+        reaction
+        for reaction in reactions
+        if _exact_connector_reaction_user(reaction)
+        and in_window(reaction["created_at"])
     ]
     if any(
         reaction["user"] != _CONNECTOR_REACTION_USER
@@ -478,7 +491,13 @@ def _collection_reasons(
         for comment in review_comments
     ):
         reasons.append("ORPHANED_REVIEW_COMMENT")
-    if _blocking_finding_present(reviews, review_comments, trusted.head_sha):
+    if _blocking_finding_present(
+        reviews,
+        review_comments,
+        trusted.head_sha,
+        trusted.review_window_started_at,
+        trusted.review_deadline_at,
+    ):
         reasons.append("BLOCKING_FINDINGS_PRESENT")
     return reasons
 
@@ -487,11 +506,20 @@ def _blocking_finding_present(
     reviews: list[dict[str, Any]],
     comments: list[dict[str, Any]],
     head_sha: str,
+    window_started_at: str,
+    deadline_at: str,
 ) -> bool:
+    def in_window(value: str) -> bool:
+        return _valid_timestamp(value) and _timestamp(window_started_at) < _timestamp(
+            value
+        ) <= _timestamp(deadline_at)
+
     current = {
         review["id"]: review
         for review in reviews
-        if _exact_connector_user(review) and review["commit_id"] == head_sha
+        if _exact_connector_user(review)
+        and review["commit_id"] == head_sha
+        and in_window(review["submitted_at"])
     }
     parent_blocking = any(
         review["state"] == "CHANGES_REQUESTED"
@@ -501,6 +529,7 @@ def _blocking_finding_present(
     inline_blocking = any(
         _exact_connector_user(comment)
         and comment["commit_id"] == head_sha
+        and in_window(comment["created_at"])
         and _BLOCKING_SEVERITY_RE.search(comment["body"])
         for comment in comments
     )
@@ -825,20 +854,47 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
         if response_type == "issue_comment"
         else result["resolved_clean_commit_sha"] is None
     )
-    pass_semantics = (
-        result["reasons"] == []
-        and result["reviewed_head_sha"] == result["pull_request"]["head_sha"]
-        and isinstance(response, dict)
-        and response.get("response_type") in {"issue_comment", "pull_request_reaction"}
-        and resolution_valid
-        and result["normalized_snapshot_sha256"] is not None
+    final_collection = (
+        result["normalized_snapshot_sha256"] is not None
         and isinstance(result["evidence_cutoff_at"], str)
         and _valid_timestamp(result["evidence_cutoff_at"])
         and _timestamp(result["evidence_cutoff_at"])
         >= _timestamp(result["review_deadline_at"])
     )
-    block_semantics = bool(result["reasons"]) and result["reviewed_head_sha"] is None
-    if (passed and not pass_semantics) or (not passed and not block_semantics):
+    clean_semantics = (
+        result["review_state"] == "CLEAN"
+        and result["reasons"] == []
+        and result["reviewed_head_sha"] == result["pull_request"]["head_sha"]
+        and result["reconciled_head_sha"] == result["pull_request"]["head_sha"]
+        and isinstance(response, dict)
+        and response.get("response_type") in {"issue_comment", "pull_request_reaction"}
+        and resolution_valid
+        and final_collection
+    )
+    unavailable_semantics = (
+        result["review_state"] == "AI_REVIEW_UNAVAILABLE"
+        and bool(result["reasons"])
+        and result["reviewed_head_sha"] is None
+        and result["reconciled_head_sha"] == result["pull_request"]["head_sha"]
+        and response is None
+        and final_collection
+    )
+    blocking_semantics = (
+        result["review_state"] == "BLOCKING_FINDINGS_PRESENT"
+        and "BLOCKING_FINDINGS_PRESENT" in result["reasons"]
+        and result["reviewed_head_sha"] == result["pull_request"]["head_sha"]
+        and result["reconciled_head_sha"] == result["pull_request"]["head_sha"]
+        and final_collection
+    )
+    invalid_semantics = (
+        result["review_state"] == "INVALID_EVIDENCE"
+        and bool(result["reasons"])
+        and result["reviewed_head_sha"] is None
+        and result["reconciled_head_sha"] is None
+    )
+    if (passed and not (clean_semantics or unavailable_semantics)) or (
+        not passed and not (blocking_semantics or invalid_semantics)
+    ):
         raise ValueError("Codex connector evidence result semantics are invalid")
 
 

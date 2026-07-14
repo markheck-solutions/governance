@@ -4,7 +4,7 @@
   "title": "Codex Connector Evidence Result v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "capability", "adapter_id", "repository", "pull_request", "governance_evaluator_sha", "review_window_started_at", "review_deadline_at", "evidence_cutoff_at", "snapshot_file_sha256", "normalized_snapshot_sha256", "resolved_clean_commit_sha", "connector_identity", "capability_status", "reviewed_head_sha", "response", "reasons", "result_content_hash"],
+  "required": ["schema_version", "capability", "adapter_id", "repository", "pull_request", "governance_evaluator_sha", "review_window_started_at", "review_deadline_at", "evidence_cutoff_at", "snapshot_file_sha256", "normalized_snapshot_sha256", "resolved_clean_commit_sha", "connector_identity", "review_state", "capability_status", "reconciled_head_sha", "reviewed_head_sha", "response", "reasons", "result_content_hash"],
   "properties": {
     "schema_version": {"type": "string", "enum": ["2.0"]},
     "capability": {"type": "string", "enum": ["CODEX_CONNECTOR_REVIEW_EVIDENCE"]},
@@ -47,7 +47,9 @@
         "user_node_id": {"type": "string", "enum": ["BOT_kgDOC98s_g"]}
       }
     },
+    "review_state": {"type": "string", "enum": ["CLEAN", "BLOCKING_FINDINGS_PRESENT", "AI_REVIEW_UNAVAILABLE", "INVALID_EVIDENCE"]},
     "capability_status": {"type": "string", "enum": ["PASS", "BLOCK_TECHNICAL"]},
+    "reconciled_head_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
     "reviewed_head_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
     "response": {
       "type": ["object", "null"],
