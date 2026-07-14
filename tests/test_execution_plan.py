@@ -45,7 +45,15 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
                     "step_id": "lint",
                     "capability": "lint",
                     "adapter_id": "python.ruff-check.v1",
-                    "argv": ["python", "-m", "ruff", "check", "."],
+                    "runtime_id": "evaluator.python-isolated.v1",
+                    "module": "ruff",
+                    "arguments": [
+                        "check",
+                        "--isolated",
+                        "--no-cache",
+                        "--no-respect-gitignore",
+                        ".",
+                    ],
                     "working_directory": ".",
                     "timeout_seconds": 120,
                     "output_limit_bytes": 65536,
@@ -59,6 +67,16 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
         assessment = assess_execution_plan(payload, VALID_REQUEST)
         self.assertEqual(assessment["capability_status"], "PASS")
         self.assertEqual(assessment["errors"], [])
+
+    def test_lint_plan_requires_isolated_evaluator_runtime(self) -> None:
+        step = compile_execution_plan(VALID_REQUEST).steps[0]
+
+        self.assertEqual(step.runtime_id, "evaluator.python-isolated.v1")
+        self.assertEqual(step.module, "ruff")
+        self.assertEqual(
+            step.arguments,
+            ("check", "--isolated", "--no-cache", "--no-respect-gitignore", "."),
+        )
 
     def test_rejects_unsupported_adapter(self) -> None:
         request = {**VALID_REQUEST, "adapter_id": "python.unknown.v1"}
@@ -75,6 +93,10 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
             "shell": True,
             "argv": ["python", "-c", "pass"],
             "args": ["--exit-zero"],
+            "executable": "python",
+            "runtime_id": "candidate.python.v1",
+            "module": "candidate_ruff",
+            "arguments": ["--exit-zero"],
         }
 
         for field, value in hostile_fields.items():
@@ -87,7 +109,10 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
 
     def test_blocks_plan_mutation_even_when_attacker_rehashes_it(self) -> None:
         payload = deepcopy(compile_execution_plan(VALID_REQUEST).to_json())
-        payload["steps"][0]["argv"] = ["python", "-m", "ruff", "check", "--exit-zero"]
+        payload["steps"][0]["arguments"] = [
+            "check",
+            "--exit-zero",
+        ]
         unsigned = {key: value for key, value in payload.items() if key != "plan_id"}
         payload["plan_id"] = sha256_json(unsigned)
 

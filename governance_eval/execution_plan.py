@@ -38,7 +38,9 @@ class ExecutionStep:
     step_id: str
     capability: str
     adapter_id: str
-    argv: tuple[str, ...]
+    runtime_id: str
+    module: str
+    arguments: tuple[str, ...]
     working_directory: str
     timeout_seconds: int
     output_limit_bytes: int
@@ -48,7 +50,9 @@ class ExecutionStep:
             "step_id": self.step_id,
             "capability": self.capability,
             "adapter_id": self.adapter_id,
-            "argv": list(self.argv),
+            "runtime_id": self.runtime_id,
+            "module": self.module,
+            "arguments": list(self.arguments),
             "working_directory": self.working_directory,
             "timeout_seconds": self.timeout_seconds,
             "output_limit_bytes": self.output_limit_bytes,
@@ -97,7 +101,9 @@ def compile_execution_plan(request: Mapping[str, Any]) -> ExecutionPlan:
         step_id=adapter.capability,
         capability=adapter.capability,
         adapter_id=adapter.adapter_id,
-        argv=adapter.argv,
+        runtime_id=adapter.runtime_id,
+        module=adapter.module,
+        arguments=adapter.arguments,
         working_directory=adapter.working_directory,
         timeout_seconds=adapter.timeout_seconds,
         output_limit_bytes=adapter.output_limit_bytes,

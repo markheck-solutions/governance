@@ -7,7 +7,9 @@ from dataclasses import dataclass
 class CapabilityAdapter:
     capability: str
     adapter_id: str
-    argv: tuple[str, ...]
+    runtime_id: str
+    module: str
+    arguments: tuple[str, ...]
     working_directory: str
     timeout_seconds: int
     output_limit_bytes: int
@@ -17,7 +19,9 @@ _ADAPTERS = {
     ("lint", "python.ruff-check.v1"): CapabilityAdapter(
         capability="lint",
         adapter_id="python.ruff-check.v1",
-        argv=("python", "-m", "ruff", "check", "."),
+        runtime_id="evaluator.python-isolated.v1",
+        module="ruff",
+        arguments=("check", "--isolated", "--no-cache", "--no-respect-gitignore", "."),
         working_directory=".",
         timeout_seconds=120,
         output_limit_bytes=65536,
