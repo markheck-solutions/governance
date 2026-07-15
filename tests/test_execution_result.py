@@ -452,7 +452,9 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
             ["execution result termination and exit code are inconsistent"],
         )
 
-    def test_nonexit_result_is_integrity_valid_but_unauthorized(self) -> None:
+    def test_nonexit_result_with_consistent_timing_is_valid_but_unauthorized(
+        self,
+    ) -> None:
         from governance_eval.execution_result import (
             assess_execution_result,
             validate_execution_result_integrity,
@@ -463,6 +465,9 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
                 plan, payload = valid_result_payload()
                 payload["termination"] = termination
                 payload["exit_code"] = None
+                if termination == "TIMED_OUT":
+                    payload["completed_at"] = "2026-07-15T15:02:00Z"
+                    payload["duration_seconds"] = 120.0
                 seal_result_payload(payload)
 
                 self.assertEqual(
@@ -475,6 +480,91 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
                     assess_execution_result(payload, plan)["errors"],
                     ["execution result provenance is unverified"],
                 )
+
+    def test_blocks_timeout_claimed_before_configured_deadline(self) -> None:
+        from governance_eval.execution_result import (
+            assess_execution_result,
+            validate_execution_result_integrity,
+        )
+
+        plan, payload = valid_result_payload()
+        payload["termination"] = "TIMED_OUT"
+        payload["exit_code"] = None
+        seal_result_payload(payload)
+
+        integrity = validate_execution_result_integrity(payload, plan)
+        result = assess_execution_result(payload, plan)
+
+        self.assertEqual(integrity["integrity_status"], "INTEGRITY_INVALID")
+        self.assertEqual(
+            integrity["errors"],
+            ["execution result timeout occurred before configured deadline"],
+        )
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(
+            result["errors"],
+            ["execution result timeout occurred before configured deadline"],
+        )
+
+    def test_accepts_timeout_with_cleanup_overhead_but_does_not_authorize(
+        self,
+    ) -> None:
+        from governance_eval.execution_result import (
+            assess_execution_result,
+            validate_execution_result_integrity,
+        )
+
+        plan, payload = valid_result_payload()
+        payload.update(
+            {
+                "completed_at": "2026-07-15T15:02:00.050Z",
+                "duration_seconds": 120.05,
+                "termination": "TIMED_OUT",
+                "exit_code": None,
+            }
+        )
+        seal_result_payload(payload)
+
+        integrity = validate_execution_result_integrity(payload, plan)
+        result = assess_execution_result(payload, plan)
+
+        self.assertEqual(integrity["integrity_status"], "INTEGRITY_VALID")
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(
+            result["errors"],
+            ["execution result provenance is unverified"],
+        )
+
+    def test_blocks_timeout_cleanup_beyond_bounded_grace(self) -> None:
+        from governance_eval.execution_result import (
+            assess_execution_result,
+            validate_execution_result_integrity,
+        )
+
+        plan, payload = valid_result_payload()
+        payload.update(
+            {
+                "completed_at": "2026-07-15T15:02:01.002Z",
+                "duration_seconds": 121.002,
+                "termination": "TIMED_OUT",
+                "exit_code": None,
+            }
+        )
+        seal_result_payload(payload)
+
+        integrity = validate_execution_result_integrity(payload, plan)
+        result = assess_execution_result(payload, plan)
+
+        self.assertEqual(integrity["integrity_status"], "INTEGRITY_INVALID")
+        self.assertEqual(
+            integrity["errors"],
+            ["execution result timeout cleanup exceeded bounded grace"],
+        )
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(
+            result["errors"],
+            ["execution result timeout cleanup exceeded bounded grace"],
+        )
 
     def test_blocks_invalid_or_unbounded_captured_output(self) -> None:
         from governance_eval.execution_result import assess_execution_result

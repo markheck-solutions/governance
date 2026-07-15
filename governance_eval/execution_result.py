@@ -20,6 +20,7 @@ from governance_eval.schema_validator import SchemaValidationError, validate
 _SCHEMA_RESOURCE_PARTS = ("schema_data", "v1", "execution_result.schema.json")
 _SCHEMA_SHA256 = "c3dcbe029e3f7094b8eb8966c487b649bbe08ec945d5f7b396900d2ce0dbee7f"
 _TIMING_TOLERANCE_SECONDS = 0.001
+_TIMEOUT_CLEANUP_GRACE_SECONDS = 1.0
 
 
 def assess_execution_result(
@@ -145,7 +146,16 @@ def _timing_error(payload: dict[str, Any]) -> str | None:
     elapsed = (completed - started).total_seconds()
     if abs(elapsed - duration) > _TIMING_TOLERANCE_SECONDS:
         return "execution result duration does not match timestamps"
-    if duration > payload["timeout_seconds"]:
+    timeout = payload["timeout_seconds"]
+    if payload["termination"] == "TIMED_OUT":
+        if duration + _TIMING_TOLERANCE_SECONDS < timeout:
+            return "execution result timeout occurred before configured deadline"
+        if (
+            duration
+            > timeout + _TIMEOUT_CLEANUP_GRACE_SECONDS + _TIMING_TOLERANCE_SECONDS
+        ):
+            return "execution result timeout cleanup exceeded bounded grace"
+    elif duration > timeout + _TIMING_TOLERANCE_SECONDS:
         return "execution result duration exceeds timeout"
     return None
 
