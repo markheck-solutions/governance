@@ -33,6 +33,7 @@ VALID_REQUEST = {
 }
 TARGET_TREE_SHA256 = "1" * 64
 EXECUTION_ID = "2" * 64
+MAX_PULL_REQUEST = 9_007_199_254_740_991
 
 
 def compile_plan(
@@ -237,6 +238,76 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
                     result["errors"],
                     [f"execution plan identity mismatch: {field}"],
                 )
+
+    def test_assessment_blocks_oversized_expected_pull_request_without_exception(
+        self,
+    ) -> None:
+        payload = compile_plan().to_json()
+
+        result = assess_plan(
+            payload,
+            {**VALID_REQUEST, "pull_request": 10**5000},
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "schema_version": "1.0",
+                "capability_status": "BLOCK_TECHNICAL",
+                "plan_id": payload["plan_id"],
+                "errors": [
+                    "execution plan request invalid: execution plan request "
+                    "pull_request must not exceed 9007199254740991"
+                ],
+            },
+        )
+
+    def test_blocks_oversized_hostile_payload_before_hashing(self) -> None:
+        payload = compile_plan().to_json()
+        payload["pull_request"] = 10**5000
+
+        result = assess_plan(payload)
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(
+            result["errors"],
+            [
+                "execution plan schema invalid: $.pull_request: value above "
+                "9007199254740991"
+            ],
+        )
+
+    def test_normalizes_execution_plan_hash_failures(self) -> None:
+        import governance_eval.execution_plan as execution_plan
+
+        for exception in (
+            ValueError("value failure"),
+            OverflowError("overflow failure"),
+            TypeError("type failure"),
+        ):
+            with self.subTest(exception=type(exception).__name__):
+                with (
+                    mock.patch.object(
+                        execution_plan,
+                        "sha256_json",
+                        side_effect=exception,
+                    ),
+                    self.assertRaisesRegex(
+                        ExecutionPlanError,
+                        "execution plan content cannot be hashed",
+                    ),
+                ):
+                    compile_plan()
+
+    def test_accepts_maximum_internal_pull_request(self) -> None:
+        request = {**VALID_REQUEST, "pull_request": MAX_PULL_REQUEST}
+
+        plan = compile_plan(request)
+        payload = plan.to_json()
+
+        validate_named("execution_plan", payload)
+        self.assertEqual(payload["pull_request"], MAX_PULL_REQUEST)
+        self.assertEqual(assess_plan(payload, request)["capability_status"], "PASS")
 
     def test_blocks_plan_replay_against_new_protected_binding(self) -> None:
         payload = compile_plan().to_json()

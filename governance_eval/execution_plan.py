@@ -25,8 +25,9 @@ _REQUEST_FIELDS = {
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_MAX_PULL_REQUEST = 9_007_199_254_740_991
 _SCHEMA_RESOURCE_PARTS = ("schema_data", "v1", "execution_plan.schema.json")
-_SCHEMA_SHA256 = "c9497c6fc041f1e470f7f83acf99d897dcd37320f92f27af130f92ca4f7b0583"
+_SCHEMA_SHA256 = "4854719c664820b55020d4e3c46b68b8f63b1115761adc5e00df9ff87212963b"
 
 
 class ExecutionPlanError(ValueError):
@@ -134,7 +135,11 @@ def compile_execution_plan(
         config_sha256=request["config_sha256"],
         steps=(step,),
     )
-    return replace(plan, plan_id=sha256_json(_unsigned_payload(plan)))
+    try:
+        plan_id = sha256_json(_unsigned_payload(plan))
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ExecutionPlanError("execution plan content cannot be hashed") from exc
+    return replace(plan, plan_id=plan_id)
 
 
 def serialize_execution_plan(plan: ExecutionPlan) -> bytes:
@@ -263,6 +268,10 @@ def _validate_request_identity(request: Mapping[str, Any]) -> None:
     ):
         raise ExecutionPlanError(
             "execution plan request pull_request must be a positive integer"
+        )
+    if pull_request > _MAX_PULL_REQUEST:
+        raise ExecutionPlanError(
+            f"execution plan request pull_request must not exceed {_MAX_PULL_REQUEST}"
         )
     for field in ("base_sha", "head_sha", "evaluator_sha"):
         value = request.get(field)

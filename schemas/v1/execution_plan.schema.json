@@ -17,7 +17,7 @@
     "schema_version": {"type": "string", "enum": ["1.0"]},
     "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
-    "pull_request": {"type": "integer", "minimum": 1},
+    "pull_request": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
     "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "target_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
