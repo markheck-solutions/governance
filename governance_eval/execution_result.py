@@ -25,11 +25,11 @@ _TIMING_TOLERANCE_SECONDS = 0.001
 def assess_execution_result(
     payload: Any, expected_plan: ExecutionPlan
 ) -> dict[str, Any]:
-    error = _assessment_error(payload, expected_plan)
-    errors = [] if error is None else [error]
+    integrity = validate_execution_result_integrity(payload, expected_plan)
+    errors = integrity["errors"] or ["execution result provenance is unverified"]
     return {
         "schema_version": "1.0",
-        "capability_status": "BLOCK_TECHNICAL" if errors else "PASS",
+        "capability_status": "BLOCK_TECHNICAL",
         "artifact_id": payload.get("artifact_id", "")
         if isinstance(payload, dict)
         else "",
@@ -37,7 +37,22 @@ def assess_execution_result(
     }
 
 
-def _assessment_error(payload: Any, expected_plan: ExecutionPlan) -> str | None:
+def validate_execution_result_integrity(
+    payload: Any, expected_plan: ExecutionPlan
+) -> dict[str, Any]:
+    error = _integrity_error(payload, expected_plan)
+    errors = [] if error is None else [error]
+    return {
+        "schema_version": "1.0",
+        "integrity_status": "INTEGRITY_INVALID" if errors else "INTEGRITY_VALID",
+        "artifact_id": payload.get("artifact_id", "")
+        if isinstance(payload, dict)
+        else "",
+        "errors": errors,
+    }
+
+
+def _integrity_error(payload: Any, expected_plan: ExecutionPlan) -> str | None:
     expected_plan_error = _expected_plan_error(expected_plan)
     if expected_plan_error is not None:
         return expected_plan_error
@@ -69,7 +84,7 @@ def _assessment_error(payload: Any, expected_plan: ExecutionPlan) -> str | None:
     output_error = _output_error(payload)
     if output_error is not None:
         return output_error
-    return _execution_state_error(payload)
+    return _execution_record_error(payload)
 
 
 def _validate_execution_result_schema(payload: dict[str, Any]) -> None:
@@ -105,19 +120,12 @@ def _binding_error(payload: dict[str, Any], expected_plan: ExecutionPlan) -> str
     return None
 
 
-def _execution_state_error(payload: dict[str, Any]) -> str | None:
+def _execution_record_error(payload: dict[str, Any]) -> str | None:
     exited = payload["termination"] == "EXITED"
     has_exit_code = payload["exit_code"] is not None
     if exited != has_exit_code:
         return "execution result termination and exit code are inconsistent"
-    timing_error = _timing_error(payload)
-    if timing_error is not None:
-        return timing_error
-    if not exited:
-        return "execution result did not exit"
-    if payload["exit_code"] != 0:
-        return "execution result exit code is nonzero"
-    return None
+    return _timing_error(payload)
 
 
 def _timing_error(payload: dict[str, Any]) -> str | None:
@@ -201,7 +209,9 @@ def _expected_plan_error(expected_plan: ExecutionPlan) -> str | None:
                 "config_sha256": expected_plan.config_sha256,
                 "capability": step.capability,
                 "adapter_id": step.adapter_id,
-            }
+            },
+            target_tree_sha256=expected_plan.target_tree_sha256,
+            execution_id=expected_plan.execution_id,
         )
     except (ExecutionPlanError, IndexError, KeyError, TypeError):
         return "expected execution plan is invalid"

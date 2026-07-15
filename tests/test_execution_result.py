@@ -26,6 +26,8 @@ VALID_REQUEST = {
     "capability": "lint",
     "adapter_id": "python.ruff-check.v1",
 }
+TARGET_TREE_SHA256 = "1" * 64
+EXECUTION_ID = "2" * 64
 
 EMPTY_SHA256 = sha256(b"").hexdigest()
 
@@ -59,7 +61,11 @@ def set_captured_output(
 
 
 def valid_result_payload() -> tuple[ExecutionPlan, dict[str, object]]:
-    plan = compile_execution_plan(VALID_REQUEST)
+    plan = compile_execution_plan(
+        VALID_REQUEST,
+        target_tree_sha256=TARGET_TREE_SHA256,
+        execution_id=EXECUTION_ID,
+    )
     payload: dict[str, object] = {
         "schema_version": "1.0",
         "artifact_id": "",
@@ -128,7 +134,9 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
             with mock.patch.object(
                 execution_result, "files", return_value=resource_root
             ):
-                crlf_result = execution_result.assess_execution_result(payload, plan)
+                crlf_result = execution_result.validate_execution_result_integrity(
+                    payload, plan
+                )
 
             tampered_schema = canonical_schema.replace(
                 b'"minimum": 1', b'"minimum": 2', 1
@@ -138,18 +146,18 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
             with mock.patch.object(
                 execution_result, "files", return_value=resource_root
             ):
-                tampered_result = execution_result.assess_execution_result(
+                tampered_result = execution_result.validate_execution_result_integrity(
                     payload, plan
                 )
 
-        self.assertEqual(crlf_result["capability_status"], "PASS")
-        self.assertEqual(tampered_result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(crlf_result["integrity_status"], "INTEGRITY_VALID")
+        self.assertEqual(tampered_result["integrity_status"], "INTEGRITY_INVALID")
         self.assertEqual(
             tampered_result["errors"],
             ["execution result schema invalid: trusted schema digest is invalid"],
         )
 
-    def test_accepts_exact_plan_bound_zero_exit_result(self) -> None:
+    def test_self_hashed_zero_exit_result_cannot_authorize_pass(self) -> None:
         from governance_eval.execution_result import assess_execution_result
 
         plan, payload = valid_result_payload()
@@ -158,24 +166,48 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
             assess_execution_result(payload, plan),
             {
                 "schema_version": "1.0",
-                "capability_status": "PASS",
+                "capability_status": "BLOCK_TECHNICAL",
+                "artifact_id": payload["artifact_id"],
+                "errors": ["execution result provenance is unverified"],
+            },
+        )
+
+    def test_classifies_exact_self_hashed_zero_exit_result_as_integrity_valid(
+        self,
+    ) -> None:
+        from governance_eval.execution_result import (
+            validate_execution_result_integrity,
+        )
+
+        plan, payload = valid_result_payload()
+
+        self.assertEqual(
+            validate_execution_result_integrity(payload, plan),
+            {
+                "schema_version": "1.0",
+                "integrity_status": "INTEGRITY_VALID",
                 "artifact_id": payload["artifact_id"],
                 "errors": [],
             },
         )
 
     def test_uses_packaged_schema_outside_repository_working_directory(self) -> None:
-        from governance_eval.execution_result import assess_execution_result
+        from governance_eval.execution_result import (
+            validate_execution_result_integrity,
+        )
 
         plan, payload = valid_result_payload()
 
         with TemporaryDirectory() as temporary_directory, chdir(temporary_directory):
-            result = assess_execution_result(payload, plan)
+            result = validate_execution_result_integrity(payload, plan)
 
-        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["integrity_status"], "INTEGRITY_VALID")
 
-    def test_blocks_positive_nonzero_exit_when_integrity_valid(self) -> None:
-        from governance_eval.execution_result import assess_execution_result
+    def test_positive_nonzero_exit_is_integrity_valid_but_unauthorized(self) -> None:
+        from governance_eval.execution_result import (
+            assess_execution_result,
+            validate_execution_result_integrity,
+        )
 
         for exit_code in (1, 2, 2**31):
             with self.subTest(exit_code=exit_code):
@@ -184,17 +216,26 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
                 seal_result_payload(payload)
 
                 self.assertEqual(
+                    validate_execution_result_integrity(payload, plan)[
+                        "integrity_status"
+                    ],
+                    "INTEGRITY_VALID",
+                )
+                self.assertEqual(
                     assess_execution_result(payload, plan),
                     {
                         "schema_version": "1.0",
                         "capability_status": "BLOCK_TECHNICAL",
                         "artifact_id": payload["artifact_id"],
-                        "errors": ["execution result exit code is nonzero"],
+                        "errors": ["execution result provenance is unverified"],
                     },
                 )
 
-    def test_blocks_negative_nonzero_exit_when_integrity_valid(self) -> None:
-        from governance_eval.execution_result import assess_execution_result
+    def test_negative_nonzero_exit_is_integrity_valid_but_unauthorized(self) -> None:
+        from governance_eval.execution_result import (
+            assess_execution_result,
+            validate_execution_result_integrity,
+        )
 
         for exit_code in (-1, -2, -(2**31)):
             with self.subTest(exit_code=exit_code):
@@ -203,12 +244,18 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
                 seal_result_payload(payload)
 
                 self.assertEqual(
+                    validate_execution_result_integrity(payload, plan)[
+                        "integrity_status"
+                    ],
+                    "INTEGRITY_VALID",
+                )
+                self.assertEqual(
                     assess_execution_result(payload, plan),
                     {
                         "schema_version": "1.0",
                         "capability_status": "BLOCK_TECHNICAL",
                         "artifact_id": payload["artifact_id"],
-                        "errors": ["execution result exit code is nonzero"],
+                        "errors": ["execution result provenance is unverified"],
                     },
                 )
 
@@ -239,21 +286,34 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
                 self.assertEqual(second, first)
                 self.assertEqual(payload, before)
 
-    def test_blocks_result_replay_against_another_plan(self) -> None:
+    def test_blocks_result_replay_against_another_head_or_execution(self) -> None:
         from governance_eval.execution_result import assess_execution_result
 
         _, payload = valid_result_payload()
-        replayed_plan = compile_execution_plan({**VALID_REQUEST, "head_sha": "9" * 40})
+        replayed_plans = {
+            "head_sha": compile_execution_plan(
+                {**VALID_REQUEST, "head_sha": "9" * 40},
+                target_tree_sha256=TARGET_TREE_SHA256,
+                execution_id=EXECUTION_ID,
+            ),
+            "execution_id": compile_execution_plan(
+                VALID_REQUEST,
+                target_tree_sha256=TARGET_TREE_SHA256,
+                execution_id="8" * 64,
+            ),
+        }
 
-        self.assertEqual(
-            assess_execution_result(payload, replayed_plan),
-            {
-                "schema_version": "1.0",
-                "capability_status": "BLOCK_TECHNICAL",
-                "artifact_id": payload["artifact_id"],
-                "errors": ["execution result plan id mismatch"],
-            },
-        )
+        for field, replayed_plan in replayed_plans.items():
+            with self.subTest(field=field):
+                self.assertEqual(
+                    assess_execution_result(payload, replayed_plan),
+                    {
+                        "schema_version": "1.0",
+                        "capability_status": "BLOCK_TECHNICAL",
+                        "artifact_id": payload["artifact_id"],
+                        "errors": ["execution result plan id mismatch"],
+                    },
+                )
 
     def test_blocks_forged_expected_plan_even_when_result_matches(self) -> None:
         from governance_eval.execution_result import assess_execution_result
@@ -316,7 +376,10 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
                 self.assertEqual(result["errors"], [expected_error])
 
     def test_fails_closed_for_missing_malformed_or_forged_result(self) -> None:
-        from governance_eval.execution_result import assess_execution_result
+        from governance_eval.execution_result import (
+            assess_execution_result,
+            validate_execution_result_integrity,
+        )
 
         plan, missing_field = valid_result_payload()
         del missing_field["exit_code"]
@@ -367,34 +430,51 @@ class ExecutionResultAssessmentTests(unittest.TestCase):
         for payload, expected_error in cases:
             with self.subTest(expected_error=expected_error):
                 result = assess_execution_result(payload, plan)
+                integrity = validate_execution_result_integrity(payload, plan)
 
                 self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertEqual(result["errors"], [expected_error])
+                self.assertEqual(integrity["integrity_status"], "INTEGRITY_INVALID")
+                self.assertEqual(integrity["errors"], [expected_error])
 
-    def test_blocks_missing_or_unsuccessful_execution_state(self) -> None:
+    def test_blocks_inconsistent_execution_state(self) -> None:
         from governance_eval.execution_result import assess_execution_result
 
-        cases = (
-            (
-                "EXITED",
-                None,
-                "execution result termination and exit code are inconsistent",
-            ),
-            ("TIMED_OUT", None, "execution result did not exit"),
-            ("SPAWN_FAILED", None, "execution result did not exit"),
+        plan, payload = valid_result_payload()
+        payload["exit_code"] = None
+        seal_result_payload(payload)
+
+        result = assess_execution_result(payload, plan)
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(
+            result["errors"],
+            ["execution result termination and exit code are inconsistent"],
         )
 
-        for termination, exit_code, expected_error in cases:
+    def test_nonexit_result_is_integrity_valid_but_unauthorized(self) -> None:
+        from governance_eval.execution_result import (
+            assess_execution_result,
+            validate_execution_result_integrity,
+        )
+
+        for termination in ("TIMED_OUT", "SPAWN_FAILED"):
             with self.subTest(termination=termination):
                 plan, payload = valid_result_payload()
                 payload["termination"] = termination
-                payload["exit_code"] = exit_code
+                payload["exit_code"] = None
                 seal_result_payload(payload)
 
-                result = assess_execution_result(payload, plan)
-
-                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
-                self.assertEqual(result["errors"], [expected_error])
+                self.assertEqual(
+                    validate_execution_result_integrity(payload, plan)[
+                        "integrity_status"
+                    ],
+                    "INTEGRITY_VALID",
+                )
+                self.assertEqual(
+                    assess_execution_result(payload, plan)["errors"],
+                    ["execution result provenance is unverified"],
+                )
 
     def test_blocks_invalid_or_unbounded_captured_output(self) -> None:
         from governance_eval.execution_result import assess_execution_result
