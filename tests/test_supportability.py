@@ -659,11 +659,14 @@ class SupportabilityGateTests(unittest.TestCase):
             changed_files = [
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
+                "governance_eval/codex_review_gate.py",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
                 "tests/test_codex_connector_collector.py",
                 "tests/test_codex_connector_evidence.py",
+                "tests/test_codex_review_gate.py",
                 "tests/test_supportability.py",
+                "tests/test_workflows.py",
             ]
 
             result = run_supportability_gate(

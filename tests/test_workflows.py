@@ -129,6 +129,28 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-gate.yml"],
             r"(?s)- name: Reconcile Codex review evidence.*?env:\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}.*?python -m governance_eval\.codex_review_gate",
         )
+        codex_block = (
+            workflows["supportability-gate.yml"]
+            .split("      - name: Reconcile Codex review evidence", 1)[1]
+            .split("      - name: Read supportability summary", 1)[0]
+        )
+        self.assertEqual(codex_block.count('--config "../target/${CONFIG_PATH}"'), 1)
+        self.assertIn(
+            "python -m governance_eval.codex_review_gate \\\n"
+            '            --config "../target/${CONFIG_PATH}" \\\n',
+            codex_block,
+        )
+        architecture_block = (
+            workflows["supportability-gate.yml"]
+            .split("      - name: Run approved architecture fitness gate", 1)[1]
+            .split("      - name: Reconcile Codex review evidence", 1)[0]
+        )
+        self.assertIn(
+            "python -m governance_eval architecture-gate \\\n"
+            '            --config "../target/${CONFIG_PATH}" \\\n'
+            "            --target-repo ../target \\\n",
+            architecture_block,
+        )
         self.assertIn(
             "ai-review-gate-result.json", workflows["supportability-gate.yml"]
         )

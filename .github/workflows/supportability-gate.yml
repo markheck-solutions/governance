@@ -171,6 +171,7 @@ jobs:
         run: |
           cd governance
           python -m governance_eval.codex_review_gate \
+            --config "../target/${CONFIG_PATH}" \
             --repo "$TARGET_REPOSITORY" \
             --pr "$TARGET_PR_NUMBER" \
             --base-sha "$TARGET_BASE_SHA" \

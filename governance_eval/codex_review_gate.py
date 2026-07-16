@@ -18,6 +18,10 @@ from governance_eval.codex_connector_evidence import (
     evaluate_codex_connector_evidence,
     serialize_codex_connector_evidence_result,
 )
+from governance_eval.supportability import (
+    load_supportability_config,
+    validate_supportability_config,
+)
 
 
 Collector = Callable[[str, int, str], dict[str, Any]]
@@ -25,6 +29,7 @@ Collector = Callable[[str, int, str], dict[str, Any]]
 
 def run_codex_review_gate(
     *,
+    config_path: Path,
     repository: str,
     pull_request_number: int,
     base_sha: str,
@@ -35,6 +40,7 @@ def run_codex_review_gate(
     collector: Collector = collect_codex_connector_snapshot,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
+    unavailable_after_cutoff = _load_unavailable_after_cutoff(config_path)
     started = _timestamp(review_window_started_at)
     deadline = started + timedelta(seconds=300)
     snapshot = collector(repository, pull_request_number, governance_sha)
@@ -68,6 +74,7 @@ def run_codex_review_gate(
         codex_result=codex_result,
         raw_snapshot_bytes=raw,
         trusted_context=context,
+        unavailable_after_cutoff=unavailable_after_cutoff,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "codex-connector-snapshot.json").write_bytes(raw)
@@ -83,6 +90,7 @@ def run_codex_review_gate(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex-review-gate")
+    parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--base-sha", required=True)
@@ -93,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = run_codex_review_gate(
+            config_path=args.config,
             repository=args.repo,
             pull_request_number=args.pr,
             base_sha=args.base_sha,
@@ -105,6 +114,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.exit(2, f"Codex review gate failed: {exc}\n")
     print(json.dumps(result, sort_keys=True))
     return 0 if result["owner_status"] == "GREEN" else 1
+
+
+def _load_unavailable_after_cutoff(config_path: Path) -> str:
+    config = load_supportability_config(config_path)
+    errors = validate_supportability_config(config)
+    if errors:
+        raise ValueError("supportability config invalid: " + "; ".join(errors))
+    ai_review = config.get("ai_review")
+    if not isinstance(ai_review, dict):
+        raise ValueError("supportability config invalid: ai_review must be an object")
+    policy = ai_review.get("unavailable_after_cutoff")
+    if not isinstance(policy, str):
+        raise ValueError(
+            "supportability config invalid: "
+            "ai_review.unavailable_after_cutoff must be a string"
+        )
+    return policy
 
 
 def _timestamp(value: Any) -> datetime:
