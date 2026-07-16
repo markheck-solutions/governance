@@ -206,6 +206,21 @@ class AiReviewGateTests(unittest.TestCase):
         self.assertEqual(result["owner_status"], "RED")
         self.assertEqual(result["evidence_status"], "INVALID_EVIDENCE")
 
+    def test_unrecognized_response_without_connector_failure_is_invalid(self) -> None:
+        result = self.gate(
+            {
+                "capability_status": "BLOCK_TECHNICAL",
+                "review_state": "AI_REVIEW_UNAVAILABLE",
+                "reviewed_head_sha": None,
+                "reconciled_head_sha": HEAD_SHA,
+                "reasons": ["RESPONSE_BODY_UNRECOGNIZED"],
+                "result_content_hash": "b" * 64,
+            }
+        )
+
+        self.assertEqual(result["owner_status"], "RED")
+        self.assertEqual(result["evidence_status"], "INVALID_EVIDENCE")
+
 
 if __name__ == "__main__":
     unittest.main()

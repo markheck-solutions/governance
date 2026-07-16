@@ -5,6 +5,7 @@ import unittest
 from copy import deepcopy
 from hashlib import sha256
 
+from governance_eval.ai_review_gate import evaluate_ai_review_gate
 from governance_eval.codex_connector_evidence import (
     TrustedCodexConnectorContext,
     evaluate_codex_connector_evidence,
@@ -300,6 +301,38 @@ def evaluate(value: dict) -> dict:
 
 
 class CodexConnectorEvidenceTests(unittest.TestCase):
+    def test_connector_failure_with_unrecognized_body_is_nonblocking_at_owner_gate(
+        self,
+    ) -> None:
+        value = snapshot()
+        value["issue_comments"].insert(
+            0,
+            comment(
+                "You have reached your Codex usage limits for code reviews.",
+                comment_id=201,
+                created_at="2026-07-13T18:02:00Z",
+            ),
+        )
+        raw = raw_bytes(value)
+        context = trusted(raw)
+
+        connector_result = evaluate_codex_connector_evidence(raw, context)
+        owner_result = evaluate_ai_review_gate(
+            HEAD_SHA,
+            codex_result=connector_result,
+            raw_snapshot_bytes=raw,
+            trusted_context=context,
+        )
+
+        self.assertEqual(
+            connector_result["reasons"],
+            ["CONNECTOR_FAILURE_PRESENT", "RESPONSE_BODY_UNRECOGNIZED"],
+        )
+        self.assertEqual(connector_result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(owner_result["owner_status"], "GREEN")
+        self.assertEqual(owner_result["evidence_status"], "AI_REVIEW_UNAVAILABLE")
+        self.assertFalse(owner_result["approval_provided"])
+
     def test_connector_reaction_without_exact_head_review_blocks_technical(
         self,
     ) -> None:

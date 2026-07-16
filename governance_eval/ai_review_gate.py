@@ -104,16 +104,20 @@ def _validated_codex_state(
             and "BLOCKING_FINDINGS_PRESENT" in reasons
         )
     elif state == "AI_REVIEW_UNAVAILABLE":
-        availability_reasons = {
-            "NO_IN_WINDOW_RESPONSE",
-            "ONLY_LATE_RESPONSE",
-            "CONNECTOR_FAILURE_PRESENT",
-        }
+        reason_set = set(reasons)
+        response_unavailable = bool(reason_set) and reason_set.issubset(
+            {"NO_IN_WINDOW_RESPONSE", "ONLY_LATE_RESPONSE"}
+        )
+        connector_unavailable = (
+            "CONNECTOR_FAILURE_PRESENT" in reason_set
+            and reason_set.issubset(
+                {"CONNECTOR_FAILURE_PRESENT", "RESPONSE_BODY_UNRECOGNIZED"}
+            )
+        )
         valid = (
             capability == "BLOCK_TECHNICAL"
             and reviewed is None
-            and bool(reasons)
-            and set(reasons).issubset(availability_reasons)
+            and (response_unavailable or connector_unavailable)
         )
     else:
         valid = capability == "BLOCK_TECHNICAL"
