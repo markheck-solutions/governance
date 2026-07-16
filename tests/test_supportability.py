@@ -657,6 +657,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 enforcement.read_text(encoding="utf-8"), encoding="utf-8"
             )
             changed_files = [
+                ".github/workflows/supportability-gate.yml",
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",

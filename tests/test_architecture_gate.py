@@ -70,6 +70,7 @@ class ArchitectureGateTests(unittest.TestCase):
             runtime = repo / "governance_eval"
             runtime.mkdir()
             changed_files = [
+                ".github/workflows/supportability-gate.yml",
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",
@@ -105,6 +106,17 @@ class ArchitectureGateTests(unittest.TestCase):
                     "purpose": "machine-readable contracts",
                 }
             )
+            config["architecture_policy"]["governed_roots"].append(
+                {
+                    "path": ".github/workflows",
+                    "kind": "ci_config",
+                    "owner": "governance",
+                    "purpose": "GitHub enforcement workflows",
+                }
+            )
+            config["architecture_policy"]["runtime_relevance"][
+                "non_runtime_globs"
+            ].append(".github/workflows/**")
             config["architecture_policy"]["modules"]["governance_eval"] = {
                 "path": "governance_eval",
                 "owner": "governance",
@@ -137,6 +149,23 @@ class ArchitectureGateTests(unittest.TestCase):
                     "max_class_lines": 5,
                     "max_functions_per_file": 5,
                     "max_classes_per_file": 2,
+                },
+            }
+            config["architecture_policy"]["modules"]["workflows"] = {
+                "path": ".github/workflows",
+                "owner": "governance",
+                "purpose": "GitHub enforcement workflows",
+                "classification": "ci",
+                "domain": "github-enforcement",
+                "allowed_dependencies": ["governance_eval"],
+                "forbidden_dependencies": ["artifacts"],
+                "test_strategy": "workflow assertions through tests/",
+                "limits": {
+                    "max_file_lines": 500,
+                    "max_function_lines": 0,
+                    "max_class_lines": 0,
+                    "max_functions_per_file": 0,
+                    "max_classes_per_file": 0,
                 },
             }
             config_path.write_text(json.dumps(config), encoding="utf-8")
