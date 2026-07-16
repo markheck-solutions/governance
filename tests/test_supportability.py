@@ -793,6 +793,11 @@ class SupportabilityGateTests(unittest.TestCase):
                 any("copilot_review_evidence.py" in error for error in result["errors"])
             )
 
+
+class SupportabilityAiReviewPolicyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = repo_root(Path(__file__).resolve())
+
     def test_non_weakening_ai_policy_transitions_run_trusted_base_commands(
         self,
     ) -> None:
@@ -930,6 +935,11 @@ class SupportabilityGateTests(unittest.TestCase):
                             for command in result["commands"]
                         )
                     )
+
+
+class SupportabilityGateWorkflowTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = repo_root(Path(__file__).resolve())
 
     def test_config_change_rejects_unclassified_key_and_unapproved_reviewer(
         self,
