@@ -37,6 +37,9 @@ governance-eval = "governance_eval.cli:main"
 [tool.setuptools.packages.find]
 include = ["governance_eval*"]
 
+[tool.setuptools.package-data]
+governance_eval = ["schema_data/v1/*.json"]
+
 [build-system]
 requires = ["setuptools==80.9.0"]
 build-backend = "setuptools.build_meta"

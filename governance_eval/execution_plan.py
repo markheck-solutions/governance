@@ -3,14 +3,13 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, replace
-from pathlib import Path
+from hashlib import sha256
+from importlib.resources import files
 from typing import Any, Mapping
 
 from governance_eval.capability_catalog import get_capability_adapter
 from governance_eval.hashing import sha256_json
-from governance_eval.schema_validator import SchemaValidationError
-from governance_eval.schemas import validate_named
-
+from governance_eval.schema_validator import SchemaValidationError, validate
 
 _REQUEST_FIELDS = {
     "schema_version",
@@ -26,7 +25,9 @@ _REQUEST_FIELDS = {
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_EVALUATOR_ROOT = Path(__file__).resolve().parents[1]
+_MAX_PULL_REQUEST = 9_007_199_254_740_991
+_SCHEMA_RESOURCE_PARTS = ("schema_data", "v1", "execution_plan.schema.json")
+_SCHEMA_SHA256 = "4854719c664820b55020d4e3c46b68b8f63b1115761adc5e00df9ff87212963b"
 
 
 class ExecutionPlanError(ValueError):
@@ -67,6 +68,8 @@ class ExecutionPlan:
     pull_request: int
     base_sha: str
     head_sha: str
+    target_tree_sha256: str
+    execution_id: str
     evaluator_sha: str
     config_sha256: str
     steps: tuple[ExecutionStep, ...]
@@ -79,16 +82,27 @@ class ExecutionPlan:
             "pull_request": self.pull_request,
             "base_sha": self.base_sha,
             "head_sha": self.head_sha,
+            "target_tree_sha256": self.target_tree_sha256,
+            "execution_id": self.execution_id,
             "evaluator_sha": self.evaluator_sha,
             "config_sha256": self.config_sha256,
             "steps": [step.to_json() for step in self.steps],
         }
 
 
-def compile_execution_plan(request: Mapping[str, Any]) -> ExecutionPlan:
+def compile_execution_plan(
+    request: Mapping[str, Any],
+    *,
+    target_tree_sha256: str,
+    execution_id: str,
+) -> ExecutionPlan:
     if not isinstance(request, Mapping):
         raise ExecutionPlanError("execution plan request must be an object")
     _validate_request(request)
+    target_tree_sha256 = _validate_protected_binding(
+        "target_tree_sha256", target_tree_sha256
+    )
+    execution_id = _validate_protected_binding("execution_id", execution_id)
     capability = request["capability"]
     adapter_id = request["adapter_id"]
     try:
@@ -115,11 +129,17 @@ def compile_execution_plan(request: Mapping[str, Any]) -> ExecutionPlan:
         pull_request=request["pull_request"],
         base_sha=request["base_sha"],
         head_sha=request["head_sha"],
+        target_tree_sha256=target_tree_sha256,
+        execution_id=execution_id,
         evaluator_sha=request["evaluator_sha"],
         config_sha256=request["config_sha256"],
         steps=(step,),
     )
-    return replace(plan, plan_id=sha256_json(_unsigned_payload(plan)))
+    try:
+        plan_id = sha256_json(_unsigned_payload(plan))
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ExecutionPlanError("execution plan content cannot be hashed") from exc
+    return replace(plan, plan_id=plan_id)
 
 
 def serialize_execution_plan(plan: ExecutionPlan) -> bytes:
@@ -129,11 +149,19 @@ def serialize_execution_plan(plan: ExecutionPlan) -> bytes:
 
 
 def assess_execution_plan(
-    payload: Any, expected_request: Mapping[str, Any]
+    payload: Any,
+    expected_request: Mapping[str, Any],
+    *,
+    target_tree_sha256: str,
+    execution_id: str,
 ) -> dict[str, Any]:
     errors: list[str] = []
     try:
-        expected = compile_execution_plan(expected_request).to_json()
+        expected = compile_execution_plan(
+            expected_request,
+            target_tree_sha256=target_tree_sha256,
+            execution_id=execution_id,
+        ).to_json()
     except (ExecutionPlanError, KeyError, TypeError) as exc:
         errors.append(f"execution plan request invalid: {exc}")
         expected = None
@@ -141,7 +169,7 @@ def assess_execution_plan(
         errors.append("execution plan must be an object")
     else:
         try:
-            validate_named("execution_plan", payload, root=_EVALUATOR_ROOT)
+            _validate_execution_plan_schema(payload)
         except SchemaValidationError as exc:
             errors.append(f"execution plan schema invalid: {exc}")
         if not errors:
@@ -156,6 +184,8 @@ def assess_execution_plan(
                     "pull_request",
                     "base_sha",
                     "head_sha",
+                    "target_tree_sha256",
+                    "execution_id",
                     "evaluator_sha",
                     "config_sha256",
                 )
@@ -177,6 +207,28 @@ def assess_execution_plan(
         "plan_id": payload.get("plan_id", "") if isinstance(payload, dict) else "",
         "errors": errors,
     }
+
+
+def _validate_execution_plan_schema(payload: dict[str, Any]) -> None:
+    resource = files("governance_eval").joinpath(*_SCHEMA_RESOURCE_PARTS)
+    try:
+        schema_bytes = resource.read_bytes()
+    except (FileNotFoundError, OSError) as exc:
+        raise SchemaValidationError("trusted schema is unavailable") from exc
+    try:
+        schema_text = schema_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SchemaValidationError("trusted schema is malformed") from exc
+    canonical_schema_bytes = schema_text.replace("\r\n", "\n").encode("utf-8")
+    if sha256(canonical_schema_bytes).hexdigest() != _SCHEMA_SHA256:
+        raise SchemaValidationError("trusted schema digest is invalid")
+    try:
+        schema = json.loads(schema_text)
+    except json.JSONDecodeError as exc:
+        raise SchemaValidationError("trusted schema is malformed") from exc
+    if not isinstance(schema, dict):
+        raise SchemaValidationError("trusted schema must be an object")
+    validate(payload, schema)
 
 
 def _unsigned_payload(plan: ExecutionPlan) -> dict[str, Any]:
@@ -217,6 +269,10 @@ def _validate_request_identity(request: Mapping[str, Any]) -> None:
         raise ExecutionPlanError(
             "execution plan request pull_request must be a positive integer"
         )
+    if pull_request > _MAX_PULL_REQUEST:
+        raise ExecutionPlanError(
+            f"execution plan request pull_request must not exceed {_MAX_PULL_REQUEST}"
+        )
     for field in ("base_sha", "head_sha", "evaluator_sha"):
         value = request.get(field)
         if not isinstance(value, str) or not _SHA_RE.fullmatch(value):
@@ -228,6 +284,12 @@ def _validate_request_identity(request: Mapping[str, Any]) -> None:
         raise ExecutionPlanError(
             "execution plan request config_sha256 must be a lowercase SHA-256"
         )
+
+
+def _validate_protected_binding(field: str, value: str) -> str:
+    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+        raise ExecutionPlanError(f"execution plan {field} must be a lowercase SHA-256")
+    return value
 
 
 def _validate_request_selection(request: Mapping[str, Any]) -> None:

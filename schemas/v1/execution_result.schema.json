@@ -1,0 +1,60 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "artifact_id",
+    "artifact_content_hash",
+    "plan_id",
+    "step_id",
+    "attempt",
+    "started_at",
+    "completed_at",
+    "duration_seconds",
+    "timeout_seconds",
+    "termination",
+    "exit_code",
+    "output_limit_bytes",
+    "stdout",
+    "stderr"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "artifact_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifact_content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "step_id": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "started_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "completed_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
+    "termination": {
+      "type": "string",
+      "enum": ["EXITED", "TIMED_OUT", "SPAWN_FAILED"]
+    },
+    "exit_code": {"type": ["integer", "null"]},
+    "output_limit_bytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+    "stdout": {"$ref": "#/$defs/captured_output"},
+    "stderr": {"$ref": "#/$defs/captured_output"}
+  },
+  "$defs": {
+    "captured_output": {
+      "type": "object",
+      "required": ["sha256", "captured_bytes", "captured_base64", "truncated"],
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "captured_bytes": {"type": "integer", "minimum": 0, "maximum": 65536},
+        "captured_base64": {"type": "string", "maxLength": 87384},
+        "truncated": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

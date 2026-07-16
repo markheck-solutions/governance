@@ -7,7 +7,6 @@ from typing import Any
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import validate
 
-
 SCHEMA_FILES = {
     "evaluation_case": "evaluation_case.schema.json",
     "detector_evidence": "detector_evidence.schema.json",
@@ -30,6 +29,7 @@ SCHEMA_FILES = {
     "codex_connector_snapshot_v2": "codex_connector_snapshot.schema.json",
     "codex_connector_evidence_result_v2": "codex_connector_evidence_result.schema.json",
     "execution_plan": "execution_plan.schema.json",
+    "execution_result": "execution_result.schema.json",
 }
 
 SCHEMA_VERSIONS = {
