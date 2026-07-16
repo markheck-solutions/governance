@@ -21,6 +21,7 @@ from governance_eval.supportability import (
     SupportabilityError,
     generate_delivery_receipt,
     load_supportability_config,
+    parse_supportability_config_bytes,
     run_supportability_gate,
     validate_supportability_config,
     verify_delivery_receipt,
@@ -177,6 +178,18 @@ class SupportabilityConfigTests(unittest.TestCase):
 
             self.assertEqual(validate_supportability_config(config), [])
             self.assertEqual(config["receipt"]["retention_days"], 90)
+
+    def test_config_bytes_parser_uses_exact_utf8_buffer_and_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            config_path = repo / ".github/governance/supportability.yml"
+            raw = config_path.read_bytes()
+
+            config = parse_supportability_config_bytes(raw, suffix=".yml")
+
+            self.assertEqual(validate_supportability_config(config), [])
+            with self.assertRaisesRegex(SupportabilityError, "must be UTF-8"):
+                parse_supportability_config_bytes(b"\xff", suffix=".yml")
 
     def test_yaml_parser_fails_closed_on_missing_nested_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

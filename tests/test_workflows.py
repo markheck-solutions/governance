@@ -294,19 +294,43 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-enforcement.yml"],
         )
 
-    def test_codex_reconciliation_uses_typed_config_without_architecture_drift(
+    def test_codex_reconciliation_uses_pre_execution_bound_config_without_architecture_drift(
         self,
     ) -> None:
         workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
             encoding="utf-8"
         )
+        binding_name = "      - name: Bind validated AI-review supportability config"
+        binding_block = workflow.split(binding_name, 1)[1].split(
+            "      - name: Validate supportability config", 1
+        )[0]
+        self.assertIn("id: bind_ai_config", binding_block)
+        self.assertNotIn("continue-on-error", binding_block)
+        self.assertIn("bind_supportability_config", binding_block)
+        self.assertIn('["git", "rev-parse", "HEAD"]', binding_block)
+        self.assertIn('"ls-files",', binding_block)
+        self.assertIn('os.environ["CONFIG_PATH"],', binding_block)
+        self.assertIn(
+            "print(f\"bound-config-path={binding['bound_config_path']}\")",
+            binding_block,
+        )
+        self.assertIn(
+            "print(f\"binding-sha256={binding['binding_sha256']}\")",
+            binding_block,
+        )
+        self.assertLess(
+            workflow.index(binding_name),
+            workflow.index("      - name: Run configured supportability gates"),
+        )
         codex_block = workflow.split(
             "      - name: Reconcile Codex review evidence", 1
         )[1].split("      - name: Read supportability summary", 1)[0]
-        self.assertEqual(codex_block.count('--config "../target/${CONFIG_PATH}"'), 1)
+        self.assertNotIn("../target/${CONFIG_PATH}", codex_block)
         self.assertIn(
             "python -m governance_eval.codex_review_gate \\\n"
-            '            --config "../target/${CONFIG_PATH}" \\\n',
+            '            --config "${{ steps.bind_ai_config.outputs.bound-config-path }}" \\\n'
+            '            --config-source-path "$CONFIG_PATH" \\\n'
+            '            --config-binding-digest "${{ steps.bind_ai_config.outputs.binding-sha256 }}" \\\n',
             codex_block,
         )
         architecture_block = workflow.split(

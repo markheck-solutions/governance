@@ -115,8 +115,17 @@ def _bool_dict_or_empty(value: Any) -> dict[str, bool]:
 
 
 def load_supportability_config(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
-    return _parse_supportability_config_text(text, path.suffix)
+    return parse_supportability_config_bytes(path.read_bytes(), suffix=path.suffix)
+
+
+def parse_supportability_config_bytes(
+    raw: bytes, *, suffix: str = ""
+) -> dict[str, Any]:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SupportabilityError("supportability config must be UTF-8") from exc
+    return _parse_supportability_config_text(text, suffix)
 
 
 def _parse_supportability_config_text(text: str, suffix: str = "") -> dict[str, Any]:

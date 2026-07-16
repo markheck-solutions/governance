@@ -69,21 +69,26 @@ class ArchitectureGateTests(unittest.TestCase):
             repo = _repo(Path(tmp), self.root, mode="block_all")
             runtime = repo / "governance_eval"
             runtime.mkdir()
-            changed_files = [
+            config_binding_slice_paths = {
                 ".github/workflows/supportability-gate.yml",
-                "governance_eval/ai_review_gate.py",
-                "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",
                 "governance_eval/supportability.py",
-                "schemas/v1/supportability_config.schema.json",
-                "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
-                "tests/test_codex_connector_collector.py",
-                "tests/test_codex_connector_evidence.py",
                 "tests/test_codex_review_gate.py",
                 "tests/test_supportability.py",
                 "tests/test_workflows.py",
-            ]
+            }
+            changed_files = sorted(
+                config_binding_slice_paths
+                | {
+                    "governance_eval/ai_review_gate.py",
+                    "governance_eval/codex_connector_evidence.py",
+                    "schemas/v1/supportability_config.schema.json",
+                    "tests/test_ai_review_gate.py",
+                    "tests/test_codex_connector_collector.py",
+                    "tests/test_codex_connector_evidence.py",
+                }
+            )
             for path in changed_files:
                 target = repo / path
                 target.parent.mkdir(parents=True, exist_ok=True)
