@@ -18,7 +18,7 @@ _VALID_STATES = {
     "AI_REVIEW_UNAVAILABLE",
     "INVALID_EVIDENCE",
 }
-_UNAVAILABLE_POLICIES = {"non_blocking", "blocking"}
+_UNAVAILABLE_POLICIES = {"non_blocking"}
 
 
 def evaluate_ai_review_gate(
@@ -42,17 +42,10 @@ def evaluate_ai_review_gate(
     if not valid:
         state = "INVALID_EVIDENCE"
     blocking = state == "BLOCKING_FINDINGS_PRESENT"
-    unavailable_blocking = (
-        state == "AI_REVIEW_UNAVAILABLE" and unavailable_after_cutoff == "blocking"
-    )
     return {
         "schema_version": "1.0",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "owner_status": (
-            "RED"
-            if blocking or unavailable_blocking or state == "INVALID_EVIDENCE"
-            else "GREEN"
-        ),
+        "owner_status": "RED" if blocking or state == "INVALID_EVIDENCE" else "GREEN",
         "head_sha": head_sha if _SHA_RE.fullmatch(head_sha) else "0" * 40,
         "provider": "codex_connector",
         "unavailable_after_cutoff": (

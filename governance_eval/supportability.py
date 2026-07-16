@@ -40,7 +40,7 @@ ALL_COMMAND_GATES = (
 )
 STATUS_GREEN = "GREEN"
 STATUS_RED = "RED"
-AI_REVIEW_UNAVAILABLE_POLICIES = ("non_blocking", "blocking")
+AI_REVIEW_UNAVAILABLE_POLICIES = ("non_blocking",)
 GIT_NETWORK_TIMEOUT_SECONDS = 60
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -613,9 +613,7 @@ def _ai_review_errors(ai_review: Any) -> list[str]:
         errors.append("ai_review.unresolved_p0_p1_p2_blocks must be True")
     unavailable_policy = ai_review.get("unavailable_after_cutoff")
     if unavailable_policy not in AI_REVIEW_UNAVAILABLE_POLICIES:
-        errors.append(
-            "ai_review.unavailable_after_cutoff must be 'non_blocking' or 'blocking'"
-        )
+        errors.append("ai_review.unavailable_after_cutoff must be 'non_blocking'")
     known = set(expected_strings) | {
         "review_window_seconds",
         "unavailable_after_cutoff",
@@ -939,14 +937,6 @@ def _ai_review_change_errors(
         return ["ai_review must remain an object"]
     errors = [f"trusted base {error}" for error in _ai_review_errors(base)]
     errors.extend(_ai_review_errors(head))
-    if (
-        base.get("unavailable_after_cutoff") == "blocking"
-        and head.get("unavailable_after_cutoff") == "non_blocking"
-    ):
-        errors.append(
-            "ai_review.unavailable_after_cutoff cannot weaken from "
-            "'blocking' to 'non_blocking'"
-        )
     return errors
 
 

@@ -47,9 +47,7 @@ class AiReviewGateTests(unittest.TestCase):
                 unavailable_after_cutoff=unavailable_after_cutoff,
             )
 
-    def test_blocking_unavailability_policy_keeps_missing_exact_head_review_red(
-        self,
-    ) -> None:
+    def test_blocking_unavailability_policy_is_invalid(self) -> None:
         result = self.gate(
             {
                 "capability_status": "BLOCK_TECHNICAL",
@@ -63,8 +61,12 @@ class AiReviewGateTests(unittest.TestCase):
         )
 
         self.assertEqual(result["owner_status"], "RED")
-        self.assertEqual(result["evidence_status"], "AI_REVIEW_UNAVAILABLE")
-        self.assertEqual(result["unavailable_after_cutoff"], "blocking")
+        self.assertEqual(result["evidence_status"], "INVALID_EVIDENCE")
+        self.assertEqual(result["unavailable_after_cutoff"], "invalid")
+        self.assertEqual(
+            result["observations"],
+            ["AI review unavailability policy is invalid"],
+        )
         self.assertFalse(result["approval_provided"])
 
     def test_reconciled_unavailable_ai_is_recorded_without_blocking_or_approval(
@@ -114,15 +116,14 @@ class AiReviewGateTests(unittest.TestCase):
                 "reconciled_head_sha": HEAD_SHA,
                 "reasons": [],
                 "result_content_hash": "c" * 64,
-            },
-            unavailable_after_cutoff="blocking",
+            }
         )
 
         self.assertEqual(result["owner_status"], "GREEN")
         self.assertEqual(result["evidence_status"], "CLEAN")
         self.assertFalse(result["approval_provided"])
         self.assertFalse(result["blocking_findings_present"])
-        self.assertEqual(result["unavailable_after_cutoff"], "blocking")
+        self.assertEqual(result["unavailable_after_cutoff"], "non_blocking")
 
     def test_invalid_unavailability_policy_is_rejected(self) -> None:
         for policy in ("ignore", [], {}):

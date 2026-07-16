@@ -103,7 +103,7 @@ class CodexReviewGateTests(unittest.TestCase):
     def test_binds_validated_config_bytes_to_target_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source_path = write_config(root, "blocking")
+            source_path = write_config(root)
             bound_path = root / "bound" / "supportability.yml"
             source_relative_path = CONFIG_SOURCE_PATH
             binding = bind_supportability_config(
@@ -153,80 +153,69 @@ class CodexReviewGateTests(unittest.TestCase):
     )
     @patch("governance_eval.codex_review_gate.evaluate_codex_connector_evidence")
     @patch("governance_eval.codex_review_gate.evaluate_ai_review_gate")
-    def test_recollects_and_propagates_each_policy_while_writing_all_artifacts(
+    def test_recollects_and_propagates_fixed_policy_while_writing_all_artifacts(
         self, ai_gate, evaluate, _serialize_result, _serialize_snapshot
     ) -> None:
         evaluate.return_value = {"review_state": "AI_REVIEW_UNAVAILABLE"}
         ai_gate.return_value = {"owner_status": "GREEN"}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for policy in ("non_blocking", "blocking"):
-                with self.subTest(policy=policy):
-                    policy_root = root / policy
-                    policy_root.mkdir()
-                    output_dir = policy_root / "artifacts"
-                    source_path, bound_path, binding = bind_config(policy_root, policy)
-                    replacement_policy = (
-                        "blocking" if policy == "non_blocking" else "non_blocking"
-                    )
-                    source_path.write_text(
-                        source_path.read_text(encoding="utf-8").replace(
-                            f"unavailable_after_cutoff: {policy}",
-                            f"unavailable_after_cutoff: {replacement_policy}",
-                        ),
-                        encoding="utf-8",
-                    )
-                    captures = iter(
-                        [
-                            snapshot("2026-07-13T00:04:00Z"),
-                            snapshot("2026-07-13T00:05:02Z"),
-                        ]
-                    )
-                    sleeps: list[float] = []
-                    result = run_codex_review_gate(
-                        config_path=bound_path,
-                        config_source_path=CONFIG_SOURCE_PATH,
-                        config_binding_digest=binding["binding_sha256"],
-                        repository="owner/repo",
-                        pull_request_number=1,
-                        base_sha=BASE,
-                        head_sha=HEAD,
-                        governance_sha=GOVERNANCE,
-                        review_window_started_at="2026-07-13T00:00:00Z",
-                        output_dir=output_dir,
-                        collector=lambda *_: next(captures),
-                        sleeper=sleeps.append,
-                    )
-                    self.assertEqual(result["owner_status"], "GREEN")
-                    self.assertEqual(sleeps, [62.0])
-                    self.assertEqual(
-                        sorted(path.name for path in output_dir.iterdir()),
-                        [
-                            "ai-review-gate-result.json",
-                            "codex-connector-evidence-result.json",
-                            "codex-connector-snapshot.json",
-                        ],
-                    )
-                    self.assertEqual(
-                        ai_gate.call_args.kwargs["unavailable_after_cutoff"], policy
-                    )
-                    expected_binding = {
-                        key: value
-                        for key, value in binding.items()
-                        if key != "bound_config_path"
-                    }
-                    self.assertEqual(
-                        result["supportability_config_binding"], expected_binding
-                    )
-                    artifact = json.loads(
-                        (output_dir / "ai-review-gate-result.json").read_text(
-                            encoding="utf-8"
-                        )
-                    )
-                    self.assertEqual(
-                        artifact["supportability_config_binding"], expected_binding
-                    )
-                    ai_gate.reset_mock()
+            output_dir = root / "artifacts"
+            source_path, bound_path, binding = bind_config(root)
+            source_path.write_text(
+                source_path.read_text(encoding="utf-8").replace(
+                    "unavailable_after_cutoff: non_blocking",
+                    "unavailable_after_cutoff: blocking",
+                ),
+                encoding="utf-8",
+            )
+            captures = iter(
+                [
+                    snapshot("2026-07-13T00:04:00Z"),
+                    snapshot("2026-07-13T00:05:02Z"),
+                ]
+            )
+            sleeps: list[float] = []
+            result = run_codex_review_gate(
+                config_path=bound_path,
+                config_source_path=CONFIG_SOURCE_PATH,
+                config_binding_digest=binding["binding_sha256"],
+                repository="owner/repo",
+                pull_request_number=1,
+                base_sha=BASE,
+                head_sha=HEAD,
+                governance_sha=GOVERNANCE,
+                review_window_started_at="2026-07-13T00:00:00Z",
+                output_dir=output_dir,
+                collector=lambda *_: next(captures),
+                sleeper=sleeps.append,
+            )
+            self.assertEqual(result["owner_status"], "GREEN")
+            self.assertEqual(sleeps, [62.0])
+            self.assertEqual(
+                sorted(path.name for path in output_dir.iterdir()),
+                [
+                    "ai-review-gate-result.json",
+                    "codex-connector-evidence-result.json",
+                    "codex-connector-snapshot.json",
+                ],
+            )
+            self.assertEqual(
+                ai_gate.call_args.kwargs["unavailable_after_cutoff"],
+                "non_blocking",
+            )
+            expected_binding = {
+                key: value
+                for key, value in binding.items()
+                if key != "bound_config_path"
+            }
+            self.assertEqual(result["supportability_config_binding"], expected_binding)
+            artifact = json.loads(
+                (output_dir / "ai-review-gate-result.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                artifact["supportability_config_binding"], expected_binding
+            )
 
     def test_final_collection_before_deadline_fails_closed(self) -> None:
         calls = iter(
@@ -297,7 +286,7 @@ class CodexReviewGateTests(unittest.TestCase):
         self,
     ) -> None:
         cases = (
-            "policy-downgrade",
+            "policy-mutation",
             "same-policy-byte-change",
             "wrong-head-replay",
             "wrong-repository-replay",
@@ -309,17 +298,17 @@ class CodexReviewGateTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                _source_path, bound_path, binding = bind_config(root, "blocking")
+                _source_path, bound_path, binding = bind_config(root)
                 repository = "owner/repo"
                 head_sha = HEAD
                 source_relative_path = CONFIG_SOURCE_PATH
                 expected_digest = binding["binding_sha256"]
                 expected_error = "binding digest"
-                if case == "policy-downgrade":
+                if case == "policy-mutation":
                     bound_path.write_text(
                         bound_path.read_text(encoding="utf-8").replace(
-                            "unavailable_after_cutoff: blocking",
                             "unavailable_after_cutoff: non_blocking",
+                            "unavailable_after_cutoff: blocking",
                         ),
                         encoding="utf-8",
                     )
@@ -427,6 +416,16 @@ class CodexReviewGateTests(unittest.TestCase):
                             target_head_sha=HEAD,
                             source_relative_path=invalid_path,
                         )
+
+            source_path = write_config(root, "blocking")
+            with self.assertRaisesRegex(ValueError, "must be 'non_blocking'"):
+                bind_supportability_config(
+                    source_path=source_path,
+                    bound_path=root / "blocking-config.yml",
+                    repository="owner/repo",
+                    target_head_sha=HEAD,
+                    source_relative_path=CONFIG_SOURCE_PATH,
+                )
 
             source_path.write_bytes(b"\xff")
             with self.assertRaisesRegex(ValueError, "must be UTF-8"):
