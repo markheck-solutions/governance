@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import unittest
 from contextlib import chdir
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
+from hashlib import sha256
 from importlib.resources import files
 from pathlib import Path
 from re import escape
@@ -30,6 +33,11 @@ VALID_REQUEST = {
     "config_sha256": "d" * 64,
     "capability": "lint",
     "adapter_id": "python.ruff-check.v1",
+}
+FORMAT_REQUEST = {
+    **VALID_REQUEST,
+    "capability": "format",
+    "adapter_id": "python.ruff-format-check.v1",
 }
 TARGET_TREE_SHA256 = "1" * 64
 EXECUTION_ID = "2" * 64
@@ -61,6 +69,20 @@ def assess_plan(
         expected_request,
         target_tree_sha256=target_tree_sha256,
         execution_id=execution_id,
+    )
+
+
+def run_plan_step(
+    request: Mapping[str, Any], target_root: Path
+) -> subprocess.CompletedProcess[str]:
+    step = compile_plan(request).steps[0]
+    return subprocess.run(
+        [sys.executable, "-m", step.module, *step.arguments],
+        cwd=target_root / step.working_directory,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
     )
 
 
@@ -175,14 +197,112 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
             ("check", "--isolated", "--no-cache", "--no-respect-gitignore", "."),
         )
 
-    def test_rejects_unsupported_adapter(self) -> None:
-        request = {**VALID_REQUEST, "adapter_id": "python.unknown.v1"}
+    def test_compiles_deterministic_schema_valid_format_plan(self) -> None:
+        plan = compile_plan(FORMAT_REQUEST)
+        repeated = compile_plan(dict(reversed(FORMAT_REQUEST.items())))
+        payload = plan.to_json()
 
-        with self.assertRaisesRegex(
-            ExecutionPlanError,
-            "unsupported capability adapter: lint/python.unknown.v1",
-        ):
-            compile_plan(request)
+        validate_named("execution_plan", payload)
+        self.assertEqual(
+            payload["steps"],
+            [
+                {
+                    "step_id": "format",
+                    "capability": "format",
+                    "adapter_id": "python.ruff-format-check.v1",
+                    "runtime_id": "evaluator.python-isolated.v1",
+                    "module": "ruff",
+                    "arguments": [
+                        "format",
+                        "--check",
+                        "--isolated",
+                        "--no-cache",
+                        "--no-respect-gitignore",
+                        ".",
+                    ],
+                    "working_directory": ".",
+                    "timeout_seconds": 120,
+                    "output_limit_bytes": 65536,
+                }
+            ],
+        )
+
+        assessment = assess_plan(payload, FORMAT_REQUEST)
+        self.assertEqual(assessment["capability_status"], "PASS")
+        self.assertEqual(assessment["errors"], [])
+        self.assertEqual(
+            serialize_execution_plan(plan), serialize_execution_plan(repeated)
+        )
+
+    def test_format_adapter_accepts_formatted_fixture(self) -> None:
+        with TemporaryDirectory() as directory:
+            target_root = Path(directory)
+            source = target_root / "clean.py"
+            source.write_text(
+                "def answer() -> int:\n    return 42\n",
+                encoding="utf-8",
+            )
+            before = sha256(source.read_bytes()).hexdigest()
+
+            completed = run_plan_step(FORMAT_REQUEST, target_root)
+            after = sha256(source.read_bytes()).hexdigest()
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(after, before)
+
+    def test_format_adapter_blocks_unformatted_fixture_without_mutation(self) -> None:
+        with TemporaryDirectory() as directory:
+            target_root = Path(directory)
+            source = target_root / "unformatted.py"
+            source.write_text("def answer( ) -> int:\n return 42\n", encoding="utf-8")
+            before = sha256(source.read_bytes()).hexdigest()
+
+            completed = run_plan_step(FORMAT_REQUEST, target_root)
+            after = sha256(source.read_bytes()).hexdigest()
+
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertEqual(after, before)
+
+    def test_format_adapter_blocks_candidate_ignore_evasion_without_mutation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            target_root = Path(directory)
+            source = target_root / "hidden.py"
+            source.write_text("def answer( ) -> int:\n return 42\n", encoding="utf-8")
+            (target_root / ".gitignore").write_text("hidden.py\n", encoding="utf-8")
+            (target_root / "pyproject.toml").write_text(
+                '[tool.ruff]\nexclude = ["hidden.py"]\n',
+                encoding="utf-8",
+            )
+            before = sha256(source.read_bytes()).hexdigest()
+
+            completed = run_plan_step(FORMAT_REQUEST, target_root)
+            after = sha256(source.read_bytes()).hexdigest()
+
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertEqual(after, before)
+
+    def test_rejects_unsupported_adapter(self) -> None:
+        cases = (
+            (
+                {**VALID_REQUEST, "adapter_id": "python.unknown.v1"},
+                "unsupported capability adapter: lint/python.unknown.v1",
+            ),
+            (
+                {**VALID_REQUEST, "adapter_id": "python.ruff-format-check.v1"},
+                "unsupported capability adapter: lint/python.ruff-format-check.v1",
+            ),
+            (
+                {**FORMAT_REQUEST, "adapter_id": "python.ruff-check.v1"},
+                "unsupported capability adapter: format/python.ruff-check.v1",
+            ),
+        )
+
+        for request, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ExecutionPlanError, message):
+                    compile_plan(request)
 
     def test_rejects_candidate_supplied_execution_fields(self) -> None:
         hostile_fields = {

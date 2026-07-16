@@ -27,7 +27,7 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_PULL_REQUEST = 9_007_199_254_740_991
 _SCHEMA_RESOURCE_PARTS = ("schema_data", "v1", "execution_plan.schema.json")
-_SCHEMA_SHA256 = "4854719c664820b55020d4e3c46b68b8f63b1115761adc5e00df9ff87212963b"
+_SCHEMA_SHA256 = "acf280ad21ce9c154c1bbc10a9ab537c6a5db96d2949e1a1ae650679e5722b72"
 
 
 class ExecutionPlanError(ValueError):

@@ -42,9 +42,12 @@
           "output_limit_bytes"
         ],
         "properties": {
-          "step_id": {"type": "string", "enum": ["lint"]},
-          "capability": {"type": "string", "enum": ["lint"]},
-          "adapter_id": {"type": "string", "enum": ["python.ruff-check.v1"]},
+          "step_id": {"type": "string", "enum": ["lint", "format"]},
+          "capability": {"type": "string", "enum": ["lint", "format"]},
+          "adapter_id": {
+            "type": "string",
+            "enum": ["python.ruff-check.v1", "python.ruff-format-check.v1"]
+          },
           "runtime_id": {"type": "string", "enum": ["evaluator.python-isolated.v1"]},
           "module": {"type": "string", "enum": ["ruff"]},
           "arguments": {
