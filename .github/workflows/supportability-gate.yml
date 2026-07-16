@@ -124,6 +124,62 @@ jobs:
               print("Invalid config path", file=sys.stderr)
               raise SystemExit(64)
           PY
+      - name: Bind validated AI-review supportability config
+        id: bind_ai_config
+        shell: bash
+        env:
+          GH_TOKEN: ""
+        run: |
+          cd governance
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import subprocess
+          from pathlib import Path
+
+          from governance_eval.codex_review_gate import bind_supportability_config
+
+          target_root = Path("../target")
+          target_head = subprocess.run(
+              ["git", "rev-parse", "HEAD"],
+              cwd=target_root,
+              check=True,
+              capture_output=True,
+              text=True,
+              timeout=10,
+          ).stdout.strip()
+          if target_head != os.environ["TARGET_HEAD_SHA"]:
+              raise SystemExit("Target checkout HEAD does not match TARGET_HEAD_SHA")
+          subprocess.run(
+              [
+                  "git",
+                  "ls-files",
+                  "--error-unmatch",
+                  "--",
+                  os.environ["CONFIG_PATH"],
+              ],
+              cwd=target_root,
+              check=True,
+              capture_output=True,
+              text=True,
+              timeout=10,
+          )
+          source_path = target_root / os.environ["CONFIG_PATH"]
+          source_path.resolve(strict=True).relative_to(target_root.resolve(strict=True))
+          bound_path = (
+              Path(os.environ["RUNNER_TEMP"])
+              / "governance-ai-review-supportability.yml"
+          )
+          binding = bind_supportability_config(
+              source_path=source_path,
+              bound_path=bound_path,
+              repository=os.environ["TARGET_REPOSITORY"],
+              target_head_sha=os.environ["TARGET_HEAD_SHA"],
+              source_relative_path=os.environ["CONFIG_PATH"],
+          )
+          print(f"bound-config-path={binding['bound_config_path']}")
+          print(f"content-sha256={binding['content_sha256']}")
+          print(f"binding-sha256={binding['binding_sha256']}")
+          PY
       - name: Validate supportability config
         continue-on-error: true
         shell: bash
@@ -171,6 +227,9 @@ jobs:
         run: |
           cd governance
           python -m governance_eval.codex_review_gate \
+            --config "${{ steps.bind_ai_config.outputs.bound-config-path }}" \
+            --config-source-path "$CONFIG_PATH" \
+            --config-binding-digest "${{ steps.bind_ai_config.outputs.binding-sha256 }}" \
             --repo "$TARGET_REPOSITORY" \
             --pr "$TARGET_PR_NUMBER" \
             --base-sha "$TARGET_BASE_SHA" \

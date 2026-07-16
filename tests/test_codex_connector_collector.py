@@ -202,9 +202,9 @@ class CodexConnectorCollectorTests(unittest.TestCase):
         first = evaluate(collect("Mon, 13 Jul 2026 22:12:11 GMT", []))
         refreshed = evaluate(collect("Mon, 13 Jul 2026 22:12:21 GMT", [finding]))
 
-        self.assertEqual(first["capability_status"], "PASS")
+        self.assertEqual(first["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(first["evidence_cutoff_at"], "2026-07-13T22:12:10Z")
-        self.assertEqual(refreshed["capability_status"], "PASS")
+        self.assertEqual(refreshed["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(refreshed["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertEqual(refreshed["reasons"], ["ONLY_LATE_RESPONSE"])
 
@@ -310,7 +310,7 @@ class CodexConnectorCollectorTests(unittest.TestCase):
                 resolved_clean_commit_sha=None,
             ),
         )
-        self.assertEqual(evidence["capability_status"], "PASS")
+        self.assertEqual(evidence["capability_status"], "BLOCK_TECHNICAL")
 
     def test_collector_rejects_untrusted_pagination_next_url(self) -> None:
         api = "https://api.github.com"

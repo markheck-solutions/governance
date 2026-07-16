@@ -18,6 +18,7 @@ _VALID_STATES = {
     "AI_REVIEW_UNAVAILABLE",
     "INVALID_EVIDENCE",
 }
+_UNAVAILABLE_POLICIES = {"non_blocking"}
 
 
 def evaluate_ai_review_gate(
@@ -26,10 +27,18 @@ def evaluate_ai_review_gate(
     codex_result: Any,
     raw_snapshot_bytes: bytes,
     trusted_context: TrustedCodexConnectorContext,
+    unavailable_after_cutoff: str = "non_blocking",
 ) -> dict[str, Any]:
     valid, state, reasons = _validated_codex_state(
         head_sha, codex_result, raw_snapshot_bytes, trusted_context
     )
+    policy_valid = (
+        isinstance(unavailable_after_cutoff, str)
+        and unavailable_after_cutoff in _UNAVAILABLE_POLICIES
+    )
+    if not policy_valid:
+        valid = False
+        reasons = ["AI review unavailability policy is invalid"]
     if not valid:
         state = "INVALID_EVIDENCE"
     blocking = state == "BLOCKING_FINDINGS_PRESENT"
@@ -39,6 +48,9 @@ def evaluate_ai_review_gate(
         "owner_status": "RED" if blocking or state == "INVALID_EVIDENCE" else "GREEN",
         "head_sha": head_sha if _SHA_RE.fullmatch(head_sha) else "0" * 40,
         "provider": "codex_connector",
+        "unavailable_after_cutoff": (
+            unavailable_after_cutoff if policy_valid else "invalid"
+        ),
         "evidence_status": state,
         "approval_provided": False,
         "blocking_findings_present": blocking,
@@ -92,16 +104,20 @@ def _validated_codex_state(
             and "BLOCKING_FINDINGS_PRESENT" in reasons
         )
     elif state == "AI_REVIEW_UNAVAILABLE":
-        availability_reasons = {
-            "NO_IN_WINDOW_RESPONSE",
-            "ONLY_LATE_RESPONSE",
-            "CONNECTOR_FAILURE_PRESENT",
-        }
+        reason_set = set(reasons)
+        response_unavailable = bool(reason_set) and reason_set.issubset(
+            {"NO_IN_WINDOW_RESPONSE", "ONLY_LATE_RESPONSE"}
+        )
+        connector_unavailable = (
+            "CONNECTOR_FAILURE_PRESENT" in reason_set
+            and reason_set.issubset(
+                {"CONNECTOR_FAILURE_PRESENT", "RESPONSE_BODY_UNRECOGNIZED"}
+            )
+        )
         valid = (
-            capability == "PASS"
+            capability == "BLOCK_TECHNICAL"
             and reviewed is None
-            and bool(reasons)
-            and set(reasons).issubset(availability_reasons)
+            and (response_unavailable or connector_unavailable)
         )
     else:
         valid = capability == "BLOCK_TECHNICAL"

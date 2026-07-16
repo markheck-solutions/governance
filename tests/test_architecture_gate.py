@@ -64,6 +64,132 @@ class ArchitectureGateTests(unittest.TestCase):
                 (repo / "artifacts/supportability/architecture-gate-result.md").exists()
             )
 
+    def test_fail_closed_checkpoint_files_have_architecture_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo(Path(tmp), self.root, mode="block_all")
+            runtime = repo / "governance_eval"
+            runtime.mkdir()
+            config_binding_slice_paths = {
+                ".github/workflows/supportability-gate.yml",
+                "governance_eval/codex_review_gate.py",
+                "governance_eval/supportability.py",
+                "tests/test_architecture_gate.py",
+                "tests/test_codex_review_gate.py",
+                "tests/test_supportability.py",
+                "tests/test_workflows.py",
+            }
+            changed_files = sorted(
+                config_binding_slice_paths
+                | {
+                    "governance_eval/ai_review_gate.py",
+                    "governance_eval/codex_connector_evidence.py",
+                    "schemas/v1/supportability_config.schema.json",
+                    "tests/test_ai_review_gate.py",
+                    "tests/test_codex_connector_collector.py",
+                    "tests/test_codex_connector_evidence.py",
+                }
+            )
+            for path in changed_files:
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("value = 1\n", encoding="utf-8")
+            config_path = repo / ".github/governance/supportability.yml"
+            config = load_supportability_config(config_path)
+            config["architecture_policy"]["governed_roots"].append(
+                {
+                    "path": "governance_eval",
+                    "kind": "production_python",
+                    "owner": "governance",
+                    "purpose": "evaluator runtime",
+                }
+            )
+            config["architecture_policy"]["governed_roots"].append(
+                {
+                    "path": "schemas",
+                    "kind": "schema_artifact",
+                    "owner": "governance",
+                    "purpose": "machine-readable contracts",
+                }
+            )
+            config["architecture_policy"]["governed_roots"].append(
+                {
+                    "path": ".github/workflows",
+                    "kind": "ci_config",
+                    "owner": "governance",
+                    "purpose": "GitHub enforcement workflows",
+                }
+            )
+            config["architecture_policy"]["runtime_relevance"][
+                "non_runtime_globs"
+            ].append(".github/workflows/**")
+            config["architecture_policy"]["modules"]["governance_eval"] = {
+                "path": "governance_eval",
+                "owner": "governance",
+                "purpose": "evaluator runtime",
+                "classification": "application",
+                "domain": "governance-evaluation",
+                "allowed_dependencies": [],
+                "forbidden_dependencies": ["tests"],
+                "test_strategy": "unittest coverage through tests/",
+                "limits": {
+                    "max_file_lines": 50,
+                    "max_function_lines": 10,
+                    "max_class_lines": 5,
+                    "max_functions_per_file": 5,
+                    "max_classes_per_file": 2,
+                },
+            }
+            config["architecture_policy"]["modules"]["schemas"] = {
+                "path": "schemas",
+                "owner": "governance",
+                "purpose": "machine-readable contracts",
+                "classification": "schema",
+                "domain": "governance-evaluation",
+                "allowed_dependencies": [],
+                "forbidden_dependencies": ["tests"],
+                "test_strategy": "schema validation through tests/",
+                "limits": {
+                    "max_file_lines": 500,
+                    "max_function_lines": 10,
+                    "max_class_lines": 5,
+                    "max_functions_per_file": 5,
+                    "max_classes_per_file": 2,
+                },
+            }
+            config["architecture_policy"]["modules"]["workflows"] = {
+                "path": ".github/workflows",
+                "owner": "governance",
+                "purpose": "GitHub enforcement workflows",
+                "classification": "ci",
+                "domain": "github-enforcement",
+                "allowed_dependencies": ["governance_eval"],
+                "forbidden_dependencies": ["artifacts"],
+                "test_strategy": "workflow assertions through tests/",
+                "limits": {
+                    "max_file_lines": 500,
+                    "max_function_lines": 0,
+                    "max_class_lines": 0,
+                    "max_functions_per_file": 0,
+                    "max_classes_per_file": 0,
+                },
+            }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            result, code = run_architecture_gate(
+                config_path,
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=changed_files,
+            )
+
+            self.assertEqual(code, EXIT_OK, result["errors"])
+            self.assertEqual(result["owner_status"], "GREEN")
+            self.assertEqual(
+                result["rule_results"]["changed_file_architecture_coverage"],
+                "PASS",
+            )
+
     def test_block_new_mode_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_new")

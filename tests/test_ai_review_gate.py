@@ -27,7 +27,13 @@ class AiReviewGateTests(unittest.TestCase):
             resolved_clean_commit_sha=HEAD_SHA,
         )
 
-    def gate(self, value: object, *, replay_valid: bool = True) -> dict:
+    def gate(
+        self,
+        value: object,
+        *,
+        replay_valid: bool = True,
+        unavailable_after_cutoff: str = "non_blocking",
+    ) -> dict:
         side_effect = None if replay_valid else ValueError("source mismatch")
         with patch(
             "governance_eval.ai_review_gate.validate_codex_connector_evidence_result",
@@ -38,14 +44,37 @@ class AiReviewGateTests(unittest.TestCase):
                 codex_result=value,
                 raw_snapshot_bytes=b"{}",
                 trusted_context=self.trusted,
+                unavailable_after_cutoff=unavailable_after_cutoff,
             )
+
+    def test_blocking_unavailability_policy_is_invalid(self) -> None:
+        result = self.gate(
+            {
+                "capability_status": "BLOCK_TECHNICAL",
+                "review_state": "AI_REVIEW_UNAVAILABLE",
+                "reviewed_head_sha": None,
+                "reconciled_head_sha": HEAD_SHA,
+                "reasons": ["NO_IN_WINDOW_RESPONSE"],
+                "result_content_hash": "b" * 64,
+            },
+            unavailable_after_cutoff="blocking",
+        )
+
+        self.assertEqual(result["owner_status"], "RED")
+        self.assertEqual(result["evidence_status"], "INVALID_EVIDENCE")
+        self.assertEqual(result["unavailable_after_cutoff"], "invalid")
+        self.assertEqual(
+            result["observations"],
+            ["AI review unavailability policy is invalid"],
+        )
+        self.assertFalse(result["approval_provided"])
 
     def test_reconciled_unavailable_ai_is_recorded_without_blocking_or_approval(
         self,
     ) -> None:
         result = self.gate(
             {
-                "capability_status": "PASS",
+                "capability_status": "BLOCK_TECHNICAL",
                 "review_state": "AI_REVIEW_UNAVAILABLE",
                 "reviewed_head_sha": None,
                 "reconciled_head_sha": HEAD_SHA,
@@ -59,6 +88,7 @@ class AiReviewGateTests(unittest.TestCase):
         self.assertFalse(result["approval_provided"])
         self.assertFalse(result["blocking_findings_present"])
         self.assertEqual(result["head_sha"], HEAD_SHA)
+        self.assertEqual(result["unavailable_after_cutoff"], "non_blocking")
 
     def test_exact_head_codex_blocking_finding_is_red(self) -> None:
         result = self.gate(
@@ -86,13 +116,37 @@ class AiReviewGateTests(unittest.TestCase):
                 "reconciled_head_sha": HEAD_SHA,
                 "reasons": [],
                 "result_content_hash": "c" * 64,
-            },
+            }
         )
 
         self.assertEqual(result["owner_status"], "GREEN")
         self.assertEqual(result["evidence_status"], "CLEAN")
         self.assertFalse(result["approval_provided"])
         self.assertFalse(result["blocking_findings_present"])
+        self.assertEqual(result["unavailable_after_cutoff"], "non_blocking")
+
+    def test_invalid_unavailability_policy_is_rejected(self) -> None:
+        for policy in ("ignore", [], {}):
+            with self.subTest(policy=policy):
+                result = self.gate(
+                    {
+                        "capability_status": "PASS",
+                        "review_state": "CLEAN",
+                        "reviewed_head_sha": HEAD_SHA,
+                        "reconciled_head_sha": HEAD_SHA,
+                        "reasons": [],
+                        "result_content_hash": "c" * 64,
+                    },
+                    unavailable_after_cutoff=policy,  # type: ignore[arg-type]
+                )
+
+                self.assertEqual(result["owner_status"], "RED")
+                self.assertEqual(result["evidence_status"], "INVALID_EVIDENCE")
+                self.assertEqual(result["unavailable_after_cutoff"], "invalid")
+                self.assertEqual(
+                    result["observations"],
+                    ["AI review unavailability policy is invalid"],
+                )
 
     def test_missing_or_malformed_ai_evidence_is_red(self) -> None:
         cases = (
@@ -123,7 +177,7 @@ class AiReviewGateTests(unittest.TestCase):
     def test_source_replay_failure_is_red(self) -> None:
         result = self.gate(
             {
-                "capability_status": "PASS",
+                "capability_status": "BLOCK_TECHNICAL",
                 "review_state": "AI_REVIEW_UNAVAILABLE",
                 "reviewed_head_sha": None,
                 "reconciled_head_sha": HEAD_SHA,
@@ -138,7 +192,7 @@ class AiReviewGateTests(unittest.TestCase):
     def test_unavailability_cannot_hide_integrity_failure(self) -> None:
         result = self.gate(
             {
-                "capability_status": "PASS",
+                "capability_status": "BLOCK_TECHNICAL",
                 "review_state": "AI_REVIEW_UNAVAILABLE",
                 "reviewed_head_sha": None,
                 "reconciled_head_sha": HEAD_SHA,
@@ -149,6 +203,21 @@ class AiReviewGateTests(unittest.TestCase):
                 "result_content_hash": "b" * 64,
             }
         )
+        self.assertEqual(result["owner_status"], "RED")
+        self.assertEqual(result["evidence_status"], "INVALID_EVIDENCE")
+
+    def test_unrecognized_response_without_connector_failure_is_invalid(self) -> None:
+        result = self.gate(
+            {
+                "capability_status": "BLOCK_TECHNICAL",
+                "review_state": "AI_REVIEW_UNAVAILABLE",
+                "reviewed_head_sha": None,
+                "reconciled_head_sha": HEAD_SHA,
+                "reasons": ["RESPONSE_BODY_UNRECOGNIZED"],
+                "result_content_hash": "b" * 64,
+            }
+        )
+
         self.assertEqual(result["owner_status"], "RED")
         self.assertEqual(result["evidence_status"], "INVALID_EVIDENCE")
 
