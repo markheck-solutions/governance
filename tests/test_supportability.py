@@ -597,6 +597,54 @@ class SupportabilityGateTests(unittest.TestCase):
                 all(command["status"] == "SKIPPED" for command in result["commands"])
             )
 
+    def test_gate_accepts_review_checker_change_with_independent_regressions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            workflow_dir = repo / ".github/workflows"
+            workflow_dir.mkdir(parents=True)
+            enforcement = self.root / ".github/workflows/supportability-enforcement.yml"
+            (workflow_dir / "supportability-enforcement.yml").write_text(
+                enforcement.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            changed_files = [
+                "governance_eval/ai_review_gate.py",
+                "governance_eval/codex_connector_evidence.py",
+                "tests/test_ai_review_gate.py",
+                "tests/test_architecture_gate.py",
+                "tests/test_codex_connector_collector.py",
+                "tests/test_codex_connector_evidence.py",
+                "tests/test_supportability.py",
+            ]
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=changed_files,
+                command_runner=_passing_runner,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
+            self.assertFalse(
+                any("protected checker change" in error for error in result["errors"])
+            )
+            statuses = {
+                command["gate"]: command["status"] for command in result["commands"]
+            }
+            for gate in (
+                "lint",
+                "format_check",
+                "typecheck",
+                "complexity",
+                "architecture",
+                "tests",
+                "compile_or_build",
+            ):
+                self.assertEqual(statuses[gate], "PASS")
+
     def test_protected_delivery_chain_accepts_current_remote_pinned_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
