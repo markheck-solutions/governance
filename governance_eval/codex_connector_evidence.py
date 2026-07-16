@@ -189,7 +189,7 @@ def _evaluate(
     review_state = _classify_review_state(
         reasons, reviewed_head, response, trusted.head_sha
     )
-    passed = review_state in {"CLEAN", "AI_REVIEW_UNAVAILABLE"}
+    passed = review_state == "CLEAN"
     reconciled = review_state != "INVALID_EVIDENCE"
     result_reviewed_head = (
         trusted.head_sha
@@ -916,8 +916,9 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
         and result["reviewed_head_sha"] is None
         and result["reconciled_head_sha"] is None
     )
-    if (passed and not (clean_semantics or unavailable_semantics)) or (
-        not passed and not (blocking_semantics or invalid_semantics)
+    if (passed and not clean_semantics) or (
+        not passed
+        and not (unavailable_semantics or blocking_semantics or invalid_semantics)
     ):
         raise ValueError("Codex connector evidence result semantics are invalid")
 

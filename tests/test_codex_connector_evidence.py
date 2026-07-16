@@ -300,12 +300,14 @@ def evaluate(value: dict) -> dict:
 
 
 class CodexConnectorEvidenceTests(unittest.TestCase):
-    def test_connector_reaction_never_claims_exact_head_review(self) -> None:
+    def test_connector_reaction_without_exact_head_review_blocks_technical(
+        self,
+    ) -> None:
         value = reaction_snapshot()
 
         result = evaluate(value)
 
-        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIsNone(result["reviewed_head_sha"])
         self.assertEqual(result["evidence_cutoff_at"], DEADLINE)
@@ -340,7 +342,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
 
                 result = evaluate(value)
 
-                self.assertEqual(result["capability_status"], "PASS")
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
                 self.assertIsNone(result["reviewed_head_sha"])
                 self.assertIn("CONNECTOR_FAILURE_PRESENT", result["reasons"])
@@ -353,7 +355,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
 
         result = evaluate(value)
 
-        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertEqual(result["reconciled_head_sha"], HEAD_SHA)
         self.assertIsNone(result["reviewed_head_sha"])
@@ -474,7 +476,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
     def test_reaction_window_timing_and_finalization_controls(self) -> None:
         at_deadline = reaction_snapshot()
         at_deadline["issue_reactions"][0]["created_at"] = DEADLINE
-        self.assertEqual(evaluate(at_deadline)["capability_status"], "PASS")
+        self.assertEqual(evaluate(at_deadline)["capability_status"], "BLOCK_TECHNICAL")
 
         unavailable_cases = []
         for created_at in (ANCHOR, "2026-07-13T17:59:59Z"):
@@ -490,7 +492,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         for name, value, reason in unavailable_cases:
             with self.subTest(name=name):
                 result = evaluate(value)
-                self.assertEqual(result["capability_status"], "PASS")
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
                 self.assertIn(reason, result["reasons"])
 
@@ -532,7 +534,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
                     pull_request_event(event, event_id=500 + index)
                 ]
                 result = evaluate(value)
-                self.assertEqual(result["capability_status"], "PASS")
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
                 self.assertIsNone(result["reviewed_head_sha"])
 
@@ -575,12 +577,12 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
                 ),
             ]
         )
-        self.assertEqual(evaluate(noise)["capability_status"], "PASS")
+        self.assertEqual(evaluate(noise)["capability_status"], "BLOCK_TECHNICAL")
 
         eyes = reaction_snapshot()
         eyes["issue_reactions"] = [connector_reaction(content="eyes")]
         result = evaluate(eyes)
-        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertEqual(result["reasons"], ["NO_IN_WINDOW_RESPONSE"])
 
@@ -620,7 +622,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
 
         result = evaluate(value)
 
-        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertNotIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
 
@@ -710,7 +712,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
 
         result = evaluate_codex_connector_evidence(raw, context)
 
-        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIsNone(result["response"])
         self.assertIsNone(result["reviewed_head_sha"])
@@ -733,13 +735,13 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
             raw,
             trusted(raw, resolved_clean_commit_sha=None),
         )
-        self.assertEqual(clean["capability_status"], "PASS")
+        self.assertEqual(clean["capability_status"], "BLOCK_TECHNICAL")
 
         wrong = evaluate_codex_connector_evidence(
             raw,
             trusted(raw, resolved_clean_commit_sha="c" * 40),
         )
-        self.assertEqual(wrong["capability_status"], "PASS")
+        self.assertEqual(wrong["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(wrong["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIsNone(wrong["reviewed_head_sha"])
 
@@ -875,7 +877,7 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
                     "review_error",
                     "unavailable",
                 }:
-                    self.assertEqual(result["capability_status"], "PASS")
+                    self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                     self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
                 else:
                     self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
@@ -953,20 +955,20 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         value = snapshot()
         value["issue_comments"].insert(0, quota)
         first_result = evaluate(value)
-        self.assertEqual(first_result["capability_status"], "PASS")
+        self.assertEqual(first_result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(first_result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIn("CONNECTOR_FAILURE_PRESENT", first_result["reasons"])
 
         quota["id"] = 201
         quota["created_at"] = "2026-07-13T18:02:00Z"
         result = evaluate(value)
-        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIn("RESPONSE_BODY_UNRECOGNIZED", result["reasons"])
 
         quota["created_at"] = "2026-07-13T18:01:00Z"
         result = evaluate(value)
-        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIsNone(result["response"])
 
@@ -981,7 +983,7 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         late_clean["issue_comments"][0]["created_at"] = "2026-07-13T18:05:01Z"
         late_clean["captured_at"] = "2026-07-13T18:05:02Z"
         late_result = evaluate(late_clean)
-        self.assertEqual(late_result["capability_status"], "PASS")
+        self.assertEqual(late_result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(late_result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIn("ONLY_LATE_RESPONSE", late_result["reasons"])
         self.assertIsNone(late_result["reviewed_head_sha"])
@@ -993,7 +995,7 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
             "Codex couldn't complete this request. Try again later."
         )
         failure_result = evaluate(late_failure)
-        self.assertEqual(failure_result["capability_status"], "PASS")
+        self.assertEqual(failure_result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(failure_result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIn("ONLY_LATE_RESPONSE", failure_result["reasons"])
 
@@ -1039,7 +1041,7 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
             with self.subTest(name=name):
                 result = evaluate(value)
                 if name in {"missing", "stale"}:
-                    self.assertEqual(result["capability_status"], "PASS")
+                    self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                     self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
                 else:
                     self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
@@ -1270,8 +1272,8 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         left = evaluate(first)
         right = evaluate(second)
 
-        self.assertEqual(left["capability_status"], "PASS")
-        self.assertEqual(right["capability_status"], "PASS")
+        self.assertEqual(left["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(right["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(left["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertEqual(
             left["normalized_snapshot_sha256"],
