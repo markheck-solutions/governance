@@ -40,6 +40,7 @@ ALL_COMMAND_GATES = (
 )
 STATUS_GREEN = "GREEN"
 STATUS_RED = "RED"
+AI_REVIEW_UNAVAILABLE_POLICIES = ("non_blocking", "blocking")
 GIT_NETWORK_TIMEOUT_SECONDS = 60
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -587,19 +588,31 @@ def _ai_review_errors(ai_review: Any) -> list[str]:
         return ["ai_review must be an object"]
     if "copilot_required" in ai_review or "reviewer_login_patterns" in ai_review:
         return ["legacy Copilot ai_review configuration is not supported"]
-    expected = {
+    expected_strings = {
         "provider": "codex_connector",
         "adapter": "codex_connector_pr_signal_v2",
-        "review_window_seconds": 300,
-        "unavailable_after_cutoff": "non_blocking",
-        "unresolved_p0_p1_p2_blocks": True,
     }
     errors = [
         f"ai_review.{key} must be {value!r}"
-        for key, value in expected.items()
+        for key, value in expected_strings.items()
         if ai_review.get(key) != value
     ]
-    unknown = sorted(set(ai_review) - set(expected))
+    review_window = ai_review.get("review_window_seconds")
+    if type(review_window) is not int or review_window != 300:
+        errors.append("ai_review.review_window_seconds must be 300")
+    if ai_review.get("unresolved_p0_p1_p2_blocks") is not True:
+        errors.append("ai_review.unresolved_p0_p1_p2_blocks must be True")
+    unavailable_policy = ai_review.get("unavailable_after_cutoff")
+    if unavailable_policy not in AI_REVIEW_UNAVAILABLE_POLICIES:
+        errors.append(
+            "ai_review.unavailable_after_cutoff must be 'non_blocking' or 'blocking'"
+        )
+    known = set(expected_strings) | {
+        "review_window_seconds",
+        "unavailable_after_cutoff",
+        "unresolved_p0_p1_p2_blocks",
+    }
+    unknown = sorted(set(ai_review) - known)
     errors.extend(f"ai_review.{key} is not supported" for key in unknown)
     return errors
 
@@ -915,7 +928,17 @@ def _ai_review_change_errors(
     head = head_config.get("ai_review")
     if not isinstance(base, dict) or not isinstance(head, dict):
         return ["ai_review must remain an object"]
-    return _ai_review_errors(head)
+    errors = [f"trusted base {error}" for error in _ai_review_errors(base)]
+    errors.extend(_ai_review_errors(head))
+    if (
+        base.get("unavailable_after_cutoff") == "blocking"
+        and head.get("unavailable_after_cutoff") == "non_blocking"
+    ):
+        errors.append(
+            "ai_review.unavailable_after_cutoff cannot weaken from "
+            "'blocking' to 'non_blocking'"
+        )
+    return errors
 
 
 def _command_list(value: Any) -> list[str]:

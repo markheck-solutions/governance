@@ -64,7 +64,7 @@ class ArchitectureGateTests(unittest.TestCase):
                 (repo / "artifacts/supportability/architecture-gate-result.md").exists()
             )
 
-    def test_fail_closed_review_checkpoint_has_architecture_coverage(self) -> None:
+    def test_fail_closed_checkpoint_files_have_architecture_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
             runtime = repo / "governance_eval"
@@ -72,9 +72,13 @@ class ArchitectureGateTests(unittest.TestCase):
             changed_files = [
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
+                "governance_eval/supportability.py",
+                "schemas/v1/supportability_config.schema.json",
                 "tests/test_ai_review_gate.py",
+                "tests/test_architecture_gate.py",
                 "tests/test_codex_connector_collector.py",
                 "tests/test_codex_connector_evidence.py",
+                "tests/test_supportability.py",
             ]
             for path in changed_files:
                 target = repo / path
@@ -90,6 +94,14 @@ class ArchitectureGateTests(unittest.TestCase):
                     "purpose": "evaluator runtime",
                 }
             )
+            config["architecture_policy"]["governed_roots"].append(
+                {
+                    "path": "schemas",
+                    "kind": "schema_artifact",
+                    "owner": "governance",
+                    "purpose": "machine-readable contracts",
+                }
+            )
             config["architecture_policy"]["modules"]["governance_eval"] = {
                 "path": "governance_eval",
                 "owner": "governance",
@@ -101,6 +113,23 @@ class ArchitectureGateTests(unittest.TestCase):
                 "test_strategy": "unittest coverage through tests/",
                 "limits": {
                     "max_file_lines": 50,
+                    "max_function_lines": 10,
+                    "max_class_lines": 5,
+                    "max_functions_per_file": 5,
+                    "max_classes_per_file": 2,
+                },
+            }
+            config["architecture_policy"]["modules"]["schemas"] = {
+                "path": "schemas",
+                "owner": "governance",
+                "purpose": "machine-readable contracts",
+                "classification": "schema",
+                "domain": "governance-evaluation",
+                "allowed_dependencies": [],
+                "forbidden_dependencies": ["tests"],
+                "test_strategy": "schema validation through tests/",
+                "limits": {
+                    "max_file_lines": 500,
                     "max_function_lines": 10,
                     "max_class_lines": 5,
                     "max_functions_per_file": 5,

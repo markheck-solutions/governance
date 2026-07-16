@@ -74,6 +74,54 @@ class SupportabilityConfigTests(unittest.TestCase):
         errors = validate_supportability_config(config)
         self.assertTrue(any("legacy Copilot" in error for error in errors), errors)
 
+    def test_config_accepts_exact_unavailability_policy_set(self) -> None:
+        for policy in ("non_blocking", "blocking"):
+            with self.subTest(policy=policy):
+                config = _valid_config(self.root)
+                config["ai_review"]["unavailable_after_cutoff"] = policy
+                self.assertEqual(validate_supportability_config(config), [])
+
+        for policy in (
+            "ignore",
+            "Blocking",
+            " blocking",
+            "",
+            None,
+            True,
+            1,
+            [],
+            {},
+        ):
+            with self.subTest(invalid_policy=policy):
+                config = _valid_config(self.root)
+                config["ai_review"]["unavailable_after_cutoff"] = policy
+                errors = validate_supportability_config(config)
+                self.assertTrue(
+                    any(
+                        "ai_review.unavailable_after_cutoff" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+        missing = _valid_config(self.root)
+        missing["ai_review"].pop("unavailable_after_cutoff")
+        self.assertTrue(
+            any(
+                "ai_review.unavailable_after_cutoff" in error
+                for error in validate_supportability_config(missing)
+            )
+        )
+
+        unknown = _valid_config(self.root)
+        unknown["ai_review"]["fallback"] = "non_blocking"
+        self.assertTrue(
+            any(
+                "ai_review.fallback" in error
+                for error in validate_supportability_config(unknown)
+            )
+        )
+
     def test_config_validation_rejects_soft_architecture_modes(self) -> None:
         for mode in ("report_only", "block_new"):
             with self.subTest(mode=mode):
@@ -745,40 +793,143 @@ class SupportabilityGateTests(unittest.TestCase):
                 any("copilot_review_evidence.py" in error for error in result["errors"])
             )
 
-    def test_non_weakening_config_change_runs_only_trusted_base_commands(self) -> None:
+    def test_non_weakening_ai_policy_transitions_run_trusted_base_commands(
+        self,
+    ) -> None:
+        transitions = (
+            ("non_blocking", "non_blocking"),
+            ("non_blocking", "blocking"),
+            ("blocking", "blocking"),
+        )
+        for base_policy, head_policy in transitions:
+            with self.subTest(base=base_policy, head=head_policy):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = _synthetic_repo(Path(tmp), self.root)
+                    base_config = _valid_config(repo)
+                    _set_semantic_gate_commands(base_config)
+                    base_config["ai_review"]["unavailable_after_cutoff"] = base_policy
+                    head_config = json.loads(json.dumps(base_config))
+                    head_config["ai_review"]["unavailable_after_cutoff"] = head_policy
+                    (repo / ".github/governance/supportability.yml").write_text(
+                        json.dumps(head_config), encoding="utf-8"
+                    )
+                    seen: list[str] = []
+
+                    def runner(
+                        command: str, cwd: Path
+                    ) -> subprocess.CompletedProcess[str]:
+                        del cwd
+                        seen.append(command)
+                        return subprocess.CompletedProcess(
+                            args=command, returncode=0, stdout="", stderr=""
+                        )
+
+                    with mock.patch(
+                        "governance_eval.supportability._base_supportability_config",
+                        return_value=(base_config, []),
+                    ):
+                        result = run_supportability_gate(
+                            repo / ".github/governance/supportability.yml",
+                            repo,
+                            "a" * 40,
+                            "b" * 40,
+                            changed_files=[".github/governance/supportability.yml"],
+                            command_runner=runner,
+                        )
+
+                    self.assertEqual(
+                        result["owner_status"], STATUS_GREEN, result["errors"]
+                    )
+                    self.assertTrue(seen)
+                    self.assertIn("python -m ruff check .", seen)
+
+    def test_blocking_to_non_blocking_config_change_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             base_config = _valid_config(repo)
             _set_semantic_gate_commands(base_config)
+            base_config["ai_review"]["unavailable_after_cutoff"] = "blocking"
             head_config = json.loads(json.dumps(base_config))
+            head_config["ai_review"]["unavailable_after_cutoff"] = "non_blocking"
             (repo / ".github/governance/supportability.yml").write_text(
                 json.dumps(head_config), encoding="utf-8"
             )
-            seen: list[str] = []
 
-            def runner(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-                del cwd
-                seen.append(command)
-                return subprocess.CompletedProcess(
-                    args=command, returncode=0, stdout="", stderr=""
-                )
+            result = _run_config_change_with_base(repo, base_config)
 
-            with mock.patch(
-                "governance_eval.supportability._base_supportability_config",
-                return_value=(base_config, []),
-            ):
-                result = run_supportability_gate(
-                    repo / ".github/governance/supportability.yml",
-                    repo,
-                    "a" * 40,
-                    "b" * 40,
-                    changed_files=[".github/governance/supportability.yml"],
-                    command_runner=runner,
-                )
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(
+                any(
+                    "ai_review.unavailable_after_cutoff cannot weaken from "
+                    "'blocking' to 'non_blocking'" in error
+                    for error in result["errors"]
+                ),
+                result["errors"],
+            )
+            self.assertTrue(
+                all(command["status"] == "SKIPPED" for command in result["commands"])
+            )
 
-            self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
-            self.assertTrue(seen)
-            self.assertIn("python -m ruff check .", seen)
+    def test_config_change_rejects_invalid_trusted_base_ai_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            base_config = _valid_config(repo)
+            _set_semantic_gate_commands(base_config)
+            base_config["ai_review"]["unavailable_after_cutoff"] = "ignore"
+            head_config = json.loads(json.dumps(base_config))
+            head_config["ai_review"]["unavailable_after_cutoff"] = "blocking"
+            (repo / ".github/governance/supportability.yml").write_text(
+                json.dumps(head_config), encoding="utf-8"
+            )
+
+            result = _run_config_change_with_base(repo, base_config)
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(
+                any(
+                    "trusted base ai_review.unavailable_after_cutoff" in error
+                    for error in result["errors"]
+                ),
+                result["errors"],
+            )
+            self.assertTrue(
+                all(command["status"] == "SKIPPED" for command in result["commands"])
+            )
+
+    def test_config_change_rejects_malformed_trusted_base_ai_types(self) -> None:
+        cases = (
+            ("review_window_seconds", 300.0, 300),
+            ("unresolved_p0_p1_p2_blocks", 1, True),
+        )
+        for field, malformed, valid in cases:
+            with self.subTest(field=field, malformed=malformed):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = _synthetic_repo(Path(tmp), self.root)
+                    base_config = _valid_config(repo)
+                    _set_semantic_gate_commands(base_config)
+                    base_config["ai_review"][field] = malformed
+                    head_config = json.loads(json.dumps(base_config))
+                    head_config["ai_review"][field] = valid
+                    (repo / ".github/governance/supportability.yml").write_text(
+                        json.dumps(head_config), encoding="utf-8"
+                    )
+
+                    result = _run_config_change_with_base(repo, base_config)
+
+                    self.assertEqual(result["owner_status"], STATUS_RED)
+                    self.assertTrue(
+                        any(
+                            f"trusted base ai_review.{field}" in error
+                            for error in result["errors"]
+                        ),
+                        result["errors"],
+                    )
+                    self.assertTrue(
+                        all(
+                            command["status"] == "SKIPPED"
+                            for command in result["commands"]
+                        )
+                    )
 
     def test_config_change_rejects_unclassified_key_and_unapproved_reviewer(
         self,
