@@ -25,7 +25,24 @@ _ADAPTERS = {
         working_directory=".",
         timeout_seconds=120,
         output_limit_bytes=65536,
-    )
+    ),
+    ("format_check", "python.ruff-format-check.v1"): CapabilityAdapter(
+        capability="format_check",
+        adapter_id="python.ruff-format-check.v1",
+        runtime_id="evaluator.python-isolated.v1",
+        module="ruff",
+        arguments=(
+            "format",
+            "--check",
+            "--isolated",
+            "--no-cache",
+            "--no-respect-gitignore",
+            ".",
+        ),
+        working_directory=".",
+        timeout_seconds=120,
+        output_limit_bytes=65536,
+    ),
 }
 
 
