@@ -188,9 +188,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             protected_refs,
             [
-                ("supportability-gate", "5741b133660c40f206e71a1d6582f7574fe6d931"),
-                ("supportability-gate", "5741b133660c40f206e71a1d6582f7574fe6d931"),
-                ("delivery-receipt", "5741b133660c40f206e71a1d6582f7574fe6d931"),
+                ("supportability-gate", "778953df06f2c4f4c6ea79e806316a6c21d691ee"),
+                ("supportability-gate", "778953df06f2c4f4c6ea79e806316a6c21d691ee"),
+                ("delivery-receipt", "778953df06f2c4f4c6ea79e806316a6c21d691ee"),
             ],
         )
         self.assertNotIn(
@@ -252,7 +252,7 @@ class WorkflowTests(unittest.TestCase):
             "  delivery-receipt:", 1
         )
         self.assertIn(
-            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@5741b133660c40f206e71a1d6582f7574fe6d931",
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@778953df06f2c4f4c6ea79e806316a6c21d691ee",
             baseline_block,
         )
         self.assertIn(
@@ -262,10 +262,10 @@ class WorkflowTests(unittest.TestCase):
             "target-head-sha: ${{ github.event.pull_request.head.sha }}", baseline_block
         )
         self.assertIn(
-            "governance-ref: 5741b133660c40f206e71a1d6582f7574fe6d931", baseline_block
+            "governance-ref: 778953df06f2c4f4c6ea79e806316a6c21d691ee", baseline_block
         )
         self.assertIn(
-            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@5741b133660c40f206e71a1d6582f7574fe6d931",
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@778953df06f2c4f4c6ea79e806316a6c21d691ee",
             candidate_block,
         )
         self.assertIn(
@@ -273,7 +273,7 @@ class WorkflowTests(unittest.TestCase):
             candidate_block,
         )
         self.assertIn(
-            "governance-ref: 5741b133660c40f206e71a1d6582f7574fe6d931", candidate_block
+            "governance-ref: 778953df06f2c4f4c6ea79e806316a6c21d691ee", candidate_block
         )
         self.assertNotIn(
             "governance-ref: ${{ github.event.pull_request.head.sha }}", enforcement
@@ -283,7 +283,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("candidate-supportability-artifact-id", delivery_block)
         self.assertIn("candidate-supportability-artifact-digest", delivery_block)
         self.assertIn(
-            "governance-ref: 5741b133660c40f206e71a1d6582f7574fe6d931", delivery_block
+            "governance-ref: 778953df06f2c4f4c6ea79e806316a6c21d691ee", delivery_block
         )
         self.assertIn(
             "if: ${{ github.event.pull_request.base.ref == 'main' }}",
