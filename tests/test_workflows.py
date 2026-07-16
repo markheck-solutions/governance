@@ -129,28 +129,6 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-gate.yml"],
             r"(?s)- name: Reconcile Codex review evidence.*?env:\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}.*?python -m governance_eval\.codex_review_gate",
         )
-        codex_block = (
-            workflows["supportability-gate.yml"]
-            .split("      - name: Reconcile Codex review evidence", 1)[1]
-            .split("      - name: Read supportability summary", 1)[0]
-        )
-        self.assertEqual(codex_block.count('--config "../target/${CONFIG_PATH}"'), 1)
-        self.assertIn(
-            "python -m governance_eval.codex_review_gate \\\n"
-            '            --config "../target/${CONFIG_PATH}" \\\n',
-            codex_block,
-        )
-        architecture_block = (
-            workflows["supportability-gate.yml"]
-            .split("      - name: Run approved architecture fitness gate", 1)[1]
-            .split("      - name: Reconcile Codex review evidence", 1)[0]
-        )
-        self.assertIn(
-            "python -m governance_eval architecture-gate \\\n"
-            '            --config "../target/${CONFIG_PATH}" \\\n'
-            "            --target-repo ../target \\\n",
-            architecture_block,
-        )
         self.assertIn(
             "ai-review-gate-result.json", workflows["supportability-gate.yml"]
         )
@@ -314,6 +292,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(
             "if: ${{ always() && github.event.pull_request.base.ref == 'main' }}",
             workflows["supportability-enforcement.yml"],
+        )
+
+    def test_codex_reconciliation_uses_typed_config_without_architecture_drift(
+        self,
+    ) -> None:
+        workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        codex_block = workflow.split(
+            "      - name: Reconcile Codex review evidence", 1
+        )[1].split("      - name: Read supportability summary", 1)[0]
+        self.assertEqual(codex_block.count('--config "../target/${CONFIG_PATH}"'), 1)
+        self.assertIn(
+            "python -m governance_eval.codex_review_gate \\\n"
+            '            --config "../target/${CONFIG_PATH}" \\\n',
+            codex_block,
+        )
+        architecture_block = workflow.split(
+            "      - name: Run approved architecture fitness gate", 1
+        )[1].split("      - name: Reconcile Codex review evidence", 1)[0]
+        self.assertIn(
+            "python -m governance_eval architecture-gate \\\n"
+            '            --config "../target/${CONFIG_PATH}" \\\n'
+            "            --target-repo ../target \\\n",
+            architecture_block,
         )
 
     def test_enforcement_jobs_use_pull_request_target_conditions(self) -> None:
