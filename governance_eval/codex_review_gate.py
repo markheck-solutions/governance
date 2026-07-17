@@ -226,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request-run-attempt", type=int)
     parser.add_argument("--request-repository-id", type=int)
     parser.add_argument("--request-outcome")
+    parser.add_argument("--request-transport-command-json")
+    parser.add_argument("--request-transport-started-at")
+    parser.add_argument("--request-transport-completed-at")
+    parser.add_argument("--request-transport-timeout-seconds", type=int)
+    parser.add_argument("--request-transport-timed-out")
     parser.add_argument("--request-transport-exit-code", type=int)
     parser.add_argument("--request-transport-error-sha256")
     parser.add_argument("--request-comment-id", type=int)
@@ -266,12 +271,23 @@ def _workflow_request_receipt_from_args(
         args.request_run_attempt,
         args.request_repository_id,
         args.request_outcome,
+        args.request_transport_command_json,
+        args.request_transport_started_at,
+        args.request_transport_completed_at,
+        args.request_transport_timeout_seconds,
+        args.request_transport_timed_out,
         args.request_transport_exit_code,
     )
     if all(value is None for value in core_values):
         return None
     if any(value is None for value in core_values):
         raise ValueError("workflow request receipt inputs must be supplied together")
+    try:
+        transport_command = json.loads(args.request_transport_command_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("workflow request transport command is invalid") from exc
+    if args.request_transport_timed_out not in {"true", "false"}:
+        raise ValueError("workflow request transport timeout state is invalid")
     request_body = (
         f"@codex review\n\nGovernance review request for exact head `{args.head_sha}`."
     )
@@ -292,6 +308,11 @@ def _workflow_request_receipt_from_args(
         request_body_sha256="sha256:"
         + sha256(request_body.encode("utf-8")).hexdigest(),
         outcome=args.request_outcome,
+        transport_command=transport_command,
+        transport_started_at=args.request_transport_started_at,
+        transport_completed_at=args.request_transport_completed_at,
+        transport_timeout_seconds=args.request_transport_timeout_seconds,
+        transport_timed_out=args.request_transport_timed_out == "true",
         transport_exit_code=args.request_transport_exit_code,
         transport_error_sha256=args.request_transport_error_sha256,
         comment_id=args.request_comment_id,

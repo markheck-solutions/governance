@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
+import os
 import re
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from typing import Any
@@ -153,6 +157,78 @@ class SelfUpdatePolicyTests(unittest.TestCase):
             ).hexdigest(),
             supportability._ENFORCEMENT_RECEIPT_TRANSITION_SHA256[1],
         )
+
+    def test_receipt_activation_records_exact_transport_execution(self) -> None:
+        expected_command = [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            "repos/owner/repo/issues/31/comments",
+            "-f",
+            "body=@codex review\n\nGovernance review request for exact head "
+            f"`{'a' * 40}`.",
+        ]
+        cases = (
+            (
+                subprocess.CompletedProcess(
+                    expected_command,
+                    0,
+                    stdout=b'{"id":201,"created_at":"2026-07-17T13:32:58Z"}',
+                    stderr=b"",
+                ),
+                "POSTED",
+                "false",
+                "0",
+            ),
+            (
+                subprocess.CompletedProcess(
+                    expected_command, 1, stdout=b"", stderr=b"unavailable"
+                ),
+                "TRANSPORT_UNAVAILABLE",
+                "false",
+                "1",
+            ),
+            (
+                subprocess.TimeoutExpired(expected_command, 30, stderr=b"deadline"),
+                "TRANSPORT_UNAVAILABLE",
+                "true",
+                "124",
+            ),
+        )
+        for transport, outcome, timed_out, exit_code in cases:
+            with self.subTest(outcome=outcome, timed_out=timed_out):
+                outputs, run = _execute_request_fixture(transport)
+                self.assertEqual(
+                    json.loads(outputs["request-transport-command-json"]),
+                    expected_command,
+                )
+                self.assertEqual(outputs["request-transport-timeout-seconds"], "30")
+                self.assertEqual(outputs["request-transport-timed-out"], timed_out)
+                self.assertEqual(outputs["request-transport-exit-code"], exit_code)
+                self.assertEqual(outputs["request-outcome"], outcome)
+                self.assertRegex(
+                    outputs["request-transport-started-at"],
+                    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+                )
+                self.assertGreaterEqual(
+                    outputs["request-transport-completed-at"],
+                    outputs["request-transport-started-at"],
+                )
+                run.assert_called_once_with(
+                    expected_command,
+                    check=False,
+                    capture_output=True,
+                    timeout=30,
+                )
+
+    def test_receipt_activation_rejects_malformed_success_response(self) -> None:
+        malformed = subprocess.CompletedProcess(
+            [], 0, stdout=b'{"created_at":"2026-07-17T13:32:58Z"}', stderr=b""
+        )
+
+        with self.assertRaises(SystemExit):
+            _execute_request_fixture(malformed)
 
     def test_exact_legacy_to_receipt_activation_is_accepted(self) -> None:
         trusted_sha = "2" * 40
@@ -357,6 +433,44 @@ def _activated_enforcement_workflow(sha: str) -> str:
         REPO_ROOT / "fixtures/supportability-enforcement-receipt-activated.yml"
     ).read_text(encoding="utf-8")
     return text.replace("2" * 40, sha)
+
+
+def _execute_request_fixture(
+    transport: subprocess.CompletedProcess[bytes] | subprocess.TimeoutExpired,
+) -> tuple[dict[str, str], mock.Mock]:
+    fixture = _activated_enforcement_workflow("2" * 40)
+    script = textwrap.dedent(
+        fixture.split("          python3 - <<'PY'\n", 1)[1].split("          PY\n", 1)[
+            0
+        ]
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        output_path = Path(tmp) / "outputs.txt"
+        environment = {
+            "GITHUB_OUTPUT": str(output_path),
+            "HEAD_SHA": "a" * 40,
+            "REPOSITORY": "owner/repo",
+            "PR_NUMBER": "31",
+            "RUN_ATTEMPT": "1",
+        }
+        run = mock.Mock(
+            side_effect=transport
+            if isinstance(transport, subprocess.TimeoutExpired)
+            else None,
+            return_value=(
+                None if isinstance(transport, subprocess.TimeoutExpired) else transport
+            ),
+        )
+        with (
+            mock.patch.dict(os.environ, environment, clear=False),
+            mock.patch("subprocess.run", run),
+        ):
+            exec(compile(script, "<request-fixture>", "exec"), {})
+        outputs = dict(
+            line.split("=", 1)
+            for line in output_path.read_text(encoding="utf-8").splitlines()
+        )
+    return outputs, run
 
 
 def _normalized_enforcement_workflow(text: str) -> str:

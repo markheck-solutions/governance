@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://markheck-solutions.github.io/governance/schemas/v4/codex_connector_evidence_result.schema.json",
+  "title": "Codex Connector Evidence Result v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "capability", "adapter_id", "repository", "pull_request", "governance_evaluator_sha", "review_window_started_at", "review_deadline_at", "evidence_cutoff_at", "snapshot_file_sha256", "normalized_snapshot_sha256", "resolved_clean_commit_sha", "workflow_request_receipt", "connector_identity", "review_state", "capability_status", "reconciled_head_sha", "reviewed_head_sha", "response", "reasons", "result_content_hash"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["4.0"]},
+    "capability": {"type": "string", "enum": ["CODEX_CONNECTOR_REVIEW_EVIDENCE"]},
+    "adapter_id": {"type": "string", "enum": ["codex_connector_pr_signal_v2"]},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "full_name"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}
+      }
+    },
+    "pull_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "node_id", "created_at", "base_sha", "head_sha"],
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "node_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "created_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "governance_evaluator_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "review_window_started_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+    "review_deadline_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+    "evidence_cutoff_at": {"type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+    "snapshot_file_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "normalized_snapshot_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "resolved_clean_commit_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "workflow_request_receipt": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["workflow_ref", "workflow_sha", "event_name", "event_action", "run_id", "run_attempt", "repository_id", "repository_full_name", "pull_request_number", "head_sha", "review_window_started_at", "job_id", "request_endpoint", "request_body_sha256", "outcome", "transport_command", "transport_started_at", "transport_completed_at", "transport_timeout_seconds", "transport_timed_out", "transport_exit_code", "transport_error_sha256", "comment_id", "comment_created_at"],
+      "properties": {
+        "workflow_ref": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\\.github/workflows/supportability-enforcement\\.yml@refs/heads/main$"},
+        "workflow_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "event_name": {"type": "string", "enum": ["pull_request_target"]},
+        "event_action": {"type": "string", "enum": ["opened", "reopened", "synchronize", "ready_for_review"]},
+        "run_id": {"type": "integer", "minimum": 1},
+        "run_attempt": {"type": "integer", "enum": [1]},
+        "repository_id": {"type": "integer", "minimum": 1},
+        "repository_full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "pull_request_number": {"type": "integer", "minimum": 1},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "review_window_started_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+        "job_id": {"type": "string", "enum": ["request-codex-review"]},
+        "request_endpoint": {"type": "string", "pattern": "^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/comments$"},
+        "request_body_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "outcome": {"type": "string", "enum": ["POSTED", "TRANSPORT_UNAVAILABLE"]},
+        "transport_command": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "items": {"type": "string"}
+        },
+        "transport_started_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+        "transport_completed_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+        "transport_timeout_seconds": {"type": "integer", "enum": [30]},
+        "transport_timed_out": {"type": "boolean"},
+        "transport_exit_code": {"type": "integer", "minimum": 0, "maximum": 255},
+        "transport_error_sha256": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+        "comment_id": {"type": ["integer", "null"], "minimum": 1},
+        "comment_created_at": {"type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"outcome": {"const": "POSTED"}}},
+          "then": {
+            "properties": {
+              "transport_timed_out": {"const": false},
+              "transport_exit_code": {"const": 0},
+              "transport_error_sha256": {"type": "null"},
+              "comment_id": {"type": "integer", "minimum": 1},
+              "comment_created_at": {"type": "string"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"outcome": {"const": "TRANSPORT_UNAVAILABLE"}}},
+          "then": {
+            "properties": {
+              "transport_exit_code": {"type": "integer", "minimum": 1},
+              "transport_error_sha256": {"type": "string"},
+              "comment_id": {"type": "null"},
+              "comment_created_at": {"type": "null"}
+            }
+          }
+        }
+      ]
+    },
+    "connector_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["login", "user_id", "user_node_id"],
+      "properties": {
+        "login": {"type": "string", "enum": ["chatgpt-codex-connector[bot]"]},
+        "user_id": {"type": "integer", "enum": [199175422]},
+        "user_node_id": {"type": "string", "enum": ["BOT_kgDOC98s_g"]}
+      }
+    },
+    "review_state": {"type": "string", "enum": ["CLEAN", "BLOCKING_FINDINGS_PRESENT", "AI_REVIEW_UNAVAILABLE", "INVALID_EVIDENCE"]},
+    "capability_status": {"type": "string", "enum": ["PASS", "BLOCK_TECHNICAL"]},
+    "reconciled_head_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "reviewed_head_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "response": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["response_type", "response_id", "response_node_id", "created_at", "payload_sha256", "user_type", "app_provenance", "app_id", "app_node_id", "app_slug"],
+      "properties": {
+        "response_type": {"type": "string", "enum": ["issue_comment", "pull_request_review"]},
+        "response_id": {"type": "integer", "minimum": 1},
+        "response_node_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 160},
+        "created_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
+        "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "user_type": {"type": "string", "enum": ["Bot"]},
+        "app_provenance": {"type": "string", "enum": ["VERIFIED_PERFORMED_VIA_GITHUB_APP", "NOT_EXPOSED_BY_GITHUB_API"]},
+        "app_id": {"type": ["integer", "null"], "minimum": 1},
+        "app_node_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 160},
+        "app_slug": {"type": ["string", "null"], "minLength": 1, "maxLength": 160}
+      }
+    },
+    "reasons": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"}
+    },
+    "result_content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

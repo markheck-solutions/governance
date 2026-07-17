@@ -23,6 +23,11 @@ jobs:
     timeout-minutes: 2
     outputs:
       request-outcome: ${{ steps.request.outputs.request-outcome }}
+      request-transport-command-json: ${{ steps.request.outputs.request-transport-command-json }}
+      request-transport-started-at: ${{ steps.request.outputs.request-transport-started-at }}
+      request-transport-completed-at: ${{ steps.request.outputs.request-transport-completed-at }}
+      request-transport-timeout-seconds: ${{ steps.request.outputs.request-transport-timeout-seconds }}
+      request-transport-timed-out: ${{ steps.request.outputs.request-transport-timed-out }}
       request-transport-exit-code: ${{ steps.request.outputs.request-transport-exit-code }}
       request-transport-error-sha256: ${{ steps.request.outputs.request-transport-error-sha256 }}
       request-comment-id: ${{ steps.request.outputs.request-comment-id }}
@@ -48,7 +53,7 @@ jobs:
           import re
           import subprocess
           import sys
-          from datetime import datetime
+          from datetime import datetime, timezone
           from hashlib import sha256
           from pathlib import Path
 
@@ -77,6 +82,11 @@ jobs:
               "-f",
               f"body={body}",
           ]
+          command_json = json.dumps(command, separators=(",", ":"))
+          transport_started_at = datetime.now(timezone.utc).replace(
+              microsecond=0
+          ).strftime("%Y-%m-%dT%H:%M:%SZ")
+          transport_timed_out = False
           try:
               completed = subprocess.run(
                   command,
@@ -88,14 +98,25 @@ jobs:
               stderr = completed.stderr
               exit_code = completed.returncode
           except subprocess.TimeoutExpired as exc:
+              transport_timed_out = True
               stdout = b""
               stderr = exc.stderr or b""
               if isinstance(stderr, str):
                   stderr = stderr.encode("utf-8")
               stderr += b"\nrequest timed out after 30 seconds"
               exit_code = 124
+          transport_completed_at = datetime.now(timezone.utc).replace(
+              microsecond=0
+          ).strftime("%Y-%m-%dT%H:%M:%SZ")
           if not isinstance(exit_code, int) or not 0 <= exit_code <= 255:
               raise SystemExit("Invalid request transport exit code")
+          receipt_outputs = {
+              "request-transport-command-json": command_json,
+              "request-transport-started-at": transport_started_at,
+              "request-transport-completed-at": transport_completed_at,
+              "request-transport-timeout-seconds": "30",
+              "request-transport-timed-out": str(transport_timed_out).lower(),
+          }
 
           if exit_code == 0:
               try:
@@ -119,6 +140,7 @@ jobs:
               if type(comment_id) is not int or comment_id <= 0:
                   raise SystemExit("Invalid request comment ID")
               outputs = {
+                  **receipt_outputs,
                   "request-outcome": "POSTED",
                   "request-transport-exit-code": "0",
                   "request-transport-error-sha256": "",
@@ -127,6 +149,7 @@ jobs:
               }
           else:
               outputs = {
+                  **receipt_outputs,
                   "request-outcome": "TRANSPORT_UNAVAILABLE",
                   "request-transport-exit-code": str(exit_code),
                   "request-transport-error-sha256": (
@@ -166,6 +189,11 @@ jobs:
       review-window-started-at: ${{ github.event.pull_request.updated_at }}
       governance-ref: 2222222222222222222222222222222222222222
       request-outcome: ${{ needs['request-codex-review'].outputs['request-outcome'] }}
+      request-transport-command-json: ${{ needs['request-codex-review'].outputs['request-transport-command-json'] }}
+      request-transport-started-at: ${{ needs['request-codex-review'].outputs['request-transport-started-at'] }}
+      request-transport-completed-at: ${{ needs['request-codex-review'].outputs['request-transport-completed-at'] }}
+      request-transport-timeout-seconds: ${{ needs['request-codex-review'].outputs['request-transport-timeout-seconds'] }}
+      request-transport-timed-out: ${{ needs['request-codex-review'].outputs['request-transport-timed-out'] }}
       request-transport-exit-code: ${{ needs['request-codex-review'].outputs['request-transport-exit-code'] }}
       request-transport-error-sha256: ${{ needs['request-codex-review'].outputs['request-transport-error-sha256'] }}
       request-comment-id: ${{ needs['request-codex-review'].outputs['request-comment-id'] }}
@@ -187,6 +215,11 @@ jobs:
       review-window-started-at: ${{ github.event.pull_request.updated_at }}
       governance-ref: 2222222222222222222222222222222222222222
       request-outcome: ${{ needs['request-codex-review'].outputs['request-outcome'] }}
+      request-transport-command-json: ${{ needs['request-codex-review'].outputs['request-transport-command-json'] }}
+      request-transport-started-at: ${{ needs['request-codex-review'].outputs['request-transport-started-at'] }}
+      request-transport-completed-at: ${{ needs['request-codex-review'].outputs['request-transport-completed-at'] }}
+      request-transport-timeout-seconds: ${{ needs['request-codex-review'].outputs['request-transport-timeout-seconds'] }}
+      request-transport-timed-out: ${{ needs['request-codex-review'].outputs['request-transport-timed-out'] }}
       request-transport-exit-code: ${{ needs['request-codex-review'].outputs['request-transport-exit-code'] }}
       request-transport-error-sha256: ${{ needs['request-codex-review'].outputs['request-transport-error-sha256'] }}
       request-comment-id: ${{ needs['request-codex-review'].outputs['request-comment-id'] }}

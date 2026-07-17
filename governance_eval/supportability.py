@@ -47,7 +47,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ENFORCEMENT_RECEIPT_TRANSITION_SHA256 = (
     "09f318698fa421b130f527b6f51376302ae7b6c7b2983641238ebd266136ddd9",
-    "6a50d31670d9acd313bed864db3029a3dc26994e2c526842cb3dcda9fd2d1fd5",
+    "f6e8400826ae05c0f49c6c97705b4472d39acd29213b7d6d6687176b443e6332",
 )
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
@@ -978,6 +978,7 @@ def _architecture_governance_change_errors(
         "schemas/v1/supportability_config.schema.json",
         "schemas/v2/codex_connector_evidence_result.schema.json",
         "schemas/v3/codex_connector_evidence_result.schema.json",
+        "schemas/v4/codex_connector_evidence_result.schema.json",
     }
     future_checker_paths = {
         "governance_eval/copilot_review_evidence.py",

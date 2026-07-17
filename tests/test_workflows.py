@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -364,7 +365,15 @@ class WorkflowTests(unittest.TestCase):
         call_inputs = workflow.split("  workflow_call:", 1)[1].split("    outputs:", 1)[
             0
         ]
-        for name in ("request-outcome", "request-transport-exit-code"):
+        for name in (
+            "request-outcome",
+            "request-transport-command-json",
+            "request-transport-started-at",
+            "request-transport-completed-at",
+            "request-transport-timeout-seconds",
+            "request-transport-timed-out",
+            "request-transport-exit-code",
+        ):
             with self.subTest(required_input=name):
                 self.assertRegex(
                     call_inputs,
@@ -395,6 +404,21 @@ class WorkflowTests(unittest.TestCase):
             "REQUEST_RUN_ATTEMPT": "${{ github.run_attempt }}",
             "REQUEST_REPOSITORY_ID": "${{ github.repository_id }}",
             "REQUEST_OUTCOME": "${{ inputs.request-outcome }}",
+            "REQUEST_TRANSPORT_COMMAND_JSON": (
+                "${{ inputs.request-transport-command-json }}"
+            ),
+            "REQUEST_TRANSPORT_STARTED_AT": (
+                "${{ inputs.request-transport-started-at }}"
+            ),
+            "REQUEST_TRANSPORT_COMPLETED_AT": (
+                "${{ inputs.request-transport-completed-at }}"
+            ),
+            "REQUEST_TRANSPORT_TIMEOUT_SECONDS": (
+                "${{ inputs.request-transport-timeout-seconds }}"
+            ),
+            "REQUEST_TRANSPORT_TIMED_OUT": (
+                "${{ inputs.request-transport-timed-out }}"
+            ),
             "REQUEST_TRANSPORT_EXIT_CODE": (
                 "${{ inputs.request-transport-exit-code }}"
             ),
@@ -419,6 +443,11 @@ class WorkflowTests(unittest.TestCase):
             '"opened", "reopened", "synchronize", "ready_for_review"',
             'os.environ["REQUEST_RUN_ATTEMPT"] != "1"',
             'os.environ["REQUEST_OUTCOME"]',
+            'os.environ["REQUEST_TRANSPORT_COMMAND_JSON"]',
+            'os.environ["REQUEST_TRANSPORT_STARTED_AT"]',
+            'os.environ["REQUEST_TRANSPORT_COMPLETED_AT"]',
+            'os.environ["REQUEST_TRANSPORT_TIMEOUT_SECONDS"]',
+            'os.environ["REQUEST_TRANSPORT_TIMED_OUT"]',
             'os.environ["REQUEST_TRANSPORT_EXIT_CODE"]',
             'os.environ["REQUEST_TRANSPORT_ERROR_SHA256"]',
             'os.environ["REQUEST_COMMENT_ID"]',
@@ -440,6 +469,13 @@ class WorkflowTests(unittest.TestCase):
             "--request-run-attempt": "REQUEST_RUN_ATTEMPT",
             "--request-repository-id": "REQUEST_REPOSITORY_ID",
             "--request-outcome": "REQUEST_OUTCOME",
+            "--request-transport-command-json": "REQUEST_TRANSPORT_COMMAND_JSON",
+            "--request-transport-started-at": "REQUEST_TRANSPORT_STARTED_AT",
+            "--request-transport-completed-at": "REQUEST_TRANSPORT_COMPLETED_AT",
+            "--request-transport-timeout-seconds": (
+                "REQUEST_TRANSPORT_TIMEOUT_SECONDS"
+            ),
+            "--request-transport-timed-out": "REQUEST_TRANSPORT_TIMED_OUT",
             "--request-transport-exit-code": "REQUEST_TRANSPORT_EXIT_CODE",
         }
         for argument, variable in required_cli.items():
@@ -463,6 +499,18 @@ class WorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         script = _workflow_input_validation_script(workflow)
+        body = (
+            f"@codex review\n\nGovernance review request for exact head `{'b' * 40}`."
+        )
+        command = [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            "repos/markheck-solutions/governance/issues/57/comments",
+            "-f",
+            f"body={body}",
+        ]
         base = {
             "TARGET_REPOSITORY": "markheck-solutions/governance",
             "TARGET_BASE_SHA": "a" * 40,
@@ -482,6 +530,13 @@ class WorkflowTests(unittest.TestCase):
             "REQUEST_RUN_ATTEMPT": "1",
             "REQUEST_REPOSITORY_ID": "1280677092",
             "REQUEST_OUTCOME": "POSTED",
+            "REQUEST_TRANSPORT_COMMAND_JSON": json.dumps(
+                command, separators=(",", ":")
+            ),
+            "REQUEST_TRANSPORT_STARTED_AT": "2026-07-17T13:32:56Z",
+            "REQUEST_TRANSPORT_COMPLETED_AT": "2026-07-17T13:32:58Z",
+            "REQUEST_TRANSPORT_TIMEOUT_SECONDS": "30",
+            "REQUEST_TRANSPORT_TIMED_OUT": "false",
             "REQUEST_TRANSPORT_EXIT_CODE": "0",
             "REQUEST_TRANSPORT_ERROR_SHA256": "",
             "REQUEST_COMMENT_ID": "5003756722",
@@ -494,6 +549,18 @@ class WorkflowTests(unittest.TestCase):
                 {
                     "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
                     "REQUEST_TRANSPORT_EXIT_CODE": "1",
+                    "REQUEST_TRANSPORT_TIMED_OUT": "false",
+                    "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64,
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                0,
+            ),
+            "transport_timeout": (
+                {
+                    "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
+                    "REQUEST_TRANSPORT_TIMED_OUT": "true",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "124",
                     "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64,
                     "REQUEST_COMMENT_ID": "",
                     "REQUEST_COMMENT_CREATED_AT": "",
@@ -526,6 +593,24 @@ class WorkflowTests(unittest.TestCase):
                 {"REQUEST_COMMENT_CREATED_AT": "2026-02-30T13:32:58Z"},
                 64,
             ),
+            "malformed_command": (
+                {"REQUEST_TRANSPORT_COMMAND_JSON": "not-json"},
+                64,
+            ),
+            "mutated_command": (
+                {
+                    "REQUEST_TRANSPORT_COMMAND_JSON": json.dumps(
+                        [*command[:-1], "body=@codex review"], separators=(",", ":")
+                    )
+                },
+                64,
+            ),
+            "reversed_transport_times": (
+                {"REQUEST_TRANSPORT_COMPLETED_AT": "2026-07-17T13:32:55Z"},
+                64,
+            ),
+            "wrong_timeout": ({"REQUEST_TRANSPORT_TIMEOUT_SECONDS": "31"}, 64),
+            "contradictory_timeout": ({"REQUEST_TRANSPORT_TIMED_OUT": "true"}, 64),
         }
         for name, (changes, expected) in cases.items():
             with self.subTest(case=name):

@@ -686,7 +686,7 @@ class SupportabilityGateTests(unittest.TestCase):
     def test_gate_protects_active_codex_result_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
-            active_schema = "schemas/v3/codex_connector_evidence_result.schema.json"
+            active_schema = "schemas/v4/codex_connector_evidence_result.schema.json"
 
             result = run_supportability_gate(
                 repo / ".github/governance/supportability.yml",
@@ -719,15 +719,19 @@ class SupportabilityGateTests(unittest.TestCase):
             )
             changed_files = [
                 ".github/workflows/supportability-gate.yml",
+                "fixtures/supportability-enforcement-receipt-activated.yml",
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",
-                "schemas/v3/codex_connector_evidence_result.schema.json",
+                "governance_eval/schemas.py",
+                "governance_eval/supportability.py",
+                "schemas/v4/codex_connector_evidence_result.schema.json",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
                 "tests/test_codex_connector_collector.py",
                 "tests/test_codex_connector_evidence.py",
                 "tests/test_codex_review_gate.py",
+                "tests/test_self_update_policy.py",
                 "tests/test_supportability.py",
                 "tests/test_workflows.py",
             ]

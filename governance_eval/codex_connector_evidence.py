@@ -98,6 +98,7 @@ _PROTECTED_REQUEST_WORKFLOW_PATH = ".github/workflows/supportability-enforcement
 _AUTOMATIC_REQUEST_EVENT_ACTIONS = frozenset(
     {"opened", "reopened", "synchronize", "ready_for_review"}
 )
+_REQUEST_TRANSPORT_TIMEOUT_SECONDS = 30
 _CONNECTOR_RESULT_IDENTITY = {
     "login": _CONNECTOR_USER["login"],
     "user_id": _CONNECTOR_USER["id"],
@@ -122,6 +123,11 @@ class TrustedWorkflowRequestReceipt:
     request_endpoint: str
     request_body_sha256: str
     outcome: str
+    transport_command: list[str]
+    transport_started_at: str
+    transport_completed_at: str
+    transport_timeout_seconds: int
+    transport_timed_out: bool
     transport_exit_code: int
     transport_error_sha256: str | None
     comment_id: int | None
@@ -164,6 +170,28 @@ class TrustedWorkflowRequestReceipt:
             raise ValueError("workflow request endpoint is invalid")
         if self.request_body_sha256 != _workflow_request_body_digest(self.head_sha):
             raise ValueError("workflow request body digest is invalid")
+        if self.transport_command != _workflow_request_command(
+            self.repository_full_name,
+            self.pull_request_number,
+            self.head_sha,
+        ):
+            raise ValueError("workflow request transport command is invalid")
+        if not _valid_timestamp(self.transport_started_at) or not _valid_timestamp(
+            self.transport_completed_at
+        ):
+            raise ValueError("workflow request transport timestamps are invalid")
+        if _timestamp(self.transport_completed_at) < _timestamp(
+            self.transport_started_at
+        ):
+            raise ValueError("workflow request transport timestamps are reversed")
+        if (
+            not isinstance(self.transport_timeout_seconds, int)
+            or isinstance(self.transport_timeout_seconds, bool)
+            or self.transport_timeout_seconds != _REQUEST_TRANSPORT_TIMEOUT_SECONDS
+        ):
+            raise ValueError("workflow request transport timeout is invalid")
+        if type(self.transport_timed_out) is not bool:
+            raise ValueError("workflow request transport timeout state is invalid")
         valid_exit_code = (
             isinstance(self.transport_exit_code, int)
             and not isinstance(self.transport_exit_code, bool)
@@ -171,9 +199,12 @@ class TrustedWorkflowRequestReceipt:
         )
         if not valid_exit_code:
             raise ValueError("workflow request transport exit code is invalid")
+        if self.transport_timed_out != (self.transport_exit_code == 124):
+            raise ValueError("workflow request transport timeout evidence is invalid")
         if self.outcome == "POSTED":
             if (
                 self.transport_exit_code != 0
+                or self.transport_timed_out
                 or self.transport_error_sha256 is not None
                 or not _positive_int(self.comment_id)
                 or not isinstance(self.comment_created_at, str)
@@ -263,13 +294,10 @@ class TrustedCodexConnectorContext:
                 raise ValueError(
                     "workflow request review window does not match context"
                 )
-            if request.comment_created_at is not None and not _timestamp_in_window(
-                request.comment_created_at,
-                self.review_window_started_at,
-                self.review_deadline_at,
-                include_lower=True,
-            ):
-                raise ValueError("workflow request comment is outside review window")
+            if request.comment_created_at is not None and _timestamp(
+                request.comment_created_at
+            ) < _timestamp(self.review_window_started_at):
+                raise ValueError("workflow request comment predates review window")
 
 
 def evaluate_codex_connector_evidence(
@@ -337,7 +365,7 @@ def _evaluate(
         else None
     )
     result = {
-        "schema_version": "3.0",
+        "schema_version": "4.0",
         "capability": "CODEX_CONNECTOR_REVIEW_EVIDENCE",
         "adapter_id": ADAPTER_ID,
         "repository": {
@@ -398,6 +426,7 @@ def _classify_review_state(
         "ORPHANED_REVIEW_COMMENT",
         "COMMIT_RESOLUTION_MISMATCH",
         "REVIEWED_COMMIT_NOT_HEAD",
+        "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
     }:
         return "BLOCKING_FINDINGS_PRESENT"
     if reason_set and reason_set <= {
@@ -405,6 +434,7 @@ def _classify_review_state(
         "MANUAL_REVIEW_REQUEST_PRESENT",
         "NO_IN_WINDOW_RESPONSE",
         "ONLY_LATE_RESPONSE",
+        "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     if reason_set & {
@@ -416,6 +446,7 @@ def _classify_review_state(
         "NO_IN_WINDOW_RESPONSE",
         "ONLY_LATE_RESPONSE",
         "RESPONSE_BODY_UNRECOGNIZED",
+        "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     if "CONNECTOR_FAILURE_PRESENT" in reason_set and reason_set <= {
@@ -423,6 +454,7 @@ def _classify_review_state(
         "HEAD_ATTRIBUTION_AMBIGUOUS",
         "MANUAL_REVIEW_REQUEST_PRESENT",
         "RESPONSE_BODY_UNRECOGNIZED",
+        "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     return "INVALID_EVIDENCE"
@@ -630,6 +662,14 @@ def _collection_reasons(
         )
     ):
         reasons.append("WORKFLOW_REQUEST_RECEIPT_MISMATCH")
+    if (
+        request is not None
+        and request.outcome == "POSTED"
+        and request.comment_created_at is not None
+        and _timestamp(request.comment_created_at)
+        > _timestamp(trusted.review_deadline_at)
+    ):
+        reasons.append("WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE")
     if _manual_request_present(comments, trusted):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
 
@@ -957,6 +997,20 @@ def _workflow_request_body_digest(head_sha: str) -> str:
     )
 
 
+def _workflow_request_command(
+    repository_full_name: str, pull_request_number: int, head_sha: str
+) -> list[str]:
+    return [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{repository_full_name}/issues/{pull_request_number}/comments",
+        "-f",
+        f"body={_workflow_request_body(head_sha)}",
+    ]
+
+
 def _workflow_request_record(
     receipt: TrustedWorkflowRequestReceipt | None,
 ) -> dict[str, Any] | None:
@@ -978,6 +1032,11 @@ def _workflow_request_record(
         "request_endpoint": receipt.request_endpoint,
         "request_body_sha256": receipt.request_body_sha256,
         "outcome": receipt.outcome,
+        "transport_command": receipt.transport_command,
+        "transport_started_at": receipt.transport_started_at,
+        "transport_completed_at": receipt.transport_completed_at,
+        "transport_timeout_seconds": receipt.transport_timeout_seconds,
+        "transport_timed_out": receipt.transport_timed_out,
         "transport_exit_code": receipt.transport_exit_code,
         "transport_error_sha256": receipt.transport_error_sha256,
         "comment_id": receipt.comment_id,
@@ -1113,7 +1172,7 @@ def _snapshot_schema_valid(snapshot: dict[str, Any]) -> bool:
 
 
 def _validate_result_shape(result: dict[str, Any]) -> None:
-    validate_named("codex_connector_evidence_result_v3", result)
+    validate_named("codex_connector_evidence_result_v4", result)
     if not _valid_timestamp(result["review_window_started_at"]) or not _valid_timestamp(
         result["review_deadline_at"]
     ):
@@ -1139,12 +1198,9 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
             request.pull_request_number,
             request.head_sha,
         )
-        comment_time_valid = request.comment_created_at is None or _timestamp_in_window(
-            request.comment_created_at,
-            result["review_window_started_at"],
-            result["review_deadline_at"],
-            include_lower=True,
-        )
+        comment_time_valid = request.comment_created_at is None or _timestamp(
+            request.comment_created_at
+        ) >= _timestamp(result["review_window_started_at"])
         if (
             actual_identity != expected_identity
             or request.review_window_started_at != result["review_window_started_at"]
