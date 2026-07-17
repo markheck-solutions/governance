@@ -1266,6 +1266,81 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         self.assertIn("HEAD_ATTRIBUTION_AMBIGUOUS", result["reasons"])
         self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
 
+    def test_exact_head_p3_feedback_is_nonblocking_without_supplying_approval(
+        self,
+    ) -> None:
+        for marker, finding in (
+            (HEAD_SHA[:10], "P3: simplify the local helper"),
+            (
+                HEAD_SHA,
+                "**<sub><sub>![P3 Badge](https://img.shields.io/badge/"
+                "P3-yellow?style=flat)</sub></sub> Simplify the local helper",
+            ),
+        ):
+            with self.subTest(marker=marker):
+                issue_feedback = snapshot()
+                issue_feedback["issue_comments"][0]["body"] = (
+                    f"{finding}\n\n**Reviewed commit:** `{marker}`"
+                )
+                raw = raw_bytes(issue_feedback)
+                context = trusted(raw)
+
+                result = evaluate_codex_connector_evidence(raw, context)
+
+                self.assertEqual(result["review_state"], "CLEAN")
+                self.assertEqual(result["capability_status"], "PASS")
+                self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
+                self.assertEqual(result["reasons"], [])
+                owner = evaluate_ai_review_gate(
+                    HEAD_SHA,
+                    codex_result=result,
+                    raw_snapshot_bytes=raw,
+                    trusted_context=context,
+                )
+                self.assertEqual(owner["owner_status"], "GREEN")
+                self.assertFalse(owner["approval_provided"])
+
+        review_feedback = snapshot()
+        review = connector_review()
+        review["body"] = codex_review_body()
+        review_feedback["issue_comments"] = []
+        review_feedback["pull_request_reviews"] = [review]
+        review_feedback["review_comments"] = [connector_review_comment(severity="P3")]
+        result = evaluate(review_feedback)
+        self.assertEqual(result["review_state"], "CLEAN")
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["reasons"], [])
+
+    def test_p3_issue_feedback_still_requires_exact_head_attribution(self) -> None:
+        cases = {
+            "unbound": "P3: simplify the local helper",
+            "multiple_markers": (
+                "P3: simplify the local helper\n\n"
+                f"**Reviewed commit:** `{HEAD_SHA[:10]}`\n"
+                f"**Reviewed commit:** `{'c' * 10}`"
+            ),
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                value = snapshot()
+                value["issue_comments"][0]["body"] = body
+                result = evaluate(value)
+                self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn("RESPONSE_BODY_UNRECOGNIZED", result["reasons"])
+
+        unresolved = snapshot()
+        unresolved["issue_comments"][0]["body"] = (
+            f"P3: simplify the local helper\n\n**Reviewed commit:** `{HEAD_SHA[:10]}`"
+        )
+        raw = raw_bytes(unresolved)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(raw, resolved_clean_commit_sha=None),
+        )
+        self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
+        self.assertIn("COMMIT_RESOLUTION_MISMATCH", result["reasons"])
+
     def test_exact_pr35_reaction_fixture_is_unavailable_without_head_attestation(
         self,
     ) -> None:

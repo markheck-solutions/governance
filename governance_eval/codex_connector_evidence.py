@@ -44,6 +44,7 @@ _CODEX_REVIEW_RE = re.compile(
 )
 _MANUAL_REQUEST_RE = re.compile(r"@codex\b", re.IGNORECASE)
 _BLOCKING_SEVERITY_RE = re.compile(r"\bP[0-2]\b", re.IGNORECASE)
+_NONBLOCKING_SEVERITY_RE = re.compile(r"\bP3\b", re.IGNORECASE)
 _REVIEWED_COMMIT_MARKER_RE = re.compile(
     r"(?m)^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$"
 )
@@ -547,6 +548,8 @@ def _evaluate_snapshot(
         return response, reasons, None
     commit_identity = _clean_commit_identity(latest["body"])
     if commit_identity is None:
+        commit_identity = _nonblocking_issue_comment_identity(latest, trusted.head_sha)
+    if commit_identity is None:
         reasons.append("RESPONSE_BODY_UNRECOGNIZED")
         return response, reasons, None
     resolved = trusted.resolved_clean_commit_sha
@@ -876,6 +879,18 @@ def _issue_comment_head_state(comment: dict[str, Any], head_sha: str) -> str:
         identity == head_sha if len(identity) == 40 else head_sha.startswith(identity)
     )
     return "CURRENT" if current else "STALE"
+
+
+def _nonblocking_issue_comment_identity(
+    comment: dict[str, Any], head_sha: str
+) -> str | None:
+    if (
+        _issue_comment_head_state(comment, head_sha) != "CURRENT"
+        or _BLOCKING_SEVERITY_RE.search(comment["body"])
+        or not _NONBLOCKING_SEVERITY_RE.search(comment["body"])
+    ):
+        return None
+    return _REVIEWED_COMMIT_MARKER_RE.findall(comment["body"])[0]
 
 
 def _clean_review_commit_identity(review: dict[str, Any]) -> str | None:
