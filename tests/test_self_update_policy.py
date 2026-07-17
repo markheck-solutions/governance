@@ -240,6 +240,19 @@ class SelfUpdatePolicyTests(unittest.TestCase):
             "protected enforcement workflow pins must equal trusted base SHA", errors
         )
 
+    def test_receipt_activation_rejects_symlinked_protected_caller(self) -> None:
+        with mock.patch.object(Path, "is_symlink", return_value=True):
+            errors = _enforcement_change_errors(
+                _current_enforcement_workflow(),
+                _activated_enforcement_workflow("2" * 40),
+                "2" * 40,
+            )
+
+        self.assertEqual(
+            errors,
+            ["protected enforcement workflow base or head is missing or non-regular"],
+        )
+
     def test_post_activation_change_is_limited_to_pin_rotation(self) -> None:
         errors = _enforcement_change_errors(
             _activated_enforcement_workflow("2" * 40),

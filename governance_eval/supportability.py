@@ -1105,8 +1105,8 @@ def _protected_enforcement_change_errors(
 ) -> list[str]:
     base_text = _git_show_text(target_repo, base_sha, relative)
     path = target_repo / relative
-    if base_text is None or not path.exists():
-        return ["protected enforcement workflow base or head is missing"]
+    if base_text is None or path.is_symlink() or not path.is_file():
+        return ["protected enforcement workflow base or head is missing or non-regular"]
     head_text = path.read_text(encoding="utf-8")
     sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
     governance_ref = re.compile(r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)")
