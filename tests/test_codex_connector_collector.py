@@ -11,6 +11,7 @@ from governance_eval.codex_connector_collector import (
 )
 from governance_eval.codex_connector_evidence import (
     TrustedCodexConnectorContext,
+    TrustedWorkflowRequestReceipt,
     evaluate_codex_connector_evidence,
 )
 from governance_eval.hashing import sha256_json
@@ -21,6 +22,49 @@ REPOSITORY = "markheck-solutions/governance"
 HEAD_SHA = "b" * 40
 BASE_SHA = "a" * 40
 EVALUATOR_SHA = "e" * 40
+
+
+def request_receipt() -> TrustedWorkflowRequestReceipt:
+    started_at = "2026-07-13T22:07:10Z"
+    body = f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`."
+    return TrustedWorkflowRequestReceipt(
+        workflow_ref=(
+            f"{REPOSITORY}/.github/workflows/"
+            "supportability-enforcement.yml@refs/heads/main"
+        ),
+        workflow_sha="f" * 40,
+        event_name="pull_request_target",
+        event_action="opened",
+        run_id=123456,
+        run_attempt=1,
+        repository_id=1280677092,
+        repository_full_name=REPOSITORY,
+        pull_request_number=35,
+        head_sha=HEAD_SHA,
+        review_window_started_at=started_at,
+        job_id="request-codex-review",
+        request_endpoint=f"repos/{REPOSITORY}/issues/35/comments",
+        request_body_sha256="sha256:" + sha256(body.encode("utf-8")).hexdigest(),
+        outcome="TRANSPORT_UNAVAILABLE",
+        transport_command=[
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            f"repos/{REPOSITORY}/issues/35/comments",
+            "-f",
+            f"body={body}",
+        ],
+        transport_started_at="2026-07-13T22:07:11Z",
+        transport_completed_at="2026-07-13T22:07:12Z",
+        transport_timeout_seconds=30,
+        transport_timed_out=False,
+        transport_exit_code=1,
+        transport_error_sha256="sha256:" + sha256(b"unavailable").hexdigest(),
+        response_validation_error_sha256=None,
+        comment_id=None,
+        comment_created_at=None,
+    )
 
 
 def user(login: str = "markheck-solutions", user_id: int = 1) -> dict:
@@ -196,6 +240,7 @@ class CodexConnectorCollectorTests(unittest.TestCase):
                     review_window_started_at="2026-07-13T22:07:10Z",
                     review_deadline_at="2026-07-13T22:12:10Z",
                     resolved_clean_commit_sha=None,
+                    workflow_request_receipt=request_receipt(),
                 ),
             )
 
@@ -308,6 +353,7 @@ class CodexConnectorCollectorTests(unittest.TestCase):
                 review_window_started_at="2026-07-13T22:07:10Z",
                 review_deadline_at="2026-07-13T22:12:10Z",
                 resolved_clean_commit_sha=None,
+                workflow_request_receipt=request_receipt(),
             ),
         )
         self.assertEqual(evidence["capability_status"], "BLOCK_TECHNICAL")
