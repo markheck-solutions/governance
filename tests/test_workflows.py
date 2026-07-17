@@ -331,7 +331,7 @@ class WorkflowTests(unittest.TestCase):
         activated_fixture = (
             (self.root / "fixtures/supportability-enforcement-receipt-activated.yml")
             .read_text(encoding="utf-8")
-            .replace("2" * 40, "fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c")
+            .replace("2" * 40, "8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f")
         )
         self.assertEqual(enforcement, activated_fixture)
         self.assertIn("pull_request_target:", enforcement)
@@ -366,9 +366,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             protected_refs,
             [
-                ("supportability-gate", "fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c"),
-                ("supportability-gate", "fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c"),
-                ("delivery-receipt", "fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c"),
+                ("supportability-gate", "8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f"),
+                ("supportability-gate", "8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f"),
+                ("delivery-receipt", "8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f"),
             ],
         )
         self.assertNotIn(
@@ -430,7 +430,7 @@ class WorkflowTests(unittest.TestCase):
             "  delivery-receipt:", 1
         )
         self.assertIn(
-            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c",
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f",
             baseline_block,
         )
         self.assertIn(
@@ -440,10 +440,10 @@ class WorkflowTests(unittest.TestCase):
             "target-head-sha: ${{ github.event.pull_request.head.sha }}", baseline_block
         )
         self.assertIn(
-            "governance-ref: fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c", baseline_block
+            "governance-ref: 8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f", baseline_block
         )
         self.assertIn(
-            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c",
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f",
             candidate_block,
         )
         self.assertIn(
@@ -451,7 +451,7 @@ class WorkflowTests(unittest.TestCase):
             candidate_block,
         )
         self.assertIn(
-            "governance-ref: fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c", candidate_block
+            "governance-ref: 8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f", candidate_block
         )
         self.assertNotIn(
             "governance-ref: ${{ github.event.pull_request.head.sha }}", enforcement
@@ -461,7 +461,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("candidate-supportability-artifact-id", delivery_block)
         self.assertIn("candidate-supportability-artifact-digest", delivery_block)
         self.assertIn(
-            "governance-ref: fd7c06b074e2eda5ad38fcf758418a9e9acc7d7c", delivery_block
+            "governance-ref: 8582a7cb04a1e0683c062fbcbc2e9eae2bceb77f", delivery_block
         )
         self.assertIn(
             "if: ${{ github.event.pull_request.base.ref == 'main' }}",
