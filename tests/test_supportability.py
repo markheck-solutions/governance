@@ -706,7 +706,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 all(command["status"] == "SKIPPED" for command in result["commands"])
             )
 
-    def test_gate_accepts_review_checker_change_with_independent_regressions(
+    def test_gate_accepts_receipt_bridge_with_independent_regressions(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -719,20 +719,19 @@ class SupportabilityGateTests(unittest.TestCase):
             )
             changed_files = [
                 ".github/workflows/supportability-gate.yml",
-                "fixtures/supportability-enforcement-receipt-activated.yml",
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",
                 "governance_eval/schemas.py",
-                "governance_eval/supportability.py",
-                "schemas/v4/codex_connector_evidence_result.schema.json",
+                "governance_eval/subprocess_evidence.py",
+                "schemas/v1/subprocess_evidence.schema.json",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
                 "tests/test_codex_connector_collector.py",
                 "tests/test_codex_connector_evidence.py",
                 "tests/test_codex_review_gate.py",
-                "tests/test_self_update_policy.py",
                 "tests/test_supportability.py",
+                "tests/test_subprocess_evidence.py",
                 "tests/test_workflows.py",
             ]
 

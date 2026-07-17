@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
 
+from governance_eval.hashing import sha256_json
 from governance_eval.paths import repo_root
+from governance_eval.schemas import validate_named
 
 
 def _legacy_startup_receipt_strings() -> tuple[str, ...]:
@@ -379,12 +383,13 @@ class ReusableWorkflowTests(unittest.TestCase):
             "request-transport-timed-out",
             "request-transport-exit-code",
         ):
-            with self.subTest(required_input=name):
+            with self.subTest(transition_input=name):
                 self.assertRegex(
                     call_inputs,
                     rf"(?m)^      {re.escape(name)}:\n"
-                    r"        required: true\n"
-                    r"        type: string$",
+                    r"        required: false\n"
+                    r"        type: string\n"
+                    r'        default: ""$',
                 )
         for name in (
             "request-transport-error-sha256",
@@ -506,6 +511,15 @@ class ReusableWorkflowTests(unittest.TestCase):
             codex_block,
         )
         self.assertIn('"${receipt_args[@]}"', codex_block)
+        self.assertIn(
+            "receipt_args+=(--allow-legacy-caller-without-request-receipt)",
+            codex_block,
+        )
+        self.assertIn(
+            "LEGACY_REQUEST_RECEIPT: "
+            "${{ steps.validate_inputs.outputs.legacy-request-receipt }}",
+            codex_block,
+        )
         self.assertNotIn("eval ", codex_block)
         self.assertNotIn("${{ inputs.request-", codex_block)
 
@@ -514,6 +528,14 @@ class ReusableWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         script = _workflow_input_validation_script(workflow)
+        self.assertIn("Validate legacy caller subprocess evidence for upload", workflow)
+        self.assertIn("Upload legacy caller subprocess evidence", workflow)
+        self.assertIn(
+            "${{ runner.temp }}/legacy-request-caller-subprocess-evidence.json",
+            workflow,
+        )
+        self.assertIn("steps.validate_legacy_caller_evidence.outputs.upload", workflow)
+        self.assertNotIn("hashFiles('target/artifacts/supportability/", workflow)
         body = (
             f"@codex review\n\nGovernance review request for exact head `{'b' * 40}`."
         )
@@ -534,6 +556,7 @@ class ReusableWorkflowTests(unittest.TestCase):
             "TARGET_PR_NUMBER": "57",
             "ARTIFACT_NAME": "candidate-supportability-gate-evidence",
             "CONFIG_PATH": ".github/governance/supportability.yml",
+            "RUNNER_TEMP": str(Path(tempfile.gettempdir()) / str(os.getpid())),
             "REQUEST_WORKFLOW_REF": (
                 "markheck-solutions/governance/.github/workflows/"
                 "supportability-enforcement.yml@refs/heads/main"
@@ -723,6 +746,236 @@ class ReusableWorkflowTests(unittest.TestCase):
                     timeout=5,
                 )
                 self.assertEqual(completed.returncode, expected, completed.stderr)
+
+    def test_legacy_request_bridge_accepts_only_exact_protected_base_caller(
+        self,
+    ) -> None:
+        workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        script = _workflow_input_validation_script(workflow)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            subprocess.run(
+                ["git", "init", "--quiet"],
+                cwd=target,
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+
+            caller = target / ".github/workflows/supportability-enforcement.yml"
+            caller.parent.mkdir(parents=True)
+
+            def commit_caller(text: str, message: str) -> str:
+                caller.write_text(text, encoding="utf-8")
+                subprocess.run(
+                    ["git", "add", ".github/workflows/supportability-enforcement.yml"],
+                    cwd=target,
+                    check=True,
+                    capture_output=True,
+                    timeout=10,
+                )
+                subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=Governance Test",
+                        "-c",
+                        "user.email=governance@example.invalid",
+                        "commit",
+                        "--quiet",
+                        "-m",
+                        message,
+                    ],
+                    cwd=target,
+                    check=True,
+                    capture_output=True,
+                    timeout=10,
+                )
+                return subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=target,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout.strip()
+
+            legacy = (
+                self.root / ".github/workflows/supportability-enforcement.yml"
+            ).read_text(encoding="utf-8")
+            legacy_pin = re.search(r"(?<=@)[0-9a-f]{40}", legacy)
+            self.assertIsNotNone(legacy_pin)
+            legacy_pin_text = legacy_pin.group(0)
+            legacy_sha = commit_caller(legacy, "legacy")
+            empty_receipt = {
+                "REQUEST_OUTCOME": "",
+                "REQUEST_TRANSPORT_COMMAND_JSON": "",
+                "REQUEST_TRANSPORT_STARTED_AT": "",
+                "REQUEST_TRANSPORT_COMPLETED_AT": "",
+                "REQUEST_TRANSPORT_TIMEOUT_SECONDS": "",
+                "REQUEST_TRANSPORT_TIMED_OUT": "",
+                "REQUEST_TRANSPORT_EXIT_CODE": "",
+                "REQUEST_TRANSPORT_ERROR_SHA256": "",
+                "REQUEST_RESPONSE_VALIDATION_ERROR_SHA256": "",
+                "REQUEST_COMMENT_ID": "",
+                "REQUEST_COMMENT_CREATED_AT": "",
+            }
+            base = {
+                "TARGET_REPOSITORY": "markheck-solutions/governance",
+                "TARGET_BASE_SHA": legacy_sha,
+                "TARGET_HEAD_SHA": "b" * 40,
+                "GOVERNANCE_REF": legacy_pin_text,
+                "TARGET_PR_NUMBER": "57",
+                "ARTIFACT_NAME": "candidate-supportability-gate-evidence",
+                "CONFIG_PATH": ".github/governance/supportability.yml",
+                "RUNNER_TEMP": str(root / "runner-temp"),
+                "REQUEST_WORKFLOW_REF": (
+                    "markheck-solutions/governance/.github/workflows/"
+                    "supportability-enforcement.yml@refs/heads/main"
+                ),
+                "REQUEST_WORKFLOW_SHA": legacy_sha,
+                "REQUEST_EVENT_NAME": "pull_request_target",
+                "REQUEST_EVENT_ACTION": "opened",
+                "REQUEST_RUN_ID": "29583977309",
+                "REQUEST_RUN_ATTEMPT": "1",
+                "REQUEST_REPOSITORY_ID": "1280677092",
+                **empty_receipt,
+            }
+
+            def run(changes: dict[str, str]) -> subprocess.CompletedProcess[str]:
+                env = os.environ.copy()
+                env.update(base)
+                env.update(changes)
+                env["PYTHONPATH"] = str(self.root) + (
+                    os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
+                )
+                return subprocess.run(
+                    [sys.executable, "-c", script],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    env=env,
+                    text=True,
+                    timeout=5,
+                )
+
+            legacy_result = run({})
+            self.assertEqual(legacy_result.returncode, 0, legacy_result.stderr)
+            evidence_path = Path(base["RUNNER_TEMP"]) / (
+                "legacy-request-caller-subprocess-evidence.json"
+            )
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            validate_named("subprocess_evidence", evidence, self.root)
+            self.assertEqual(evidence["decision"], "PASS")
+            self.assertEqual(evidence["termination"], "EXITED")
+            self.assertEqual(evidence["exit_code"], 0)
+            self.assertFalse(evidence["timed_out"])
+            self.assertEqual(evidence["timeout_seconds"], 10)
+            self.assertEqual(
+                evidence["command"],
+                [
+                    "git",
+                    "-C",
+                    "target",
+                    "show",
+                    legacy_sha + ":.github/workflows/supportability-enforcement.yml",
+                ],
+            )
+            captured_workflow = base64.b64decode(
+                evidence["stdout"]["captured_base64"]
+            ).decode("utf-8")
+            normalized_captured_workflow = captured_workflow.replace("\r\n", "\n")
+            self.assertEqual(normalized_captured_workflow, legacy)
+            self.assertEqual(
+                evidence["artifact_content_hash"],
+                sha256_json({**evidence, "artifact_content_hash": ""}),
+            )
+
+            missing_sha = "f" * 40
+            self.assertEqual(
+                run(
+                    {
+                        "TARGET_BASE_SHA": missing_sha,
+                        "REQUEST_WORKFLOW_SHA": missing_sha,
+                    }
+                ).returncode,
+                64,
+            )
+            failed_evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            validate_named("subprocess_evidence", failed_evidence, self.root)
+            self.assertEqual(failed_evidence["decision"], "BLOCK_TECHNICAL")
+            self.assertEqual(failed_evidence["termination"], "EXITED")
+            self.assertNotEqual(failed_evidence["exit_code"], 0)
+            self.assertTrue(failed_evidence["errors"])
+
+            negative_cases = {
+                "partial core": {"REQUEST_OUTCOME": "POSTED"},
+                "optional only": {
+                    "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64
+                },
+                "wrong workflow sha": {"REQUEST_WORKFLOW_SHA": "d" * 40},
+                "other repository": {
+                    "TARGET_REPOSITORY": "owner/repo",
+                    "REQUEST_WORKFLOW_REF": (
+                        "owner/repo/.github/workflows/"
+                        "supportability-enforcement.yml@refs/heads/main"
+                    ),
+                },
+                "wrong event": {"REQUEST_EVENT_NAME": "pull_request"},
+                "rerun": {"REQUEST_RUN_ATTEMPT": "2"},
+                "wrong governance ref": {"GOVERNANCE_REF": "c" * 40},
+            }
+            for name, changes in negative_cases.items():
+                with self.subTest(name=name):
+                    self.assertEqual(run(changes).returncode, 64)
+
+            rotated_pin = "d" * 40
+            rotated = re.sub(r"(?<=@)[0-9a-f]{40}", rotated_pin, legacy)
+            rotated = re.sub(
+                r"(?m)(^\s+governance-ref:\s+)[0-9a-f]{40}(\s*$)",
+                rf"\g<1>{rotated_pin}\2",
+                rotated,
+            )
+            rotated_sha = commit_caller(rotated, "rotated")
+            rotated_context = {
+                "TARGET_BASE_SHA": rotated_sha,
+                "REQUEST_WORKFLOW_SHA": rotated_sha,
+                "GOVERNANCE_REF": rotated_pin,
+            }
+            self.assertEqual(run(rotated_context).returncode, 0)
+
+            mixed = rotated.replace("@" + rotated_pin, "@" + "e" * 40, 1)
+            mixed_sha = commit_caller(mixed, "mixed")
+            self.assertEqual(
+                run(
+                    {
+                        "TARGET_BASE_SHA": mixed_sha,
+                        "REQUEST_WORKFLOW_SHA": mixed_sha,
+                        "GOVERNANCE_REF": rotated_pin,
+                    }
+                ).returncode,
+                64,
+            )
+
+            activated = (
+                self.root / "fixtures/supportability-enforcement-receipt-activated.yml"
+            ).read_text(encoding="utf-8")
+            activated_sha = commit_caller(activated, "activated")
+            self.assertEqual(
+                run(
+                    {
+                        "TARGET_BASE_SHA": activated_sha,
+                        "REQUEST_WORKFLOW_SHA": activated_sha,
+                        "GOVERNANCE_REF": "2" * 40,
+                    }
+                ).returncode,
+                64,
+            )
 
     def test_enforcement_jobs_use_pull_request_target_conditions(self) -> None:
         enforcement = (

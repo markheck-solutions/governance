@@ -90,6 +90,24 @@ class AiReviewGateTests(unittest.TestCase):
         self.assertEqual(result["head_sha"], HEAD_SHA)
         self.assertEqual(result["unavailable_after_cutoff"], "non_blocking")
 
+    def test_missing_workflow_request_receipt_is_unavailable_not_approval(
+        self,
+    ) -> None:
+        result = self.gate(
+            {
+                "capability_status": "BLOCK_TECHNICAL",
+                "review_state": "AI_REVIEW_UNAVAILABLE",
+                "reviewed_head_sha": None,
+                "reconciled_head_sha": HEAD_SHA,
+                "reasons": ["WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE"],
+                "result_content_hash": "b" * 64,
+            }
+        )
+
+        self.assertEqual(result["owner_status"], "GREEN")
+        self.assertEqual(result["evidence_status"], "AI_REVIEW_UNAVAILABLE")
+        self.assertFalse(result["approval_provided"])
+
     def test_manual_request_is_unavailable_not_approval(self) -> None:
         result = self.gate(
             {

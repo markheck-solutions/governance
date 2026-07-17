@@ -206,7 +206,10 @@ class CodexConnectorCollectorTests(unittest.TestCase):
         self.assertEqual(first["evidence_cutoff_at"], "2026-07-13T22:12:10Z")
         self.assertEqual(refreshed["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(refreshed["review_state"], "AI_REVIEW_UNAVAILABLE")
-        self.assertEqual(refreshed["reasons"], ["ONLY_LATE_RESPONSE"])
+        self.assertEqual(
+            refreshed["reasons"],
+            ["ONLY_LATE_RESPONSE", "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE"],
+        )
 
     def test_collector_follows_every_page_and_emits_terminal_receipts(self) -> None:
         api = "https://api.github.com"
