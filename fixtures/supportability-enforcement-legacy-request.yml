@@ -1,0 +1,105 @@
+name: Supportability Enforcement
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  request-codex-review:
+    name: Request Codex Review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Request exact-head Codex review
+        shell: bash
+        run: |
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid pull-request head SHA" >&2
+            exit 64
+          fi
+          body="@codex review
+
+          Governance review request for exact head \`${HEAD_SHA}\`."
+          error_file="$(mktemp)"
+          if ! gh api --method POST \
+            "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="$body" > /dev/null 2>"$error_file"; then
+            error="$(tr '\r\n' '  ' < "$error_file")"
+            echo "::warning title=Codex review request transport unavailable::${error}"
+            echo "The deterministic evaluators will reconcile the exact head after the cutoff and record AI_REVIEW_UNAVAILABLE if Codex does not respond."
+          fi
+
+  baseline-supportability:
+    name: Baseline Protected Supportability Gate
+    needs: request-codex-review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@b038d8c3a5e9bde400c5031c8c09f63b0affdb5e
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      review-window-started-at: ${{ github.event.pull_request.updated_at }}
+      governance-ref: b038d8c3a5e9bde400c5031c8c09f63b0affdb5e
+      artifact-name: baseline-supportability-gate-evidence
+
+  candidate-supportability:
+    name: Candidate Supportability Gate
+    needs: request-codex-review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@b038d8c3a5e9bde400c5031c8c09f63b0affdb5e
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      review-window-started-at: ${{ github.event.pull_request.updated_at }}
+      governance-ref: b038d8c3a5e9bde400c5031c8c09f63b0affdb5e
+      artifact-name: candidate-supportability-gate-evidence
+
+  delivery-receipt:
+    name: Baseline Protected Delivery Receipt
+    needs:
+      - baseline-supportability
+      - candidate-supportability
+    if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@b038d8c3a5e9bde400c5031c8c09f63b0affdb5e
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      governance-ref: b038d8c3a5e9bde400c5031c8c09f63b0affdb5e
+      supportability-artifact-name: baseline-supportability-gate-evidence
+      supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] || 'missing-baseline-supportability-artifact-id' }}
+      supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] || 'missing-baseline-supportability-artifact-digest' }}
+      candidate-supportability-artifact-name: candidate-supportability-gate-evidence
+      candidate-supportability-artifact-id: ${{ needs['candidate-supportability'].outputs['artifact-id'] || 'missing-candidate-supportability-artifact-id' }}
+      candidate-supportability-artifact-digest: ${{ needs['candidate-supportability'].outputs['artifact-digest'] || 'missing-candidate-supportability-artifact-digest' }}
