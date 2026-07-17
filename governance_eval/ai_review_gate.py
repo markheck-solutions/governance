@@ -107,9 +107,25 @@ def _validated_codex_state(
         reason_set = set(reasons)
         response_unavailable = bool(reason_set) and reason_set.issubset(
             {
+                "HEAD_ATTRIBUTION_AMBIGUOUS",
                 "MANUAL_REVIEW_REQUEST_PRESENT",
                 "NO_IN_WINDOW_RESPONSE",
                 "ONLY_LATE_RESPONSE",
+            }
+        )
+        tainted_unrecognized = bool(
+            reason_set
+            & {
+                "HEAD_ATTRIBUTION_AMBIGUOUS",
+                "MANUAL_REVIEW_REQUEST_PRESENT",
+            }
+        ) and reason_set.issubset(
+            {
+                "HEAD_ATTRIBUTION_AMBIGUOUS",
+                "MANUAL_REVIEW_REQUEST_PRESENT",
+                "NO_IN_WINDOW_RESPONSE",
+                "ONLY_LATE_RESPONSE",
+                "RESPONSE_BODY_UNRECOGNIZED",
             }
         )
         connector_unavailable = (
@@ -117,6 +133,7 @@ def _validated_codex_state(
             and reason_set.issubset(
                 {
                     "CONNECTOR_FAILURE_PRESENT",
+                    "HEAD_ATTRIBUTION_AMBIGUOUS",
                     "MANUAL_REVIEW_REQUEST_PRESENT",
                     "RESPONSE_BODY_UNRECOGNIZED",
                 }
@@ -125,7 +142,7 @@ def _validated_codex_state(
         valid = (
             capability == "BLOCK_TECHNICAL"
             and reviewed is None
-            and (response_unavailable or connector_unavailable)
+            and (response_unavailable or tainted_unrecognized or connector_unavailable)
         )
     else:
         valid = capability == "BLOCK_TECHNICAL"

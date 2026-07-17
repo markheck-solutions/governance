@@ -682,6 +682,26 @@ class SupportabilityGateTests(unittest.TestCase):
                 "tests/test_workflows.py",
             ]
 
+            for required_test in (
+                "tests/test_architecture_gate.py",
+                "tests/test_supportability.py",
+            ):
+                with self.subTest(missing_independent_regression=required_test):
+                    blocked = run_supportability_gate(
+                        repo / ".github/governance/supportability.yml",
+                        repo,
+                        "a" * 40,
+                        "b" * 40,
+                        changed_files=[
+                            path for path in changed_files if path != required_test
+                        ],
+                        command_runner=_passing_runner,
+                    )
+                    self.assertEqual(blocked["owner_status"], STATUS_RED)
+                    self.assertTrue(
+                        any(required_test in error for error in blocked["errors"])
+                    )
+
             result = run_supportability_gate(
                 repo / ".github/governance/supportability.yml",
                 repo,

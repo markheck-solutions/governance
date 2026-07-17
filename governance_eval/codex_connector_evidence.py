@@ -36,16 +36,11 @@ _CLEAN_RE = re.compile(
     r"\*\*Reviewed commit:\*\* `(?P<prefix>[0-9a-f]{10})`"
     r"(?P<trailer>\n\n<details>[\s\S]*</details>)?\Z"
 )
-_AUTOMATIC_SUMMARY_START_RE = re.compile(r"\A### Summary[ \t]*\n")
-_TESTING_HEADING_RE = re.compile(r"(?m)^(?:\*\*Testing\*\*|### Testing)[ \t]*$")
-_TOP_LEVEL_BULLET_RE = re.compile(r"(?m)^[*-][ \t]+(?P<text>[^\r\n]+)$")
-_INLINE_FULL_SHA_RE = re.compile(r"`([0-9a-f]{40})`")
-_TASK_LINK_RE = re.compile(r"\[View task →\]\(https://chatgpt\.com/s/[A-Za-z0-9_-]+\)")
-_REVIEW_COMPLETION = (
-    "No code changes were needed, so I did **not** create a commit or open a new PR."
-)
-_REVIEW_OUTCOME_SUBJECT_RE = re.compile(
-    r"(?:^|\b(?:the|this|code|pull request)\s+)review\b", re.IGNORECASE
+_CODEX_REVIEW_RE = re.compile(
+    r"\A\s*### 💡 Codex Review[ \t]*\n\n"
+    r"Here are some automated review suggestions for this pull request\.[ \t]*\n\n"
+    r"\*\*Reviewed commit:\*\* `(?P<prefix>[0-9a-f]{10})`"
+    r"(?P<trailer>[\s\S]*)\Z"
 )
 _MANUAL_REQUEST_RE = re.compile(r"@codex\b", re.IGNORECASE)
 _BLOCKING_SEVERITY_RE = re.compile(r"\bP[0-2]\b", re.IGNORECASE)
@@ -55,6 +50,7 @@ _APPROVED_CLEAN_SUFFIXES = {
     " Can't wait for the next one!",
     " Already looking forward to the next diff.",
     " Another round soon, please!",
+    " :tada:",
 }
 _PRODUCT_TRAILER = """<details> <summary>ℹ️ About Codex in GitHub</summary>
 <br/>
@@ -204,7 +200,7 @@ def _evaluate(
         else None
     )
     result = {
-        "schema_version": "2.0",
+        "schema_version": "3.0",
         "capability": "CODEX_CONNECTOR_REVIEW_EVIDENCE",
         "adapter_id": ADAPTER_ID,
         "repository": {
@@ -250,18 +246,41 @@ def _classify_review_state(
     reason_set = set(reasons)
     if "BLOCKING_FINDINGS_PRESENT" in reason_set and reason_set <= {
         "BLOCKING_FINDINGS_PRESENT",
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
         "MANUAL_REVIEW_REQUEST_PRESENT",
+        "NO_IN_WINDOW_RESPONSE",
+        "ONLY_LATE_RESPONSE",
         "RESPONSE_BODY_UNRECOGNIZED",
+        "CONNECTOR_FAILURE_PRESENT",
+        "CONNECTOR_IDENTITY_MISMATCH",
+        "CONNECTOR_REACTION_AMBIGUOUS",
+        "CONNECTOR_REACTION_UNRECOGNIZED",
+        "ORPHANED_REVIEW_COMMENT",
+        "COMMIT_RESOLUTION_MISMATCH",
+        "REVIEWED_COMMIT_NOT_HEAD",
     }:
         return "BLOCKING_FINDINGS_PRESENT"
     if reason_set and reason_set <= {
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
         "MANUAL_REVIEW_REQUEST_PRESENT",
         "NO_IN_WINDOW_RESPONSE",
         "ONLY_LATE_RESPONSE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
+    if reason_set & {
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
+    } and reason_set <= {
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
+        "NO_IN_WINDOW_RESPONSE",
+        "ONLY_LATE_RESPONSE",
+        "RESPONSE_BODY_UNRECOGNIZED",
+    }:
+        return "AI_REVIEW_UNAVAILABLE"
     if "CONNECTOR_FAILURE_PRESENT" in reason_set and reason_set <= {
         "CONNECTOR_FAILURE_PRESENT",
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
         "MANUAL_REVIEW_REQUEST_PRESENT",
         "RESPONSE_BODY_UNRECOGNIZED",
     }:
@@ -305,7 +324,9 @@ def _evaluate_snapshot(
         for item in comments
         if _exact_connector_issue_comment(item)
     ] + [
-        ("pull_request_review", item) for item in reviews if _exact_connector_user(item)
+        ("pull_request_review", item)
+        for item in reviews
+        if _exact_connector_user(item) and item["commit_id"] == trusted.head_sha
     ]
     valid_responses = [
         item
@@ -315,9 +336,12 @@ def _evaluate_snapshot(
     in_window_responses = [
         item
         for item in valid_responses
-        if _timestamp(trusted.review_window_started_at)
-        <= _timestamp(_response_timestamp(item[0], item[1]))
-        <= _timestamp(trusted.review_deadline_at)
+        if _timestamp_in_window(
+            _response_timestamp(item[0], item[1]),
+            trusted.review_window_started_at,
+            trusted.review_deadline_at,
+            include_lower=item[0] == "pull_request_review",
+        )
     ]
     if not in_window_responses:
         reasons.append(
@@ -368,12 +392,18 @@ def _evaluate_snapshot(
             latest,
             review_comments,
             trusted.head_sha,
-            trusted.review_window_started_at,
+            trusted.pull_request_created_at,
             trusted.review_deadline_at,
         ):
             reasons.append("BLOCKING_FINDINGS_PRESENT")
         else:
-            reasons.append("RESPONSE_BODY_UNRECOGNIZED")
+            reviewed_prefix = _clean_review_commit_identity(latest)
+            if reviewed_prefix is None or not trusted.head_sha.startswith(
+                reviewed_prefix
+            ):
+                reasons.append("RESPONSE_BODY_UNRECOGNIZED")
+            else:
+                return response, reasons, trusted.head_sha
         return response, reasons, None
     commit_identity = _clean_commit_identity(latest["body"])
     if commit_identity is None:
@@ -450,26 +480,73 @@ def _collection_reasons(
         reasons.append("SNAPSHOT_ITEM_AFTER_CAPTURE")
     if _manual_request_present(
         comments,
-        trusted.head_sha,
-        trusted.review_window_started_at,
+        trusted.pull_request_created_at,
         trusted.review_deadline_at,
     ):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
 
-    def in_window(value: str) -> bool:
-        return _valid_timestamp(value) and _timestamp(
-            trusted.review_window_started_at
-        ) <= _timestamp(value) <= _timestamp(trusted.review_deadline_at)
+    def issue_in_window(value: str) -> bool:
+        return _timestamp_in_window(
+            value,
+            trusted.review_window_started_at,
+            trusted.review_deadline_at,
+            include_lower=False,
+        )
+
+    def review_in_window(value: str) -> bool:
+        return _timestamp_in_window(
+            value,
+            trusted.review_window_started_at,
+            trusted.review_deadline_at,
+            include_lower=True,
+        )
+
+    def review_for_current_head(value: str) -> bool:
+        return _timestamp_in_window(
+            value,
+            trusted.pull_request_created_at,
+            trusted.review_deadline_at,
+            include_lower=True,
+        )
+
+    def unbound_boundary(value: str) -> bool:
+        return _timestamp_at_boundary(value, trusted.review_window_started_at)
+
+    if (
+        any(
+            _exact_connector_issue_comment(comment)
+            and unbound_boundary(comment["created_at"])
+            for comment in comments
+        )
+        or any(
+            _exact_connector_issue_comment(comment)
+            and _BLOCKING_SEVERITY_RE.search(comment["body"])
+            and _timestamp_in_window(
+                comment["created_at"],
+                trusted.pull_request_created_at,
+                trusted.review_window_started_at,
+                include_lower=True,
+            )
+            for comment in comments
+        )
+        or any(
+            _exact_connector_reaction_user(reaction)
+            and unbound_boundary(reaction["created_at"])
+            for reaction in reactions
+        )
+    ):
+        reasons.append("HEAD_ATTRIBUTION_AMBIGUOUS")
 
     connector_failure = any(
         _exact_connector_issue_comment(comment)
         and is_ai_review_service_failure(comment["body"])
-        and in_window(comment["created_at"])
+        and issue_in_window(comment["created_at"])
         for comment in comments
     ) or any(
         _exact_connector_user(review)
+        and review["commit_id"] == trusted.head_sha
         and is_ai_review_service_failure(review["body"])
-        and in_window(review["submitted_at"])
+        and review_in_window(review["submitted_at"])
         for review in reviews
     )
     if connector_failure:
@@ -477,7 +554,7 @@ def _collection_reasons(
     if any(
         _exact_connector_issue_comment(comment)
         and _BLOCKING_SEVERITY_RE.search(comment["body"])
-        and in_window(comment["created_at"])
+        and issue_in_window(comment["created_at"])
         for comment in comments
     ):
         reasons.append("BLOCKING_FINDINGS_PRESENT")
@@ -485,7 +562,7 @@ def _collection_reasons(
         reaction
         for reaction in reactions
         if _exact_connector_reaction_user(reaction)
-        and in_window(reaction["created_at"])
+        and issue_in_window(reaction["created_at"])
     ]
     if any(
         reaction["user"] != _CONNECTOR_REACTION_USER
@@ -508,13 +585,13 @@ def _collection_reasons(
         for review in reviews
         if _exact_connector_user(review)
         and review["commit_id"] == trusted.head_sha
-        and in_window(review["submitted_at"])
+        and review_for_current_head(review["submitted_at"])
     }
     if any(
         _exact_connector_user(comment)
         and comment["commit_id"] == trusted.head_sha
         and comment["original_commit_id"] == trusted.head_sha
-        and in_window(comment["created_at"])
+        and review_for_current_head(comment["created_at"])
         and comment["pull_request_review_id"] not in current_connector_review_ids
         for comment in review_comments
     ):
@@ -523,7 +600,7 @@ def _collection_reasons(
         reviews,
         review_comments,
         trusted.head_sha,
-        trusted.review_window_started_at,
+        trusted.pull_request_created_at,
         trusted.review_deadline_at,
     ):
         reasons.append("BLOCKING_FINDINGS_PRESENT")
@@ -624,9 +701,6 @@ def _snapshot_identity_reasons(
 
 
 def _clean_commit_identity(body: str) -> str | None:
-    automatic_head = _automatic_summary_head(body)
-    if automatic_head is not None:
-        return automatic_head
     match = _CLEAN_RE.fullmatch(body)
     if match is None:
         return None
@@ -639,90 +713,16 @@ def _clean_commit_identity(body: str) -> str | None:
     return str(match.group("prefix"))
 
 
-def _automatic_summary_head(body: str) -> str | None:
-    if (
-        _AUTOMATIC_SUMMARY_START_RE.match(body) is None
-        or _BLOCKING_SEVERITY_RE.search(body)
-        or is_ai_review_service_failure(body)
-        or "```" in body
-        or "<details" in body.lower()
-    ):
+def _clean_review_commit_identity(review: dict[str, Any]) -> str | None:
+    if review["state"] != "COMMENTED":
         return None
-    testing_heading = _TESTING_HEADING_RE.search(body)
-    if testing_heading is None:
+    match = _CODEX_REVIEW_RE.fullmatch(review["body"])
+    if match is None:
         return None
-    summary = body[: testing_heading.start()]
-    testing = body[testing_heading.end() :]
-    summary_items: list[str] = []
-    for line in summary.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped == "### Summary":
-            continue
-        bullet = re.fullmatch(r"[*-][ \t]+(?P<text>.+)", line)
-        if bullet is None:
-            return None
-        summary_items.append(bullet.group("text"))
-    if summary_items.count(_REVIEW_COMPLETION) != 1:
+    trailer = match.group("trailer")
+    if not trailer.strip() or not _safe_product_trailer(trailer):
         return None
-    for item in summary_items:
-        without_inline_code = re.sub(r"`[^`]*`", "", item)
-        if item != _REVIEW_COMPLETION and _REVIEW_OUTCOME_SUBJECT_RE.search(
-            without_inline_code
-        ):
-            return None
-    attestations: list[str] = []
-    for match in _TOP_LEVEL_BULLET_RE.finditer(summary):
-        text = match.group("text")
-        lowered = text.lower()
-        if (
-            re.search(r"\b(?:pr|pull request)?\s*head\b", lowered)
-            and "`head_ref`" in lowered
-            and re.search(r"\b(?:match(?:es|ed|ing)?|equal(?:s|ed|ing)?)\b", lowered)
-        ):
-            shas = _INLINE_FULL_SHA_RE.findall(text)
-            if len(shas) != 1:
-                return None
-            attestations.append(shas[0])
-    if len(attestations) != 1:
-        return None
-    visible_inline_shas = _INLINE_FULL_SHA_RE.findall(summary + testing)
-    if any(sha != attestations[0] for sha in visible_inline_shas):
-        return None
-    test_items: list[str] = []
-    for line in testing.splitlines():
-        stripped = line.strip()
-        if not stripped or _TASK_LINK_RE.fullmatch(stripped):
-            continue
-        bullet = re.fullmatch(r"[*-][ \t]+(?P<text>.+)", line)
-        if bullet is None:
-            return None
-        test_items.append(bullet.group("text"))
-    if not test_items or any(
-        not _successful_test_item(item, attestations[0]) for item in test_items
-    ):
-        return None
-    return attestations[0]
-
-
-def _successful_test_item(item: str, head_sha: str) -> bool:
-    exact_items = {
-        f"✅ `git rev-parse HEAD` — returned `{head_sha}`.",
-        "✅ `git status --porcelain=v1` — clean working tree.",
-        "✅ Focused positive and negative controls passed.",
-    }
-    if item in exact_items:
-        return True
-    command = r"`[^`\r\n]+`"
-    positive_count = r"[1-9][0-9]*"
-    if re.fullmatch(rf"✅ {command} — {positive_count}(?: tests?)? passed\.", item):
-        return True
-    return bool(
-        re.fullmatch(
-            rf"✅ {command} — {positive_count} tests passed; "
-            r"`phase1_decision` was `BENCHMARK_PASS`; generated `[^`\r\n]+`\.",
-            item,
-        )
-    )
+    return str(match.group("prefix"))
 
 
 def _safe_product_trailer(trailer: str) -> bool:
@@ -734,35 +734,19 @@ def _safe_product_trailer(trailer: str) -> bool:
 
 def _manual_request_present(
     comments: list[dict[str, Any]],
-    head_sha: str,
-    window_started_at: str,
+    pull_request_created_at: str,
     deadline_at: str,
 ) -> bool:
     return any(
         not _exact_connector_issue_comment(comment)
-        and not _authorized_workflow_request(comment, head_sha)
         and _MANUAL_REQUEST_RE.search(comment["body"])
-        and _valid_timestamp(comment["created_at"])
-        and _timestamp(window_started_at)
-        <= _timestamp(comment["created_at"])
-        <= _timestamp(deadline_at)
+        and _timestamp_in_window(
+            comment["created_at"],
+            pull_request_created_at,
+            deadline_at,
+            include_lower=True,
+        )
         for comment in comments
-    )
-
-
-def _authorized_workflow_request(comment: dict[str, Any], head_sha: str) -> bool:
-    raw_user = comment.get("user")
-    raw_app = comment.get("performed_via_github_app")
-    user: dict[str, Any] = raw_user if isinstance(raw_user, dict) else {}
-    app: dict[str, Any] = raw_app if isinstance(raw_app, dict) else {}
-    expected_body = (
-        f"@codex review\n\nGovernance review request for exact head `{head_sha}`."
-    )
-    return bool(
-        user.get("login") == "github-actions[bot]"
-        and user.get("type") == "Bot"
-        and app.get("slug") == "github-actions"
-        and comment.get("body") == expected_body
     )
 
 
@@ -784,8 +768,31 @@ def _exact_connector_reaction_user(item: dict[str, Any]) -> bool:
 def _response_timestamp(response_type: str, response: dict[str, Any]) -> str:
     return str(
         response["created_at"]
-        if response_type in {"issue_comment", "pull_request_reaction"}
+        if response_type == "issue_comment"
         else response["submitted_at"]
+    )
+
+
+def _timestamp_in_window(
+    value: str,
+    lower: str,
+    upper: str,
+    *,
+    include_lower: bool,
+) -> bool:
+    if not _valid_timestamp(value):
+        return False
+    observed = _timestamp(value)
+    lower_bound = _timestamp(lower)
+    lower_valid = observed >= lower_bound if include_lower else observed > lower_bound
+    return lower_valid and observed <= _timestamp(upper)
+
+
+def _timestamp_at_boundary(value: str, boundary: str) -> bool:
+    return bool(
+        _valid_timestamp(value)
+        and _valid_timestamp(boundary)
+        and _timestamp(value) == _timestamp(boundary)
     )
 
 
@@ -871,7 +878,7 @@ def _snapshot_schema_valid(snapshot: dict[str, Any]) -> bool:
 
 
 def _validate_result_shape(result: dict[str, Any]) -> None:
-    validate_named("codex_connector_evidence_result_v2", result)
+    validate_named("codex_connector_evidence_result_v3", result)
     if not _valid_timestamp(result["review_window_started_at"]) or not _valid_timestamp(
         result["review_deadline_at"]
     ):
@@ -897,15 +904,6 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
                 and response["app_node_id"] == _CONNECTOR_APP["node_id"]
                 and response["app_slug"] == _CONNECTOR_APP["slug"]
             )
-        elif response_type == "pull_request_reaction":
-            provenance_valid = (
-                response["user_type"] == "User"
-                and response["app_provenance"] == "NOT_EXPOSED_BY_GITHUB_API"
-                and response["response_node_id"] is not None
-                and response["app_id"] is None
-                and response["app_node_id"] is None
-                and response["app_slug"] is None
-            )
         else:
             provenance_valid = (
                 response["user_type"] == "Bot"
@@ -919,11 +917,17 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
     response_type = (
         response.get("response_type") if isinstance(response, dict) else None
     )
-    resolution_valid = (
-        result["resolved_clean_commit_sha"] == result["pull_request"]["head_sha"]
-        if response_type == "issue_comment"
-        else result["resolved_clean_commit_sha"] is None
-    )
+    if response_type == "issue_comment":
+        resolution_valid = (
+            result["resolved_clean_commit_sha"] == result["pull_request"]["head_sha"]
+        )
+    elif response_type == "pull_request_review":
+        resolution_valid = result["resolved_clean_commit_sha"] in {
+            None,
+            result["pull_request"]["head_sha"],
+        }
+    else:
+        resolution_valid = result["resolved_clean_commit_sha"] is None
     final_collection = (
         result["normalized_snapshot_sha256"] is not None
         and isinstance(result["evidence_cutoff_at"], str)
@@ -937,7 +941,7 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
         and result["reviewed_head_sha"] == result["pull_request"]["head_sha"]
         and result["reconciled_head_sha"] == result["pull_request"]["head_sha"]
         and isinstance(response, dict)
-        and response.get("response_type") in {"issue_comment", "pull_request_reaction"}
+        and response.get("response_type") in {"issue_comment", "pull_request_review"}
         and resolution_valid
         and final_collection
     )
