@@ -88,6 +88,7 @@ jobs:
               microsecond=0
           ).strftime("%Y-%m-%dT%H:%M:%SZ")
           transport_timed_out = False
+          signal_description = ""
           try:
               completed = subprocess.run(
                   command,
@@ -106,10 +107,26 @@ jobs:
                   stderr = stderr.encode("utf-8")
               stderr += b"\nrequest timed out after 30 seconds"
               exit_code = 124
+          if type(exit_code) is int and exit_code < 0:
+              signal_number = -exit_code
+              if not 1 <= signal_number <= 127:
+                  raise SystemExit("Invalid request transport signal")
+              if not isinstance(stderr, bytes):
+                  raise SystemExit("Invalid request transport stderr")
+              normalized_exit_code = 128 + signal_number
+              stderr += (
+                  f"\nrequest terminated by signal {signal_number}; "
+                  f"raw returncode {exit_code}; "
+                  f"normalized exit code {normalized_exit_code}"
+              ).encode("ascii")
+              signal_description = (
+                  f"; raw returncode {exit_code}; signal {signal_number}"
+              )
+              exit_code = normalized_exit_code
           transport_completed_at = datetime.now(timezone.utc).replace(
               microsecond=0
           ).strftime("%Y-%m-%dT%H:%M:%SZ")
-          if not isinstance(exit_code, int) or not 0 <= exit_code <= 255:
+          if type(exit_code) is not int or not 0 <= exit_code <= 255:
               raise SystemExit("Invalid request transport exit code")
           if not isinstance(stdout, bytes):
               raise SystemExit("Invalid request transport stdout")
@@ -201,7 +218,8 @@ jobs:
               }
               print(
                   "::warning title=Codex review request transport unavailable::"
-                  f"exit {exit_code}; {outputs['request-transport-error-sha256']}",
+                  f"exit {exit_code}{signal_description}; "
+                  f"{outputs['request-transport-error-sha256']}",
                   file=sys.stderr,
               )
               print(

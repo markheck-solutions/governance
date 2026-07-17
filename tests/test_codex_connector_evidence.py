@@ -2118,6 +2118,14 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
 
 
 class CodexConnectorResultValidationTests(unittest.TestCase):
+    def test_signal_normalized_transport_receipt_is_schema_valid(self) -> None:
+        receipt = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE", transport_exit_code=143
+        )
+        self.assertEqual(receipt.transport_exit_code, 143)
+        with self.assertRaises(ValueError):
+            workflow_request_receipt("TRANSPORT_UNAVAILABLE", transport_exit_code=-15)
+
     def test_invalid_request_response_is_reconciled_unavailable(self) -> None:
         value = reaction_snapshot()
         value["issue_comments"] = []

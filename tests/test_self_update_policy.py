@@ -262,6 +262,30 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                 self.assertEqual(outputs["request-comment-id"], "")
                 self.assertEqual(outputs["request-comment-created-at"], "")
 
+    def test_receipt_activation_normalizes_signal_termination(self) -> None:
+        stderr = b"terminated"
+        signaled = subprocess.CompletedProcess([], -15, stdout=b"", stderr=stderr)
+
+        outputs, _ = _execute_request_fixture(signaled)
+
+        marker = (
+            b"\nrequest terminated by signal 15; raw returncode -15; "
+            b"normalized exit code 143"
+        )
+        self.assertEqual(outputs["request-outcome"], "TRANSPORT_UNAVAILABLE")
+        self.assertEqual(outputs["request-transport-exit-code"], "143")
+        self.assertEqual(outputs["request-transport-timed-out"], "false")
+        self.assertEqual(
+            outputs["request-transport-error-sha256"],
+            "sha256:" + hashlib.sha256(stderr + marker).hexdigest(),
+        )
+        self.assertEqual(outputs["request-comment-id"], "")
+        self.assertEqual(outputs["request-comment-created-at"], "")
+
+        impossible = subprocess.CompletedProcess([], -128, stdout=b"", stderr=b"")
+        with self.assertRaises(SystemExit):
+            _execute_request_fixture(impossible)
+
     def test_exact_legacy_to_receipt_activation_is_accepted(self) -> None:
         trusted_sha = "2" * 40
 

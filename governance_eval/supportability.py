@@ -47,7 +47,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ENFORCEMENT_RECEIPT_TRANSITION_SHA256 = (
     "09f318698fa421b130f527b6f51376302ae7b6c7b2983641238ebd266136ddd9",
-    "cdd49e8323f9c375184ab644b3c18e8eeddad2a7eb80b34af63c8d4563122c93",
+    "1c5014e0affc0e9968326698b597500fb194b968e54e1d41ba83b1a7ff78631e",
 )
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
