@@ -46,6 +46,31 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
         context.update(overrides)
         return context
 
+    @staticmethod
+    def _evaluation_context(**overrides: object) -> dict[str, object]:
+        context: dict[str, object] = {
+            "context_kind": "SUPPORTABILITY_EVALUATION",
+            "repository": "markheck-solutions/governance",
+            "repository_id": "1280677092",
+            "head_repository_id": "1280677092",
+            "event_name": "pull_request_target",
+            "event_action": "synchronize",
+            "pull_request_number": 71,
+            "target_base_sha": "b" * 40,
+            "target_head_sha": "c" * 40,
+            "evaluator_sha": "a" * 40,
+            "workflow_ref": (
+                "markheck-solutions/governance/.github/workflows/"
+                "supportability-enforcement.yml@refs/heads/main"
+            ),
+            "workflow_sha": "d" * 40,
+            "run_id": "123456789",
+            "run_attempt": "1",
+            "expected_artifact_name": "candidate-supportability-gate-evidence",
+        }
+        context.update(overrides)
+        return context
+
     @classmethod
     def _context_argv(cls, **overrides: object) -> list[str]:
         context = cls._expected_context(**overrides)
@@ -118,6 +143,14 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
             (ROOT / "schemas/v1/governance_toolchain_receipt.schema.json").read_bytes()
         )
         (
+            governance
+            / "schemas/v1/governance_toolchain_evaluation_receipt.schema.json"
+        ).write_bytes(
+            (
+                ROOT / "schemas/v1/governance_toolchain_evaluation_receipt.schema.json"
+            ).read_bytes()
+        )
+        (
             governance / "schemas/v1/governance_toolchain_artifact_binding.schema.json"
         ).write_bytes(
             (
@@ -167,6 +200,73 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
 
 
 class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
+    def test_supportability_evaluation_context_is_separate_and_bound(self) -> None:
+        context = self._evaluation_context()
+
+        validated, kind = BOOTSTRAP._validated_context(context)
+
+        self.assertEqual(kind, "SUPPORTABILITY_EVALUATION")
+        self.assertEqual(validated, context)
+        self.assertNotIn("base_sha", validated)
+        self.assertEqual(validated["target_base_sha"], "b" * 40)
+        self.assertEqual(validated["target_head_sha"], "c" * 40)
+
+    def test_supportability_evaluation_context_fails_closed(self) -> None:
+        cases = {
+            "kind": {"context_kind": "PUBLICATION"},
+            "event": {"event_name": "pull_request"},
+            "action": {"event_action": "closed"},
+            "attempt": {"run_attempt": "2"},
+            "target_base": {"target_base_sha": "not-a-sha"},
+            "target_head": {"target_head_sha": "not-a-sha"},
+            "evaluator": {"evaluator_sha": "not-a-sha"},
+            "workflow": {"workflow_ref": "owner/repo/.github/workflows/evil.yml@main"},
+            "artifact": {
+                "expected_artifact_name": "governance-toolchain-publication-1-1"
+            },
+        }
+        for name, mutation in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(BOOTSTRAP.BootstrapError):
+                    BOOTSTRAP._validated_evaluation_context(
+                        self._evaluation_context(**mutation)
+                    )
+
+    def test_supportability_evaluation_failure_receipt_is_schema_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._provision_paths(Path(tmp))
+            context = self._evaluation_context()
+            receipt: dict[str, object] = {
+                **context,
+                "schema_version": "1.0",
+                "status": "FAIL",
+                "decision": "BLOCK_TECHNICAL",
+                "base_sha": "a" * 40,
+                "claimed_base_sha": "a" * 40,
+                "head_sha": "a" * 40,
+                "claimed_evaluator_sha": "a" * 40,
+                "checkout_head_sha": None,
+                "merge_base_sha": None,
+                "lock_sha256": None,
+                "governance_root": str(paths["governance"]),
+                "workspace_root": str(paths["workspace"]),
+                "git_executable": None,
+                "python_version": "3.12.13",
+                "platform_system": "test",
+                "platform_machine": "test",
+                "runtime_root": str(paths["runtime"]),
+                "python_path": None,
+                "ruff_module_origin": None,
+                "ruff_executable": None,
+                "packages": [],
+                "commands": [],
+                "error": "reproduced failure",
+            }
+            BOOTSTRAP._attach_payload_sha256(receipt)
+
+            validate_named("governance_toolchain_evaluation_receipt", receipt, ROOT)
+            BOOTSTRAP.validate_receipt(paths["governance"], receipt, context)
+
     def test_repository_lock_is_exact_and_cross_platform(self) -> None:
         digest = BOOTSTRAP.validate_lock(ROOT / "requirements-governance.lock")
         self.assertRegex(digest, r"^[0-9a-f]{64}$")

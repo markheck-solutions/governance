@@ -39,6 +39,68 @@ class WorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 
+    def test_reusable_gate_publishes_inert_evaluation_toolchain_wiring(self) -> None:
+        workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        action = (
+            self.root / ".github/actions/setup-governance-toolchain/action.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('python-version: "3.12.13"', workflow)
+        self.assertIn("id: setup-python", workflow)
+        self.assertIn(
+            "uses: ./governance/.github/actions/setup-governance-toolchain",
+            workflow,
+        )
+        self.assertNotIn(
+            "uses: ./.github/actions/setup-governance-toolchain",
+            workflow.split("name: Supportability Gate", 1)[1],
+        )
+        provision = workflow.index(
+            "      - name: Provision pinned governance toolchain"
+        )
+        self.assertGreater(
+            provision, workflow.index("      - name: Validate workflow inputs")
+        )
+        self.assertLess(
+            provision,
+            workflow.index("      - name: Run configured supportability gates"),
+        )
+        for binding in (
+            "context-kind: SUPPORTABILITY_EVALUATION",
+            "base-sha: ${{ inputs.governance-ref }}",
+            "evaluator-sha: ${{ inputs.governance-ref }}",
+            "target-base-sha: ${{ inputs.target-base-sha }}",
+            "target-head-sha: ${{ inputs.target-head-sha }}",
+            "head-repository-id: ${{ github.event.pull_request.head.repo.id }}",
+            "event-name: ${{ github.event_name }}",
+            "event-action: ${{ github.event.action }}",
+            "run-attempt: ${{ github.run_attempt }}",
+            "expected-artifact-name: ${{ inputs.artifact-name }}",
+        ):
+            with self.subTest(binding=binding):
+                self.assertIn(binding, workflow)
+        gate_block = workflow.split(
+            "      - name: Run configured supportability gates", 1
+        )[1].split("      - name: Run approved architecture fitness gate", 1)[0]
+        for output in (
+            "GOVERNANCE_TOOLCHAIN_PYTHON_PATH",
+            "GOVERNANCE_TOOLCHAIN_BIN_PATH",
+            "GOVERNANCE_TOOLCHAIN_RECEIPT_PATH",
+            "GOVERNANCE_TOOLCHAIN_LOCK_SHA256",
+            "GOVERNANCE_TOOLCHAIN_RECEIPT_FILE_SHA256",
+        ):
+            self.assertIn(output, gate_block)
+        self.assertNotIn("GITHUB_PATH", action)
+        self.assertIn("default: PUBLICATION", action)
+        self.assertIn('--context-kind "${CONTEXT_KIND:?}"', action)
+        collect = workflow.index("      - name: Collect governance toolchain receipt")
+        upload = workflow.index("      - name: Upload supportability evidence")
+        self.assertLess(collect, upload)
+        self.assertIn("toolchain receipt file digest mismatch", workflow)
+        self.assertIn("governance-toolchain-receipt.json", workflow)
+
     def test_toolchain_publication_is_bounded_pinned_and_inert(self) -> None:
         workflow = (
             self.root / ".github/workflows/toolchain-publication.yml"

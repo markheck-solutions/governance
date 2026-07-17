@@ -2,6 +2,10 @@ name: Setup governance toolchain
 description: Provision the hash-locked evaluator toolchain outside the target workspace.
 
 inputs:
+  context-kind:
+    description: PUBLICATION or SUPPORTABILITY_EVALUATION evidence contract.
+    required: false
+    default: PUBLICATION
   governance-root:
     description: Path to the exact governance checkout that owns the lock.
     required: true
@@ -26,6 +30,18 @@ inputs:
   event-name:
     description: Authoritative workflow event name.
     required: true
+  event-action:
+    description: Authoritative pull request action for supportability evaluation.
+    required: false
+    default: ""
+  target-base-sha:
+    description: Exact evaluated target base commit.
+    required: false
+    default: ""
+  target-head-sha:
+    description: Exact evaluated target head commit.
+    required: false
+    default: ""
   pull-request-number:
     description: Authoritative pull request number.
     required: true
@@ -71,7 +87,9 @@ runs:
       env:
         BASE_PYTHON: ${{ inputs.python-path }}
         BASE_SHA: ${{ inputs.base-sha }}
+        CONTEXT_KIND: ${{ inputs.context-kind }}
         EVALUATOR_SHA: ${{ inputs.evaluator-sha }}
+        EVENT_ACTION: ${{ inputs.event-action }}
         EVENT_NAME: ${{ inputs.event-name }}
         EXPECTED_ARTIFACT_NAME: ${{ inputs.expected-artifact-name }}
         GH_TOKEN: ""
@@ -85,6 +103,8 @@ runs:
         REPOSITORY_ID: ${{ inputs.repository-id }}
         RUN_ATTEMPT: ${{ inputs.run-attempt }}
         RUN_ID: ${{ inputs.run-id }}
+        TARGET_BASE_SHA: ${{ inputs.target-base-sha }}
+        TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
         WORKFLOW_REF: ${{ inputs.workflow-ref }}
         WORKFLOW_SHA: ${{ inputs.workflow-sha }}
       run: |
@@ -98,11 +118,15 @@ runs:
           --runtime-root "$runtime_root" \
           --base-sha "${BASE_SHA:?}" \
           --evaluator-sha "${EVALUATOR_SHA:?}" \
+          --context-kind "${CONTEXT_KIND:?}" \
           --repository "${REPOSITORY:?}" \
           --repository-id "${REPOSITORY_ID:?}" \
           --head-repository-id "${HEAD_REPOSITORY_ID:?}" \
           --event-name "${EVENT_NAME:?}" \
+          --event-action "$EVENT_ACTION" \
           --pull-request-number "$PULL_REQUEST_NUMBER" \
+          --target-base-sha "$TARGET_BASE_SHA" \
+          --target-head-sha "$TARGET_HEAD_SHA" \
           --workflow-ref "${WORKFLOW_REF:?}" \
           --workflow-sha "${WORKFLOW_SHA:?}" \
           --run-id "${RUN_ID:?}" \
