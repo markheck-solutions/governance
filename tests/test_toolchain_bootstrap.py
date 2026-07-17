@@ -221,9 +221,7 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
             "target_head": {"target_head_sha": "not-a-sha"},
             "evaluator": {"evaluator_sha": "not-a-sha"},
             "workflow": {"workflow_ref": "owner/repo/.github/workflows/evil.yml@main"},
-            "artifact": {
-                "expected_artifact_name": "governance-toolchain-publication-1-1"
-            },
+            "artifact": {"expected_artifact_name": "bad/name"},
         }
         for name, mutation in cases.items():
             with self.subTest(name=name):
@@ -231,6 +229,11 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                     BOOTSTRAP._validated_evaluation_context(
                         self._evaluation_context(**mutation)
                     )
+
+    def test_supportability_evaluation_accepts_valid_custom_artifact_name(self) -> None:
+        context = self._evaluation_context(expected_artifact_name="custom.evidence-71")
+
+        self.assertEqual(BOOTSTRAP._validated_evaluation_context(context), context)
 
     def test_supportability_evaluation_failure_receipt_is_schema_valid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

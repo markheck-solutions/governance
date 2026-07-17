@@ -534,12 +534,13 @@ jobs:
           emit("architecture_errors", "; ".join((architecture.get("errors") or [])[:5]))
           emit("ai_review_observations", "; ".join((ai_review.get("observations") or [])[:5]))
           PY
-      - name: Collect governance toolchain receipt
+      - name: Stage supportability evidence outside target checkout
         if: always()
         shell: bash
         env:
           RECEIPT_PATH: ${{ steps.toolchain.outputs.receipt-path }}
           RECEIPT_FILE_SHA256: ${{ steps.toolchain.outputs.receipt-file-sha256 }}
+          STAGING_ROOT: ${{ runner.temp }}/supportability-evidence
         run: |
           python - <<'PY'
           import hashlib
@@ -547,15 +548,33 @@ jobs:
           import shutil
           from pathlib import Path
 
-          source = Path(os.environ["RECEIPT_PATH"])
-          payload = source.read_bytes()
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          target_root = Path("target").resolve(strict=True)
+          source_root = Path("target/artifacts/supportability").resolve(strict=True)
+          target_root.relative_to(workspace)
+          source_root.relative_to(target_root)
+          staging = Path(os.environ["STAGING_ROOT"]).resolve(strict=False)
+          try:
+              staging.relative_to(workspace)
+          except ValueError:
+              pass
+          else:
+              raise SystemExit("supportability staging must be outside workspace")
+          if staging.exists():
+              raise SystemExit("supportability staging already exists")
+          staging.mkdir(parents=True)
+          for candidate in sorted(source_root.iterdir()):
+              if candidate.is_symlink() or not candidate.is_file():
+                  raise SystemExit("supportability source must be a regular file")
+              candidate.resolve(strict=True).relative_to(source_root)
+              shutil.copyfile(candidate, staging / candidate.name)
+
+          receipt = Path(os.environ["RECEIPT_PATH"]).resolve(strict=True)
+          receipt.relative_to(Path(os.environ["RUNNER_TEMP"]).resolve(strict=True))
+          payload = receipt.read_bytes()
           if hashlib.sha256(payload).hexdigest() != os.environ["RECEIPT_FILE_SHA256"]:
               raise SystemExit("toolchain receipt file digest mismatch")
-          destination = Path(
-              "target/artifacts/supportability/governance-toolchain-receipt.json"
-          )
-          destination.parent.mkdir(parents=True, exist_ok=True)
-          shutil.copyfile(source, destination)
+          (staging / "governance-toolchain-receipt.json").write_bytes(payload)
           PY
       - name: Upload supportability evidence
         id: upload
@@ -563,7 +582,7 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: target/artifacts/supportability/*
+          path: ${{ runner.temp }}/supportability-evidence/*
           retention-days: 90
       - name: Write job summary
         if: always()

@@ -59,13 +59,6 @@ _EVALUATION_CONTEXT_FIELDS = (
 _EVALUATION_ACTIONS = frozenset(
     {"opened", "reopened", "synchronize", "ready_for_review"}
 )
-_EVALUATION_ARTIFACT_NAMES = frozenset(
-    {
-        "supportability-gate-evidence",
-        "baseline-supportability-gate-evidence",
-        "candidate-supportability-gate-evidence",
-    }
-)
 _ARTIFACT_AUTHORITY_FIELDS = (
     "artifact_id",
     "artifact_name",
@@ -446,7 +439,7 @@ def _validated_evaluation_context(
         raise BootstrapError("authoritative evaluation workflow ref invalid")
     if context["run_attempt"] != "1":
         raise BootstrapError("supportability evaluation requires run attempt 1")
-    if context["expected_artifact_name"] not in _EVALUATION_ARTIFACT_NAMES:
+    if not _ARTIFACT_NAME_RE.fullmatch(str(context["expected_artifact_name"])):
         raise BootstrapError("authoritative evaluation artifact name invalid")
     return context
 
