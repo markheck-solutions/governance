@@ -125,12 +125,9 @@ class ToolchainBootstrapTests(unittest.TestCase):
                         "exit_code": 0,
                     }
                 )
-                if command[-2:] == ("rev-parse", "--show-toplevel"):
-                    stdout = str(paths["governance"])
-                elif command[-2:] == ("--verify", "HEAD^{commit}"):
-                    stdout = "a" * 40
-                elif "status" in command:
-                    stdout = ""
+                git_stdout = self._bound_git_stdout(command, paths["governance"])
+                if git_stdout is not None:
+                    stdout = git_stdout
                 elif "-c" in command:
                     stdout = json.dumps(
                         {
@@ -183,8 +180,8 @@ class ToolchainBootstrapTests(unittest.TestCase):
                 json.loads(paths["receipt"].read_text(encoding="utf-8")), receipt
             )
             validate_named("governance_toolchain_receipt", receipt, ROOT)
-            self.assertEqual(commands[3][1:4], ("-I", "-m", "ensurepip"))
-            self.assertEqual(commands[4][1:4], ("-I", "-m", "pip"))
+            self.assertEqual(commands[5][1:4], ("-I", "-m", "ensurepip"))
+            self.assertEqual(commands[6][1:4], ("-I", "-m", "pip"))
             self.assertEqual(commands[-1][-3:], ("-m", "ruff", "--version"))
             for environment in environments:
                 self.assertNotIn("GH_TOKEN", environment)
@@ -193,6 +190,13 @@ class ToolchainBootstrapTests(unittest.TestCase):
 
             mutations = (
                 ("identity", lambda item: item.__setitem__("evaluator_sha", "c" * 40)),
+                (
+                    "base command binding",
+                    lambda item: (
+                        item.__setitem__("base_sha", "c" * 40),
+                        item.__setitem__("claimed_base_sha", "c" * 40),
+                    ),
+                ),
                 ("Python", lambda item: item.__setitem__("python_version", "0.0.0")),
                 ("package", lambda item: item.__setitem__("packages", [])),
                 ("commands", lambda item: item.__setitem__("commands", [])),
@@ -287,12 +291,9 @@ class ToolchainBootstrapTests(unittest.TestCase):
                 def run(
                     command: tuple[str, ...], **_kwargs: object
                 ) -> subprocess.CompletedProcess[str]:
-                    if command[-2:] == ("rev-parse", "--show-toplevel"):
-                        stdout = str(paths["governance"])
-                    elif command[-2:] == ("--verify", "HEAD^{commit}"):
-                        stdout = "a" * 40
-                    elif "status" in command:
-                        stdout = ""
+                    git_stdout = self._bound_git_stdout(command, paths["governance"])
+                    if git_stdout is not None:
+                        stdout = git_stdout
                     elif "-c" in command:
                         stdout = json.dumps(
                             {"origin": str(module_origin), "version": version}
@@ -353,6 +354,13 @@ class ToolchainBootstrapTests(unittest.TestCase):
                         stdout = str(paths["governance"])
                     elif command[-2:] == ("--verify", "HEAD^{commit}"):
                         stdout = head
+                    elif command[-2:] == (
+                        "--verify",
+                        f"{'b' * 40}^{{commit}}",
+                    ):
+                        stdout = "b" * 40
+                    elif "merge-base" in command:
+                        stdout = ""
                     else:
                         stdout = status
                     return subprocess.CompletedProcess(
@@ -375,6 +383,7 @@ class ToolchainBootstrapTests(unittest.TestCase):
                     BOOTSTRAP.validate_checkout(
                         paths["governance"],
                         paths["workspace"],
+                        "b" * 40,
                         "a" * 40,
                         source,
                         [],
@@ -383,6 +392,57 @@ class ToolchainBootstrapTests(unittest.TestCase):
                     self.assertNotIn("GH_TOKEN", environment)
                     self.assertNotIn("GITHUB_TOKEN", environment)
                     self.assertNotIn("PIP_INDEX_URL", environment)
+
+    def test_checkout_binding_rejects_missing_and_unrelated_base(self) -> None:
+        cases = (
+            ("missing base", True, False, "base commit missing"),
+            ("unrelated base", False, True, "base is not an ancestor"),
+        )
+        for name, missing, unrelated, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                paths = self._provision_paths(Path(tmp))
+                git_path = Path(tmp) / "git"
+                git_path.touch()
+
+                def run(
+                    command: tuple[str, ...], **_kwargs: object
+                ) -> subprocess.CompletedProcess[str]:
+                    if command[-2:] == ("rev-parse", "--show-toplevel"):
+                        stdout = str(paths["governance"])
+                    elif command[-2:] == ("--verify", "HEAD^{commit}"):
+                        stdout = "a" * 40
+                    elif command[-2:] == (
+                        "--verify",
+                        f"{'b' * 40}^{{commit}}",
+                    ):
+                        if missing:
+                            raise BOOTSTRAP.BootstrapError("base commit missing")
+                        stdout = "b" * 40
+                    elif "merge-base" in command:
+                        if unrelated:
+                            raise BOOTSTRAP.BootstrapError("base is not an ancestor")
+                        stdout = ""
+                    else:
+                        stdout = ""
+                    return subprocess.CompletedProcess(
+                        command, 0, stdout=stdout, stderr=""
+                    )
+
+                with (
+                    mock.patch.object(
+                        BOOTSTRAP.shutil, "which", return_value=str(git_path)
+                    ),
+                    mock.patch.object(BOOTSTRAP, "_run", side_effect=run),
+                    self.assertRaisesRegex(BOOTSTRAP.BootstrapError, expected),
+                ):
+                    BOOTSTRAP.validate_checkout(
+                        paths["governance"],
+                        paths["workspace"],
+                        "b" * 40,
+                        "a" * 40,
+                        {"PATH": str(Path(tmp))},
+                        [],
+                    )
 
     def test_provision_fails_closed_on_install_timeout_and_missing_ruff(self) -> None:
         cases = (
@@ -412,12 +472,9 @@ class ToolchainBootstrapTests(unittest.TestCase):
                 def run(
                     command: tuple[str, ...], **_kwargs: object
                 ) -> subprocess.CompletedProcess[str]:
-                    if command[-2:] == ("rev-parse", "--show-toplevel"):
-                        stdout = str(paths["governance"])
-                    elif command[-2:] == ("--verify", "HEAD^{commit}"):
-                        stdout = "a" * 40
-                    elif "status" in command:
-                        stdout = ""
+                    git_stdout = self._bound_git_stdout(command, paths["governance"])
+                    if git_stdout is not None:
+                        stdout = git_stdout
                     elif command[1:4] == ("-I", "-m", "pip") and timeout_install:
                         raise BOOTSTRAP.BootstrapError(
                             "toolchain command timed out after 180s"
@@ -581,6 +638,8 @@ class ToolchainBootstrapTests(unittest.TestCase):
                 "a" * 40,
                 "--receipt",
                 str(paths["receipt"]),
+                "--failure-receipt",
+                str(paths["receipt"]),
                 "--github-output",
                 str(github_output),
             ]
@@ -603,12 +662,91 @@ class ToolchainBootstrapTests(unittest.TestCase):
             self.assertIn("receipt-file-sha256", outputs)
             self.assertNotIn("python-path", outputs)
 
+    def test_main_uses_external_failure_receipt_for_rejected_primary_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._provision_paths(Path(tmp))
+            rejected_receipt = paths["workspace"] / "receipt.json"
+            failure_receipt = Path(tmp) / "failure-receipt.json"
+            argv = [
+                "--governance-root",
+                str(paths["governance"]),
+                "--workspace-root",
+                str(paths["workspace"]),
+                "--runtime-root",
+                str(paths["runtime"]),
+                "--base-sha",
+                "b" * 40,
+                "--evaluator-sha",
+                "a" * 40,
+                "--receipt",
+                str(rejected_receipt),
+                "--failure-receipt",
+                str(failure_receipt),
+            ]
+            with mock.patch.object(
+                BOOTSTRAP, "_current_python_version", return_value=(3, 12, 13)
+            ):
+                self.assertEqual(BOOTSTRAP.main(argv), 1)
+
+            self.assertFalse(rejected_receipt.exists())
+            receipt = json.loads(failure_receipt.read_text(encoding="utf-8"))
+            BOOTSTRAP.validate_receipt(paths["governance"], receipt)
+            self.assertEqual(receipt["decision"], "BLOCK_TECHNICAL")
+            self.assertIn("receipt must be outside", receipt["error"])
+
+    def test_main_rejects_output_boundaries_before_provision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._provision_paths(Path(tmp))
+            unsafe = paths["workspace"] / "unsafe.json"
+            cases = (
+                ("failure receipt", unsafe, None),
+                ("GitHub output", paths["receipt"], unsafe),
+            )
+            for name, failure_receipt, github_output in cases:
+                with self.subTest(name=name):
+                    argv = [
+                        "--governance-root",
+                        str(paths["governance"]),
+                        "--workspace-root",
+                        str(paths["workspace"]),
+                        "--runtime-root",
+                        str(paths["runtime"]),
+                        "--base-sha",
+                        "b" * 40,
+                        "--evaluator-sha",
+                        "a" * 40,
+                        "--receipt",
+                        str(paths["receipt"]),
+                        "--failure-receipt",
+                        str(failure_receipt),
+                    ]
+                    if github_output is not None:
+                        argv.extend(("--github-output", str(github_output)))
+                    with mock.patch.object(BOOTSTRAP, "provision") as provision:
+                        self.assertEqual(BOOTSTRAP.main(argv), 1)
+                    provision.assert_not_called()
+                    self.assertFalse(unsafe.exists())
+
     def _assert_lock_rejected(self, text: str, message: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "requirements-governance.lock"
             lock.write_text(text, encoding="utf-8")
             with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, message):
                 BOOTSTRAP.validate_lock(lock)
+
+    @staticmethod
+    def _bound_git_stdout(command: tuple[str, ...], governance: Path) -> str | None:
+        if command[-2:] == ("rev-parse", "--show-toplevel"):
+            return str(governance)
+        if command[-2:] == ("--verify", "HEAD^{commit}"):
+            return "a" * 40
+        if command[-2:] == ("--verify", f"{'b' * 40}^{{commit}}"):
+            return "b" * 40
+        if "merge-base" in command or "status" in command:
+            return ""
+        return None
 
     @staticmethod
     def _valid_lock() -> str:

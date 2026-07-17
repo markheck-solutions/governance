@@ -58,7 +58,7 @@
     "commands": {
       "type": "array",
       "minItems": 0,
-      "maxItems": 8,
+      "maxItems": 10,
       "items": {
         "type": "object",
         "required": [

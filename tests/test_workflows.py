@@ -74,6 +74,7 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertIn("hmac.compare_digest(actual, expected)", workflow)
         self.assertEqual(workflow.count("persist-credentials: false"), 1)
+        self.assertIn("fetch-depth: 0", workflow)
         self.assertIn("governance-toolchain-publication-${{ github.run_id }}", workflow)
         for required in (
             "--require-hashes",
@@ -90,6 +91,7 @@ class WorkflowTests(unittest.TestCase):
             '"$base_python" -I',
             "receipt-path",
             "receipt-file-sha256",
+            '--failure-receipt "$receipt_path"',
             '--github-output "${GITHUB_OUTPUT:?}"',
         ):
             self.assertIn(required, action)

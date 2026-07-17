@@ -59,4 +59,5 @@ runs:
           --base-sha "${BASE_SHA:?}" \
           --evaluator-sha "${EVALUATOR_SHA:?}" \
           --receipt "$receipt_path" \
+          --failure-receipt "$receipt_path" \
           --github-output "${GITHUB_OUTPUT:?}"

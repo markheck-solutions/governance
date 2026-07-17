@@ -278,12 +278,18 @@ def _validate_success_receipt(receipt: Mapping[str, object]) -> None:
         raise BootstrapError("successful toolchain receipt Python version invalid")
     if receipt.get("packages") != [{"name": "ruff", "version": RUFF_VERSION}]:
         raise BootstrapError("successful toolchain receipt package evidence invalid")
-    if not _valid_success_command_evidence(receipt.get("commands")):
+    if not _valid_success_command_evidence(
+        receipt.get("commands"),
+        str(receipt.get("base_sha")),
+        str(receipt.get("evaluator_sha")),
+    ):
         raise BootstrapError("successful toolchain receipt command evidence invalid")
 
 
-def _valid_success_command_evidence(value: object) -> bool:
-    if not isinstance(value, list) or len(value) != 8:
+def _valid_success_command_evidence(
+    value: object, base_sha: str, evaluator_sha: str
+) -> bool:
+    if not isinstance(value, list) or len(value) != 10:
         return False
     if any(
         not isinstance(record, dict)
@@ -296,14 +302,16 @@ def _valid_success_command_evidence(value: object) -> bool:
     return (
         commands[0][-2:] == ("rev-parse", "--show-toplevel")
         and commands[1][-2:] == ("--verify", "HEAD^{commit}")
-        and "status" in commands[2]
-        and commands[3][1:4] == ("-I", "-m", "ensurepip")
-        and commands[4][1:5] == ("-I", "-m", "pip", "install")
-        and "--require-hashes" in commands[4]
-        and commands[5][-3:] == ("-m", "pip", "check")
-        and commands[6][1:3] == ("-I", "-c")
-        and "importlib.metadata" in commands[6][-1]
-        and commands[7][-3:] == ("-m", "ruff", "--version")
+        and commands[2][-2:] == ("--verify", f"{base_sha}^{{commit}}")
+        and commands[3][-3:] == ("--is-ancestor", base_sha, evaluator_sha)
+        and "status" in commands[4]
+        and commands[5][1:4] == ("-I", "-m", "ensurepip")
+        and commands[6][1:5] == ("-I", "-m", "pip", "install")
+        and "--require-hashes" in commands[6]
+        and commands[7][-3:] == ("-m", "pip", "check")
+        and commands[8][1:3] == ("-I", "-c")
+        and "importlib.metadata" in commands[8][-1]
+        and commands[9][-3:] == ("-m", "ruff", "--version")
     )
 
 
@@ -361,6 +369,7 @@ def _validate_python_version() -> None:
 def validate_checkout(
     governance_root: Path,
     workspace_root: Path,
+    base_sha: str,
     evaluator_sha: str,
     source: Mapping[str, str],
     command_evidence: list[dict[str, object]],
@@ -397,6 +406,35 @@ def validate_checkout(
     ).stdout.strip()
     if checkout_head != evaluator_sha:
         raise BootstrapError("governance checkout HEAD differs from evaluator SHA")
+    checkout_base = _run(
+        (
+            str(git_path),
+            "-C",
+            str(governance_root),
+            "rev-parse",
+            "--verify",
+            f"{base_sha}^{{commit}}",
+        ),
+        environment=environment,
+        timeout_seconds=15,
+        command_evidence=command_evidence,
+    ).stdout.strip()
+    if checkout_base != base_sha:
+        raise BootstrapError("governance checkout base commit differs from base SHA")
+    _run(
+        (
+            str(git_path),
+            "-C",
+            str(governance_root),
+            "merge-base",
+            "--is-ancestor",
+            base_sha,
+            evaluator_sha,
+        ),
+        environment=environment,
+        timeout_seconds=15,
+        command_evidence=command_evidence,
+    )
     status = _run(
         (
             str(git_path),
@@ -448,6 +486,7 @@ def provision(
     checkout_head = validate_checkout(
         governance_root,
         workspace_root,
+        base_sha,
         evaluator_sha,
         os.environ,
         command_evidence,
@@ -609,13 +648,35 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--evaluator-sha", required=True)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--failure-receipt", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
     return parser.parse_args(argv)
+
+
+def _validated_external_path(
+    workspace_root: Path, output_path: Path, label: str
+) -> Path:
+    resolved_workspace = workspace_root.resolve(strict=True)
+    resolved_output = output_path.resolve(strict=False)
+    if _is_within(resolved_output, resolved_workspace):
+        raise BootstrapError(f"{label} must be outside target workspace")
+    return resolved_output
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     command_evidence: list[dict[str, object]] = []
+    try:
+        failure_receipt_path = _validated_external_path(
+            args.workspace_root, args.failure_receipt, "failure receipt"
+        )
+        if args.github_output is not None:
+            _validated_external_path(
+                args.workspace_root, args.github_output, "GitHub output"
+            )
+    except (BootstrapError, OSError, ValueError) as exc:
+        print(f"toolchain output boundary FAIL: {exc}", file=sys.stderr)
+        return 1
     try:
         receipt = provision(
             governance_root=args.governance_root,
@@ -632,9 +693,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             receipt = failure_receipt(args, command_evidence, str(exc))
             governance_root = args.governance_root.resolve(strict=True)
-            _write_validated_receipt(governance_root, args.receipt, receipt)
+            _write_validated_receipt(governance_root, failure_receipt_path, receipt)
             if args.github_output is not None:
-                write_github_outputs(args.github_output, args.receipt, receipt)
+                write_github_outputs(args.github_output, failure_receipt_path, receipt)
         except (
             BootstrapError,
             OSError,
