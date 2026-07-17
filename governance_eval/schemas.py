@@ -32,6 +32,8 @@ SCHEMA_FILES = {
     "codex_connector_evidence_result_v4": "codex_connector_evidence_result.schema.json",
     "execution_plan": "execution_plan.schema.json",
     "execution_result": "execution_result.schema.json",
+    "governance_toolchain_receipt": "governance_toolchain_receipt.schema.json",
+    "governance_toolchain_artifact_binding": "governance_toolchain_artifact_binding.schema.json",
 }
 
 SCHEMA_VERSIONS = {

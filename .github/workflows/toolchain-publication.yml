@@ -1,0 +1,223 @@
+name: Governance Toolchain Publication
+
+on:
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publication-proof:
+    name: Pinned toolchain proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact Python
+        id: setup-python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+      - name: Provision pinned governance toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-governance-toolchain
+        with:
+          governance-root: .
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          evaluator-sha: ${{ github.event.pull_request.head.sha }}
+          python-path: ${{ steps.setup-python.outputs.python-path }}
+          repository: ${{ github.repository }}
+          repository-id: ${{ github.repository_id }}
+          head-repository-id: ${{ github.event.pull_request.head.repo.id }}
+          event-name: ${{ github.event_name }}
+          pull-request-number: ${{ github.event.pull_request.number }}
+          workflow-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          expected-artifact-name: governance-toolchain-publication-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Run complete Phase 1 verification
+        run: >-
+          "${{ steps.toolchain.outputs.python-path }}"
+          -m governance_eval verify
+          --artifacts-dir artifacts/toolchain-publication/phase1
+      - name: Verify and record immutable toolchain receipt
+        if: always()
+        shell: bash
+        env:
+          BASE_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+          BOOTSTRAP_OUTCOME: ${{ steps.toolchain.outcome }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DESTINATION: artifacts/toolchain-publication/governance-toolchain-receipt.json
+          EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_FILE_SHA256: ${{ steps.toolchain.outputs.receipt-file-sha256 }}
+          EXPECTED_ARTIFACT_NAME: governance-toolchain-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          GOVERNANCE_ROOT: ${{ github.workspace }}
+          HEAD_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          SOURCE: ${{ runner.temp }}/governance-toolchain-receipt.json
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          mkdir -p artifacts/toolchain-publication
+          "$BASE_PYTHON" -I - <<'PY'
+          import hashlib
+          import hmac
+          import json
+          import os
+          import runpy
+          import shutil
+          from pathlib import Path
+
+          source = Path(os.environ["SOURCE"])
+          destination = Path(os.environ["DESTINATION"])
+          governance_root = Path(os.environ["GOVERNANCE_ROOT"])
+          receipt = json.loads(source.read_text(encoding="utf-8"))
+          bootstrap = runpy.run_path(
+              str(governance_root / "governance_eval/toolchain_bootstrap.py")
+          )
+          pr_number = os.environ["PR_NUMBER"]
+          expected_context = {
+              "repository": os.environ["REPOSITORY"],
+              "repository_id": os.environ["REPOSITORY_ID"],
+              "head_repository_id": os.environ["HEAD_REPOSITORY_ID"],
+              "event_name": os.environ["EVENT_NAME"],
+              "pull_request_number": int(pr_number) if pr_number else None,
+              "base_sha": os.environ["BASE_SHA"],
+              "head_sha": os.environ["HEAD_SHA"],
+              "workflow_ref": os.environ["WORKFLOW_REF"],
+              "workflow_sha": os.environ["WORKFLOW_SHA"],
+              "run_id": os.environ["RUN_ID"],
+              "run_attempt": os.environ["RUN_ATTEMPT"],
+              "expected_artifact_name": os.environ["EXPECTED_ARTIFACT_NAME"],
+          }
+          bootstrap["validate_live_receipt"](
+              governance_root, receipt, expected_context
+          )
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          expected = os.environ["EXPECTED_FILE_SHA256"]
+          outcome = os.environ["BOOTSTRAP_OUTCOME"]
+          if outcome == "success" and not expected:
+              raise SystemExit("successful bootstrap omitted receipt file digest")
+          if expected and not hmac.compare_digest(actual, expected):
+              raise SystemExit("toolchain receipt digest mismatch")
+          shutil.copyfile(source, destination)
+          PY
+      - name: Upload publication evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: governance-toolchain-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/toolchain-publication
+          if-no-files-found: error
+          retention-days: 30
+      - name: Generate machine-readable artifact binding
+        id: binding
+        if: always() && steps.upload.outcome == 'success'
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_NAME: governance-toolchain-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          BASE_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DESTINATION: artifacts/toolchain-publication-binding/governance-toolchain-artifact-binding.json
+          EVENT_NAME: ${{ github.event_name }}
+          GOVERNANCE_ROOT: ${{ github.workspace }}
+          HEAD_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          SOURCE: artifacts/toolchain-publication/governance-toolchain-receipt.json
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          mkdir -p artifacts/toolchain-publication-binding
+          "$BASE_PYTHON" -I - <<'PY'
+          import json
+          import os
+          import runpy
+          from pathlib import Path
+
+          governance_root = Path(os.environ["GOVERNANCE_ROOT"])
+          receipt_path = Path(os.environ["SOURCE"])
+          receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+          bootstrap = runpy.run_path(
+              str(governance_root / "governance_eval/toolchain_bootstrap.py")
+          )
+          expected_context = {
+              "repository": os.environ["REPOSITORY"],
+              "repository_id": os.environ["REPOSITORY_ID"],
+              "head_repository_id": os.environ["HEAD_REPOSITORY_ID"],
+              "event_name": os.environ["EVENT_NAME"],
+              "pull_request_number": int(os.environ["PR_NUMBER"]),
+              "base_sha": os.environ["BASE_SHA"],
+              "head_sha": os.environ["HEAD_SHA"],
+              "workflow_ref": os.environ["WORKFLOW_REF"],
+              "workflow_sha": os.environ["WORKFLOW_SHA"],
+              "run_id": os.environ["RUN_ID"],
+              "run_attempt": os.environ["RUN_ATTEMPT"],
+              "expected_artifact_name": os.environ["ARTIFACT_NAME"],
+          }
+          binding = bootstrap["create_artifact_binding"](
+              governance_root,
+              receipt_path,
+              receipt,
+              expected_context,
+              artifact_id=os.environ["ARTIFACT_ID"],
+              artifact_name=os.environ["ARTIFACT_NAME"],
+              artifact_url=os.environ["ARTIFACT_URL"],
+              artifact_digest=os.environ["ARTIFACT_DIGEST"],
+          )
+          Path(os.environ["DESTINATION"]).write_text(
+              json.dumps(binding, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: Upload artifact binding
+        id: binding_upload
+        if: always() && steps.binding.outcome == 'success'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: governance-toolchain-publication-binding-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/toolchain-publication-binding/governance-toolchain-artifact-binding.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record assigned artifact identities
+        if: always() && steps.binding_upload.outcome == 'success'
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_NAME: governance-toolchain-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          BINDING_ARTIFACT_DIGEST: ${{ steps.binding_upload.outputs.artifact-digest }}
+          BINDING_ARTIFACT_ID: ${{ steps.binding_upload.outputs.artifact-id }}
+          BINDING_ARTIFACT_NAME: governance-toolchain-publication-binding-${{ github.run_id }}-${{ github.run_attempt }}
+          BINDING_ARTIFACT_URL: ${{ steps.binding_upload.outputs.artifact-url }}
+        run: |
+          {
+            echo "Source artifact ID: \`$ARTIFACT_ID\`"
+            echo "Source artifact name: \`$ARTIFACT_NAME\`"
+            echo "Source artifact digest: \`$ARTIFACT_DIGEST\`"
+            echo "Source artifact URL: $ARTIFACT_URL"
+            echo "Binding artifact ID: \`$BINDING_ARTIFACT_ID\`"
+            echo "Binding artifact name: \`$BINDING_ARTIFACT_NAME\`"
+            echo "Binding artifact digest: \`$BINDING_ARTIFACT_DIGEST\`"
+            echo "Binding artifact URL: $BINDING_ARTIFACT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

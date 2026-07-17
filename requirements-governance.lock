@@ -1,0 +1,7 @@
+# Governance evaluator toolchain lock.
+# Scope: Ruff bootstrap only.
+# Runtime: CPython 3.12.13 on Ubuntu x86_64 or Windows x86_64.
+# Artifact hashes verified against PyPI release metadata on 2026-07-16.
+ruff==0.15.21 \
+    --hash=sha256:bab0905d2f29e0d9fbc3c373ed23db0095edaa3f71f1f4f519ec15134d9e85c8 \
+    --hash=sha256:d4b8d9a2f0f12b816b50447f6eccb9f4bb01a6b82c86b50fb3b5354b458dc6d3
