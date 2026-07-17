@@ -58,3 +58,25 @@ The delivery workflow rejects missing artifacts, mismatched artifact digests, in
 ## Adoption boundary
 
 Do not roll this framework into target repositories until Governance passes its own protected checks and positive/negative canaries. Target repositories remain read-only during Governance Phase 1 evaluation.
+
+After self-enforcement passes, generate a reviewable bundle outside the target repository:
+
+```powershell
+python -m governance_eval adoption-bundle `
+  --repository owner/repository `
+  --governance-sha <exact-40-character-governance-sha> `
+  --config-source <typed-supportability-config> `
+  --output-dir <new-empty-bundle-path>
+```
+
+The command does not edit the target repository or GitHub settings. It emits the typed config, canonical supportability standard, exact-pinned protected caller, protection instructions, and a schema-valid manifest with file hashes and the three target-repository required contexts. Review and apply that bundle through a separate target-repository pull request.
+
+Prove generator behavior without touching a target repository:
+
+```powershell
+python -m governance_eval prove-adoption `
+  --governance-sha <exact-40-character-governance-sha> `
+  --artifacts-dir <new-artifact-path>
+```
+
+Success requires a clean disposable bundle to validate and a caller-pin-substituted defective bundle to fail closed.

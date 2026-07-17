@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "decision",
+    "repository",
+    "governance_sha",
+    "config_sha256",
+    "caller_pins",
+    "required_contexts",
+    "files",
+    "artifact_content_hash"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "enum": [1]},
+    "decision": {"type": "string", "enum": ["ADOPTION_READY"]},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "governance_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "caller_pins": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+    },
+    "required_contexts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "files": {
+      "type": "object",
+      "minProperties": 4
+    },
+    "artifact_content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "decision",
+    "governance_sha",
+    "clean_valid",
+    "clean_manifest_content_hash",
+    "defective_valid",
+    "defective_errors",
+    "defect",
+    "artifact_content_hash"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "enum": [1]},
+    "decision": {"type": "string", "enum": ["ADOPTION_PROOF_PASS", "BLOCK_TECHNICAL"]},
+    "governance_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "clean_valid": {"type": "boolean"},
+    "clean_manifest_content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "defective_valid": {"type": "boolean"},
+    "defective_errors": {"type": "array", "items": {"type": "string"}},
+    "defect": {"type": "string", "enum": ["CALLER_PIN_SUBSTITUTION"]},
+    "artifact_content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

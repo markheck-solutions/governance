@@ -12,6 +12,9 @@ from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
 from governance_eval.architecture_gate import main as architecture_gate_main
+from governance_eval.adoption import AdoptionError
+from governance_eval.adoption import generate_adoption_bundle
+from governance_eval.adoption import prove_adoption
 from governance_eval.delivery_readiness import main as delivery_readiness_main
 from governance_eval.delivery_readiness import validate_review_quorum_document
 from governance_eval.lock import write_spaghetti_lock
@@ -144,6 +147,23 @@ def main(argv: list[str] | None = None) -> int:
     quorum_parser.add_argument("--base-sha", default="")
     quorum_parser.add_argument("--trusted-reviewer-agent", action="append", default=[])
 
+    adoption_parser = subparsers.add_parser(
+        "adoption-bundle",
+        help="generate a deterministic target-repository adoption bundle",
+    )
+    adoption_parser.add_argument("--repository", required=True)
+    adoption_parser.add_argument("--governance-sha", required=True)
+    adoption_parser.add_argument("--config-source", type=Path, required=True)
+    adoption_parser.add_argument("--output-dir", type=Path, required=True)
+    adoption_parser.add_argument("--root", type=Path, default=None)
+
+    adoption_proof_parser = subparsers.add_parser(
+        "prove-adoption", help="run disposable clean and defective adoption controls"
+    )
+    adoption_proof_parser.add_argument("--governance-sha", required=True)
+    adoption_proof_parser.add_argument("--artifacts-dir", type=Path, required=True)
+    adoption_proof_parser.add_argument("--root", type=Path, default=None)
+
     args = parser.parse_args(argv)
     root = repo_root(getattr(args, "root", None))
 
@@ -242,6 +262,45 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0 if not errors else 1
+    if args.command == "adoption-bundle":
+        config_source = (
+            args.config_source
+            if args.config_source.is_absolute()
+            else root / args.config_source
+        )
+        output_dir = (
+            args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
+        )
+        try:
+            result = generate_adoption_bundle(
+                governance_root=root,
+                repository=args.repository,
+                governance_sha=args.governance_sha,
+                config_source=config_source,
+                output_dir=output_dir,
+            )
+        except (AdoptionError, OSError) as exc:
+            print(json.dumps({"decision": "BLOCK_TECHNICAL", "error": str(exc)}))
+            return 2
+        print(json.dumps(result["manifest"], indent=2, sort_keys=True))
+        return 0
+    if args.command == "prove-adoption":
+        artifacts_dir = (
+            args.artifacts_dir
+            if args.artifacts_dir.is_absolute()
+            else root / args.artifacts_dir
+        )
+        try:
+            result = prove_adoption(
+                governance_root=root,
+                governance_sha=args.governance_sha,
+                artifacts_dir=artifacts_dir,
+            )
+        except (AdoptionError, OSError) as exc:
+            print(json.dumps({"decision": "BLOCK_TECHNICAL", "error": str(exc)}))
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["decision"] == "ADOPTION_PROOF_PASS" else 1
     raise AssertionError(args.command)
 
 
