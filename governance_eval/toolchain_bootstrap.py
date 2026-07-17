@@ -39,6 +39,26 @@ _PUBLICATION_CONTEXT_FIELDS = (
     "run_attempt",
     "expected_artifact_name",
 )
+_EVALUATION_CONTEXT_FIELDS = (
+    "context_kind",
+    "repository",
+    "repository_id",
+    "head_repository_id",
+    "event_name",
+    "event_action",
+    "pull_request_number",
+    "target_base_sha",
+    "target_head_sha",
+    "evaluator_sha",
+    "workflow_ref",
+    "workflow_sha",
+    "run_id",
+    "run_attempt",
+    "expected_artifact_name",
+)
+_EVALUATION_ACTIONS = frozenset(
+    {"opened", "reopened", "synchronize", "ready_for_review"}
+)
 _ARTIFACT_AUTHORITY_FIELDS = (
     "artifact_id",
     "artifact_name",
@@ -304,10 +324,13 @@ def validate_receipt(
     receipt: Mapping[str, object],
     expected_context: Mapping[str, object],
 ) -> None:
-    expected = _validated_publication_context(expected_context)
-    _validate_schema(
-        governance_root, "governance_toolchain_receipt.schema.json", receipt
+    expected, context_kind = _validated_context(expected_context)
+    schema_name = (
+        "governance_toolchain_receipt.schema.json"
+        if context_kind == "PUBLICATION"
+        else "governance_toolchain_evaluation_receipt.schema.json"
     )
+    _validate_schema(governance_root, schema_name, receipt)
     _validate_payload_digest(receipt, "toolchain receipt")
     _validate_context_binding(receipt, expected)
     _validate_receipt_semantics(governance_root, receipt)
@@ -378,6 +401,59 @@ def _validated_publication_context(
     return context
 
 
+def _validated_evaluation_context(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    context = dict(value)
+    if set(context) != set(_EVALUATION_CONTEXT_FIELDS):
+        raise BootstrapError("authoritative evaluation context fields invalid")
+    strings = tuple(
+        field for field in _EVALUATION_CONTEXT_FIELDS if field != "pull_request_number"
+    )
+    if any(not isinstance(context.get(key), str) for key in strings):
+        raise BootstrapError("authoritative evaluation context types invalid")
+    if context["context_kind"] != "SUPPORTABILITY_EVALUATION":
+        raise BootstrapError("authoritative evaluation context kind invalid")
+    if not _REPOSITORY_RE.fullmatch(str(context["repository"])):
+        raise BootstrapError("authoritative evaluation repository invalid")
+    for key in ("repository_id", "head_repository_id", "run_id", "run_attempt"):
+        if not _POSITIVE_ID_RE.fullmatch(str(context[key])):
+            raise BootstrapError(f"authoritative evaluation {key} invalid")
+    if context["event_name"] != "pull_request_target":
+        raise BootstrapError("authoritative evaluation event invalid")
+    if context["event_action"] not in _EVALUATION_ACTIONS:
+        raise BootstrapError("authoritative evaluation action invalid")
+    pull_request_number = context["pull_request_number"]
+    if not isinstance(pull_request_number, int) or pull_request_number < 1:
+        raise BootstrapError("supportability evaluation requires a PR number")
+    for key in ("target_base_sha", "target_head_sha", "evaluator_sha", "workflow_sha"):
+        _validate_sha(f"authoritative evaluation {key}", str(context[key]))
+    workflow_ref = str(context["workflow_ref"])
+    if (
+        not workflow_ref.endswith(
+            "/.github/workflows/supportability-enforcement.yml@refs/heads/main"
+        )
+        or "\n" in workflow_ref
+        or len(workflow_ref) > 500
+    ):
+        raise BootstrapError("authoritative evaluation workflow ref invalid")
+    if context["run_attempt"] != "1":
+        raise BootstrapError("supportability evaluation requires run attempt 1")
+    if not _ARTIFACT_NAME_RE.fullmatch(str(context["expected_artifact_name"])):
+        raise BootstrapError("authoritative evaluation artifact name invalid")
+    return context
+
+
+def _validated_context(
+    value: Mapping[str, object],
+) -> tuple[dict[str, object], str]:
+    if set(value) == set(_PUBLICATION_CONTEXT_FIELDS):
+        return _validated_publication_context(value), "PUBLICATION"
+    if set(value) == set(_EVALUATION_CONTEXT_FIELDS):
+        return _validated_evaluation_context(value), "SUPPORTABILITY_EVALUATION"
+    raise BootstrapError("authoritative toolchain context fields invalid")
+
+
 def _validate_event_pr_binding(context: Mapping[str, object]) -> None:
     event_name = context.get("event_name")
     pull_request_number = context.get("pull_request_number")
@@ -390,7 +466,7 @@ def _validate_event_pr_binding(context: Mapping[str, object]) -> None:
 def _validate_context_binding(
     receipt: Mapping[str, object], expected: Mapping[str, object]
 ) -> None:
-    for key in _PUBLICATION_CONTEXT_FIELDS:
+    for key in expected:
         if receipt.get(key) != expected[key]:
             raise BootstrapError(f"toolchain receipt context mismatch: {key}")
 
@@ -1005,11 +1081,17 @@ def provision(
     expected_context: Mapping[str, object],
     command_evidence: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    expected = _validated_publication_context(expected_context)
+    expected, context_kind = _validated_context(expected_context)
     _validate_python_version()
     _validate_sha("base SHA", base_sha)
     _validate_sha("evaluator SHA", evaluator_sha)
-    if base_sha != expected["base_sha"] or evaluator_sha != expected["head_sha"]:
+    if context_kind == "PUBLICATION":
+        identity_matches = (
+            base_sha == expected["base_sha"] and evaluator_sha == expected["head_sha"]
+        )
+    else:
+        identity_matches = base_sha == evaluator_sha == expected["evaluator_sha"]
+    if not identity_matches:
         raise BootstrapError("toolchain inputs differ from authoritative context")
     command_evidence = _evidence_buffer(command_evidence)
     governance_root = governance_root.resolve(strict=True)
@@ -1211,6 +1293,14 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--run-attempt", required=True)
     parser.add_argument("--expected-artifact-name", required=True)
+    parser.add_argument(
+        "--context-kind",
+        choices=("PUBLICATION", "SUPPORTABILITY_EVALUATION"),
+        default="PUBLICATION",
+    )
+    parser.add_argument("--event-action", default="")
+    parser.add_argument("--target-base-sha", default="")
+    parser.add_argument("--target-head-sha", default="")
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--failure-receipt", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
@@ -1243,6 +1333,37 @@ def _publication_context_from_args(args: argparse.Namespace) -> dict[str, object
     )
 
 
+def _evaluation_context_from_args(args: argparse.Namespace) -> dict[str, object]:
+    raw_pr_number = str(args.pull_request_number)
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", raw_pr_number):
+        raise BootstrapError("pull request number invalid")
+    return _validated_evaluation_context(
+        {
+            "context_kind": "SUPPORTABILITY_EVALUATION",
+            "repository": args.repository,
+            "repository_id": args.repository_id,
+            "head_repository_id": args.head_repository_id,
+            "event_name": args.event_name,
+            "event_action": args.event_action,
+            "pull_request_number": int(raw_pr_number),
+            "target_base_sha": args.target_base_sha,
+            "target_head_sha": args.target_head_sha,
+            "evaluator_sha": args.evaluator_sha,
+            "workflow_ref": args.workflow_ref,
+            "workflow_sha": args.workflow_sha,
+            "run_id": args.run_id,
+            "run_attempt": args.run_attempt,
+            "expected_artifact_name": args.expected_artifact_name,
+        }
+    )
+
+
+def _context_from_args(args: argparse.Namespace) -> dict[str, object]:
+    if args.context_kind == "PUBLICATION":
+        return _publication_context_from_args(args)
+    return _evaluation_context_from_args(args)
+
+
 def _validated_external_path(
     governance_root: Path, workspace_root: Path, output_path: Path, label: str
 ) -> Path:
@@ -1260,7 +1381,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     command_evidence: list[dict[str, object]] = []
     try:
-        expected_context = _publication_context_from_args(args)
+        expected_context = _context_from_args(args)
         failure_receipt_path = _validated_external_path(
             args.governance_root,
             args.workspace_root,

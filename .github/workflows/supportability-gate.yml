@@ -144,9 +144,10 @@ jobs:
           path: governance
           persist-credentials: false
       - name: Set up Python
+        id: setup-python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.12"
+          python-version: "3.12.13"
       - name: Validate workflow inputs
         shell: bash
         run: |
@@ -310,9 +311,31 @@ jobs:
           else:
               valid = False
           if not valid:
-              print("Invalid automatic request receipt", file=sys.stderr)
-              raise SystemExit(64)
+            print("Invalid automatic request receipt", file=sys.stderr)
+            raise SystemExit(64)
           PY
+      - name: Provision pinned governance toolchain
+        id: toolchain
+        uses: ./governance/.github/actions/setup-governance-toolchain
+        with:
+          context-kind: SUPPORTABILITY_EVALUATION
+          governance-root: governance
+          base-sha: ${{ inputs.governance-ref }}
+          evaluator-sha: ${{ inputs.governance-ref }}
+          python-path: ${{ steps.setup-python.outputs.python-path }}
+          repository: ${{ github.repository }}
+          repository-id: ${{ github.repository_id }}
+          head-repository-id: ${{ github.event.pull_request.head.repo.id }}
+          event-name: ${{ github.event_name }}
+          event-action: ${{ github.event.action }}
+          target-base-sha: ${{ inputs.target-base-sha }}
+          target-head-sha: ${{ inputs.target-head-sha }}
+          pull-request-number: ${{ inputs.target-pr-number }}
+          workflow-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          expected-artifact-name: ${{ inputs.artifact-name }}
       - name: Bind validated AI-review supportability config
         id: bind_ai_config
         shell: bash
@@ -383,6 +406,11 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ""
+          GOVERNANCE_TOOLCHAIN_PYTHON_PATH: ${{ steps.toolchain.outputs.python-path }}
+          GOVERNANCE_TOOLCHAIN_BIN_PATH: ${{ steps.toolchain.outputs.bin-path }}
+          GOVERNANCE_TOOLCHAIN_RECEIPT_PATH: ${{ steps.toolchain.outputs.receipt-path }}
+          GOVERNANCE_TOOLCHAIN_LOCK_SHA256: ${{ steps.toolchain.outputs.lock-sha256 }}
+          GOVERNANCE_TOOLCHAIN_RECEIPT_FILE_SHA256: ${{ steps.toolchain.outputs.receipt-file-sha256 }}
         run: |
           cd governance
           python -m governance_eval supportability-gate \
