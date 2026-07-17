@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -18,6 +22,16 @@ def _legacy_startup_receipt_strings() -> tuple[str, ...]:
         boot.capitalize() + strap + " reason",
         "remove " + boot + strap + " mode",
     )
+
+
+def _workflow_input_validation_script(workflow: str) -> str:
+    block = workflow.split("      - name: Validate workflow inputs", 1)[1].split(
+        "      - name: Bind validated AI-review supportability config", 1
+    )[0]
+    script = block.split("          python - <<'PY'\n", 1)[1].split(
+        "\n          PY", 1
+    )[0]
+    return textwrap.dedent(script)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -62,7 +76,7 @@ class WorkflowTests(unittest.TestCase):
             if name == "supportability-enforcement.yml":
                 self.assertIn("pull_request_target:", text)
             else:
-                self.assertNotIn("pull_request_target", text)
+                self.assertNotRegex(text, r"(?m)^  pull_request_target:\s*$")
             self.assertIn("contents: read", text)
             self.assertNotIn("secrets: inherit", text)
         for name in (
@@ -342,6 +356,191 @@ class WorkflowTests(unittest.TestCase):
             "            --target-repo ../target \\\n",
             architecture_block,
         )
+
+    def test_reusable_gate_binds_automatic_request_receipt(self) -> None:
+        workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        call_inputs = workflow.split("  workflow_call:", 1)[1].split("    outputs:", 1)[
+            0
+        ]
+        for name in ("request-outcome", "request-transport-exit-code"):
+            with self.subTest(required_input=name):
+                self.assertRegex(
+                    call_inputs,
+                    rf"(?m)^      {re.escape(name)}:\n"
+                    r"        required: true\n"
+                    r"        type: string$",
+                )
+        for name in (
+            "request-transport-error-sha256",
+            "request-comment-id",
+            "request-comment-created-at",
+        ):
+            with self.subTest(optional_input=name):
+                self.assertRegex(
+                    call_inputs,
+                    rf"(?m)^      {re.escape(name)}:\n"
+                    r"        required: false\n"
+                    r"        type: string\n"
+                    r'        default: ""$',
+                )
+
+        env_bindings = {
+            "REQUEST_WORKFLOW_REF": "${{ github.workflow_ref }}",
+            "REQUEST_WORKFLOW_SHA": "${{ github.workflow_sha }}",
+            "REQUEST_EVENT_NAME": "${{ github.event_name }}",
+            "REQUEST_EVENT_ACTION": "${{ github.event.action }}",
+            "REQUEST_RUN_ID": "${{ github.run_id }}",
+            "REQUEST_RUN_ATTEMPT": "${{ github.run_attempt }}",
+            "REQUEST_REPOSITORY_ID": "${{ github.repository_id }}",
+            "REQUEST_OUTCOME": "${{ inputs.request-outcome }}",
+            "REQUEST_TRANSPORT_EXIT_CODE": (
+                "${{ inputs.request-transport-exit-code }}"
+            ),
+            "REQUEST_TRANSPORT_ERROR_SHA256": (
+                "${{ inputs.request-transport-error-sha256 }}"
+            ),
+            "REQUEST_COMMENT_ID": "${{ inputs.request-comment-id }}",
+            "REQUEST_COMMENT_CREATED_AT": ("${{ inputs.request-comment-created-at }}"),
+        }
+        for name, value in env_bindings.items():
+            with self.subTest(env=name):
+                self.assertIn(f"      {name}: {value}", workflow)
+
+        validation_block = workflow.split("      - name: Validate workflow inputs", 1)[
+            1
+        ].split("      - name: Bind validated AI-review supportability config", 1)[0]
+        for token in (
+            "f\"{os.environ['TARGET_REPOSITORY']}/.github/workflows/\"",
+            '"supportability-enforcement.yml@refs/heads/main"',
+            'os.environ["REQUEST_WORKFLOW_SHA"]',
+            'os.environ["REQUEST_EVENT_NAME"] != "pull_request_target"',
+            '"opened", "reopened", "synchronize", "ready_for_review"',
+            'os.environ["REQUEST_RUN_ATTEMPT"] != "1"',
+            'os.environ["REQUEST_OUTCOME"]',
+            'os.environ["REQUEST_TRANSPORT_EXIT_CODE"]',
+            'os.environ["REQUEST_TRANSPORT_ERROR_SHA256"]',
+            'os.environ["REQUEST_COMMENT_ID"]',
+            'os.environ["REQUEST_COMMENT_CREATED_AT"]',
+        ):
+            with self.subTest(validation=token):
+                self.assertIn(token, validation_block)
+
+        codex_block = workflow.split(
+            "      - name: Reconcile Codex review evidence", 1
+        )[1].split("      - name: Read supportability summary", 1)[0]
+        self.assertIn("receipt_args=(", codex_block)
+        required_cli = {
+            "--request-workflow-ref": "REQUEST_WORKFLOW_REF",
+            "--request-workflow-sha": "REQUEST_WORKFLOW_SHA",
+            "--request-event-name": "REQUEST_EVENT_NAME",
+            "--request-event-action": "REQUEST_EVENT_ACTION",
+            "--request-run-id": "REQUEST_RUN_ID",
+            "--request-run-attempt": "REQUEST_RUN_ATTEMPT",
+            "--request-repository-id": "REQUEST_REPOSITORY_ID",
+            "--request-outcome": "REQUEST_OUTCOME",
+            "--request-transport-exit-code": "REQUEST_TRANSPORT_EXIT_CODE",
+        }
+        for argument, variable in required_cli.items():
+            with self.subTest(cli=argument):
+                self.assertIn(f'{argument} "${variable}"', codex_block)
+        self.assertIn('--request-comment-id "$REQUEST_COMMENT_ID"', codex_block)
+        self.assertIn(
+            '--request-comment-created-at "$REQUEST_COMMENT_CREATED_AT"',
+            codex_block,
+        )
+        self.assertIn(
+            '--request-transport-error-sha256 "$REQUEST_TRANSPORT_ERROR_SHA256"',
+            codex_block,
+        )
+        self.assertIn('"${receipt_args[@]}"', codex_block)
+        self.assertNotIn("eval ", codex_block)
+        self.assertNotIn("${{ inputs.request-", codex_block)
+
+    def test_reusable_gate_request_receipt_validation_controls(self) -> None:
+        workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        script = _workflow_input_validation_script(workflow)
+        base = {
+            "TARGET_REPOSITORY": "markheck-solutions/governance",
+            "TARGET_BASE_SHA": "a" * 40,
+            "TARGET_HEAD_SHA": "b" * 40,
+            "GOVERNANCE_REF": "c" * 40,
+            "TARGET_PR_NUMBER": "57",
+            "ARTIFACT_NAME": "candidate-supportability-gate-evidence",
+            "CONFIG_PATH": ".github/governance/supportability.yml",
+            "REQUEST_WORKFLOW_REF": (
+                "markheck-solutions/governance/.github/workflows/"
+                "supportability-enforcement.yml@refs/heads/main"
+            ),
+            "REQUEST_WORKFLOW_SHA": "d" * 40,
+            "REQUEST_EVENT_NAME": "pull_request_target",
+            "REQUEST_EVENT_ACTION": "opened",
+            "REQUEST_RUN_ID": "29583977309",
+            "REQUEST_RUN_ATTEMPT": "1",
+            "REQUEST_REPOSITORY_ID": "1280677092",
+            "REQUEST_OUTCOME": "POSTED",
+            "REQUEST_TRANSPORT_EXIT_CODE": "0",
+            "REQUEST_TRANSPORT_ERROR_SHA256": "",
+            "REQUEST_COMMENT_ID": "5003756722",
+            "REQUEST_COMMENT_CREATED_AT": "2026-07-17T13:32:58Z",
+        }
+
+        cases = {
+            "posted": ({}, 0),
+            "transport_unavailable": (
+                {
+                    "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "1",
+                    "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64,
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                0,
+            ),
+            "rerun": ({"REQUEST_RUN_ATTEMPT": "2"}, 64),
+            "wrong_workflow": ({"REQUEST_WORKFLOW_REF": "main"}, 64),
+            "unsupported_action": ({"REQUEST_EVENT_ACTION": "closed"}, 64),
+            "partial_posted": ({"REQUEST_COMMENT_ID": ""}, 64),
+            "contradictory_posted": (
+                {"REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64},
+                64,
+            ),
+            "partial_unavailable": (
+                {
+                    "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "1",
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                64,
+            ),
+            "exit_code_out_of_range": (
+                {"REQUEST_TRANSPORT_EXIT_CODE": "256"},
+                64,
+            ),
+            "metacharacter_comment_id": ({"REQUEST_COMMENT_ID": "1\n2"}, 64),
+            "invalid_timestamp": (
+                {"REQUEST_COMMENT_CREATED_AT": "2026-02-30T13:32:58Z"},
+                64,
+            ),
+        }
+        for name, (changes, expected) in cases.items():
+            with self.subTest(case=name):
+                env = os.environ.copy()
+                env.update(base)
+                env.update(changes)
+                completed = subprocess.run(
+                    [sys.executable, "-c", script],
+                    check=False,
+                    capture_output=True,
+                    env=env,
+                    text=True,
+                    timeout=5,
+                )
+                self.assertEqual(completed.returncode, expected, completed.stderr)
 
     def test_enforcement_jobs_use_pull_request_target_conditions(self) -> None:
         enforcement = (

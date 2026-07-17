@@ -27,6 +27,24 @@ on:
       governance-ref:
         required: true
         type: string
+      request-outcome:
+        required: true
+        type: string
+      request-transport-exit-code:
+        required: true
+        type: string
+      request-transport-error-sha256:
+        required: false
+        type: string
+        default: ""
+      request-comment-id:
+        required: false
+        type: string
+        default: ""
+      request-comment-created-at:
+        required: false
+        type: string
+        default: ""
       config-path:
         required: false
         type: string
@@ -69,6 +87,18 @@ jobs:
       TARGET_PR_URL: ${{ inputs.target-pr-url }}
       REVIEW_WINDOW_STARTED_AT: ${{ inputs.review-window-started-at }}
       GOVERNANCE_REF: ${{ inputs.governance-ref }}
+      REQUEST_WORKFLOW_REF: ${{ github.workflow_ref }}
+      REQUEST_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      REQUEST_EVENT_NAME: ${{ github.event_name }}
+      REQUEST_EVENT_ACTION: ${{ github.event.action }}
+      REQUEST_RUN_ID: ${{ github.run_id }}
+      REQUEST_RUN_ATTEMPT: ${{ github.run_attempt }}
+      REQUEST_REPOSITORY_ID: ${{ github.repository_id }}
+      REQUEST_OUTCOME: ${{ inputs.request-outcome }}
+      REQUEST_TRANSPORT_EXIT_CODE: ${{ inputs.request-transport-exit-code }}
+      REQUEST_TRANSPORT_ERROR_SHA256: ${{ inputs.request-transport-error-sha256 }}
+      REQUEST_COMMENT_ID: ${{ inputs.request-comment-id }}
+      REQUEST_COMMENT_CREATED_AT: ${{ inputs.request-comment-created-at }}
       CONFIG_PATH: ${{ inputs.config-path }}
       ARTIFACT_NAME: ${{ inputs.artifact-name }}
       GH_TOKEN: ${{ github.token }}
@@ -99,11 +129,29 @@ jobs:
           import os
           import re
           import sys
+          from datetime import datetime
 
           sha_re = re.compile(r"^[0-9a-f]{40}$")
           ref_re = re.compile(r"^[0-9a-f]{40}$")
           artifact_re = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
           config_re = re.compile(r"^[A-Za-z0-9_./-]+\.ya?ml$")
+          positive_int_re = re.compile(r"^[1-9][0-9]*$")
+          exit_code_re = re.compile(r"^(0|[1-9][0-9]{0,2})$")
+          digest_re = re.compile(r"^sha256:[0-9a-f]{64}$")
+          timestamp_re = re.compile(
+              r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+              r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+          )
+
+          def valid_timestamp(value: str) -> bool:
+              if not timestamp_re.fullmatch(value):
+                  return False
+              try:
+                  datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+              except ValueError:
+                  return False
+              return True
+
           if not sha_re.fullmatch(os.environ["TARGET_BASE_SHA"]):
               print("Invalid target base SHA", file=sys.stderr)
               raise SystemExit(64)
@@ -122,6 +170,65 @@ jobs:
           config_path = os.environ["CONFIG_PATH"]
           if not config_re.fullmatch(config_path) or ".." in config_path.split("/"):
               print("Invalid config path", file=sys.stderr)
+              raise SystemExit(64)
+          expected_workflow_ref = (
+              f"{os.environ['TARGET_REPOSITORY']}/.github/workflows/"
+              "supportability-enforcement.yml@refs/heads/main"
+          )
+          if os.environ["REQUEST_WORKFLOW_REF"] != expected_workflow_ref:
+              print("Invalid request workflow ref", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["REQUEST_WORKFLOW_SHA"]):
+              print("Invalid request workflow SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if os.environ["REQUEST_EVENT_NAME"] != "pull_request_target":
+              print("Invalid request event", file=sys.stderr)
+              raise SystemExit(64)
+          allowed_actions = {
+              "opened", "reopened", "synchronize", "ready_for_review"
+          }
+          if os.environ["REQUEST_EVENT_ACTION"] not in allowed_actions:
+              print("Invalid request event action", file=sys.stderr)
+              raise SystemExit(64)
+          if not positive_int_re.fullmatch(os.environ["REQUEST_RUN_ID"]):
+              print("Invalid request run ID", file=sys.stderr)
+              raise SystemExit(64)
+          if os.environ["REQUEST_RUN_ATTEMPT"] != "1":
+              print("Request must come from run attempt 1", file=sys.stderr)
+              raise SystemExit(64)
+          if not positive_int_re.fullmatch(os.environ["REQUEST_REPOSITORY_ID"]):
+              print("Invalid request repository ID", file=sys.stderr)
+              raise SystemExit(64)
+          outcome = os.environ["REQUEST_OUTCOME"]
+          exit_code_text = os.environ["REQUEST_TRANSPORT_EXIT_CODE"]
+          error_digest = os.environ["REQUEST_TRANSPORT_ERROR_SHA256"]
+          comment_id = os.environ["REQUEST_COMMENT_ID"]
+          comment_created_at = os.environ["REQUEST_COMMENT_CREATED_AT"]
+          if not exit_code_re.fullmatch(exit_code_text):
+              print("Invalid request transport exit code", file=sys.stderr)
+              raise SystemExit(64)
+          exit_code = int(exit_code_text)
+          if exit_code > 255:
+              print("Invalid request transport exit code", file=sys.stderr)
+              raise SystemExit(64)
+          if outcome == "POSTED":
+              valid = (
+                  exit_code == 0
+                  and error_digest == ""
+                  and positive_int_re.fullmatch(comment_id)
+                  and valid_timestamp(comment_created_at)
+              )
+          elif outcome == "TRANSPORT_UNAVAILABLE":
+              valid = (
+                  exit_code != 0
+                  and digest_re.fullmatch(error_digest)
+                  and comment_id == ""
+                  and comment_created_at == ""
+              )
+          else:
+              valid = False
+          if not valid:
+              print("Invalid automatic request receipt", file=sys.stderr)
               raise SystemExit(64)
           PY
       - name: Bind validated AI-review supportability config
@@ -226,6 +333,27 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd governance
+          receipt_args=(
+            --request-workflow-ref "$REQUEST_WORKFLOW_REF"
+            --request-workflow-sha "$REQUEST_WORKFLOW_SHA"
+            --request-event-name "$REQUEST_EVENT_NAME"
+            --request-event-action "$REQUEST_EVENT_ACTION"
+            --request-run-id "$REQUEST_RUN_ID"
+            --request-run-attempt "$REQUEST_RUN_ATTEMPT"
+            --request-repository-id "$REQUEST_REPOSITORY_ID"
+            --request-outcome "$REQUEST_OUTCOME"
+            --request-transport-exit-code "$REQUEST_TRANSPORT_EXIT_CODE"
+          )
+          if [[ "$REQUEST_OUTCOME" == "POSTED" ]]; then
+            receipt_args+=(
+              --request-comment-id "$REQUEST_COMMENT_ID"
+              --request-comment-created-at "$REQUEST_COMMENT_CREATED_AT"
+            )
+          else
+            receipt_args+=(
+              --request-transport-error-sha256 "$REQUEST_TRANSPORT_ERROR_SHA256"
+            )
+          fi
           python -m governance_eval.codex_review_gate \
             --config "${{ steps.bind_ai_config.outputs.bound-config-path }}" \
             --config-source-path "$CONFIG_PATH" \
@@ -236,7 +364,8 @@ jobs:
             --head-sha "$TARGET_HEAD_SHA" \
             --governance-sha "$GOVERNANCE_REF" \
             --review-window-started-at "$REVIEW_WINDOW_STARTED_AT" \
-            --output-dir ../target/artifacts/supportability
+            --output-dir ../target/artifacts/supportability \
+            "${receipt_args[@]}"
       - name: Read supportability summary
         id: summary
         if: always()
