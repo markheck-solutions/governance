@@ -1154,16 +1154,6 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         )
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertFalse(result["workflow_request_receipt"]["transport_timed_out"])
-        launch_failure_receipt = workflow_request_receipt(
-            "TRANSPORT_UNAVAILABLE",
-            transport_exit_code=None,
-        )
-        result = evaluate_with_workflow_request(
-            unavailable_snapshot, launch_failure_receipt
-        )
-        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
-        self.assertIsNone(result["workflow_request_receipt"]["transport_exit_code"])
-
         old_head = deepcopy(request_only)
         old_head["issue_comments"][0]["body"] = (
             f"@codex review\n\nGovernance review request for exact head `{'c' * 40}`."
@@ -1301,18 +1291,6 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
                 "TRANSPORT_UNAVAILABLE",
                 transport_exit_code=1,
                 transport_timed_out=True,
-            )
-        with self.assertRaises(ValueError):
-            workflow_request_receipt(
-                "TRANSPORT_UNAVAILABLE",
-                transport_exit_code=None,
-                transport_timed_out=True,
-            )
-        with self.assertRaises(ValueError):
-            workflow_request_receipt(
-                "TRANSPORT_UNAVAILABLE",
-                transport_exit_code=None,
-                transport_error_sha256=None,
             )
         for changes in (
             {"response_validation_error_sha256": None},
@@ -2154,6 +2132,33 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
             left["normalized_snapshot_sha256"],
             right["normalized_snapshot_sha256"],
         )
+
+
+class WorkflowRequestLaunchFailureTests(unittest.TestCase):
+    def test_launch_failure_receipt_is_schema_valid_unavailable(self) -> None:
+        unavailable_snapshot = reaction_snapshot()
+        unavailable_snapshot["issue_comments"] = []
+        receipt = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE",
+            transport_exit_code=None,
+        )
+
+        result = evaluate_with_workflow_request(unavailable_snapshot, receipt)
+
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIsNone(result["workflow_request_receipt"]["transport_exit_code"])
+
+    def test_launch_failure_receipt_rejects_contradictions(self) -> None:
+        for changes in (
+            {"transport_timed_out": True},
+            {"transport_error_sha256": None},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                workflow_request_receipt(
+                    "TRANSPORT_UNAVAILABLE",
+                    transport_exit_code=None,
+                    **changes,
+                )
 
 
 class CodexConnectorResultValidationTests(unittest.TestCase):
