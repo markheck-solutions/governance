@@ -657,6 +657,29 @@ class SupportabilityGateTests(unittest.TestCase):
                 all(command["status"] == "SKIPPED" for command in result["commands"])
             )
 
+    def test_gate_protects_active_codex_result_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            active_schema = "schemas/v3/codex_connector_evidence_result.schema.json"
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=[active_schema],
+                command_runner=_passing_runner,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(
+                any(active_schema in error for error in result["errors"]),
+                result["errors"],
+            )
+            self.assertTrue(
+                all(command["status"] == "SKIPPED" for command in result["commands"])
+            )
+
     def test_gate_accepts_review_checker_change_with_independent_regressions(
         self,
     ) -> None:
@@ -673,6 +696,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",
+                "schemas/v3/codex_connector_evidence_result.schema.json",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
                 "tests/test_codex_connector_collector.py",
