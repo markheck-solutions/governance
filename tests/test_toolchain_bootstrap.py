@@ -166,6 +166,7 @@ class ToolchainBootstrapTests(unittest.TestCase):
             self.assertEqual(receipt["head_sha"], "a" * 40)
             self.assertEqual(receipt["evaluator_sha"], "a" * 40)
             self.assertEqual(receipt["checkout_head_sha"], "a" * 40)
+            self.assertEqual(receipt["merge_base_sha"], "c" * 40)
             self.assertEqual(receipt["python_version"], "3.12.13")
             self.assertEqual(
                 receipt["packages"], [{"name": "ruff", "version": "0.15.21"}]
@@ -231,11 +232,21 @@ class ToolchainBootstrapTests(unittest.TestCase):
                 {"runtime_in_workspace": True},
                 "outside target workspace",
             ),
+            (
+                "runtime in governance checkout",
+                {"runtime_in_governance": True},
+                "governance checkout",
+            ),
             ("existing runtime", {"existing_runtime": True}, "already exists"),
             (
                 "receipt in workspace",
                 {"receipt_in_workspace": True},
                 "receipt must be outside",
+            ),
+            (
+                "receipt in governance checkout",
+                {"receipt_in_governance": True},
+                "governance checkout",
             ),
         )
         for name, options, expected in cases:
@@ -244,11 +255,15 @@ class ToolchainBootstrapTests(unittest.TestCase):
                 runtime = paths["runtime"]
                 if options.get("runtime_in_workspace"):
                     runtime = paths["workspace"] / "runtime"
+                if options.get("runtime_in_governance"):
+                    runtime = paths["governance"] / "runtime"
                 if options.get("existing_runtime"):
                     runtime.mkdir()
                 receipt = paths["receipt"]
                 if options.get("receipt_in_workspace"):
                     receipt = paths["workspace"] / "receipt.json"
+                if options.get("receipt_in_governance"):
+                    receipt = paths["governance"] / "receipt.json"
                 with mock.patch.object(
                     BOOTSTRAP,
                     "_current_python_version",
@@ -360,7 +375,7 @@ class ToolchainBootstrapTests(unittest.TestCase):
                     ):
                         stdout = "b" * 40
                     elif "merge-base" in command:
-                        stdout = ""
+                        stdout = "c" * 40
                     else:
                         stdout = status
                     return subprocess.CompletedProcess(
@@ -393,10 +408,30 @@ class ToolchainBootstrapTests(unittest.TestCase):
                     self.assertNotIn("GITHUB_TOKEN", environment)
                     self.assertNotIn("PIP_INDEX_URL", environment)
 
+    def test_checkout_rejects_git_inside_governance_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._provision_paths(Path(tmp))
+            git_path = paths["governance"] / "git"
+            git_path.touch()
+            with (
+                mock.patch.object(
+                    BOOTSTRAP.shutil, "which", return_value=str(git_path)
+                ),
+                self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "governance checkout"),
+            ):
+                BOOTSTRAP.validate_checkout(
+                    paths["governance"],
+                    paths["workspace"],
+                    "b" * 40,
+                    "a" * 40,
+                    {"PATH": str(Path(tmp))},
+                    [],
+                )
+
     def test_checkout_binding_rejects_missing_and_unrelated_base(self) -> None:
         cases = (
             ("missing base", True, False, "base commit missing"),
-            ("unrelated base", False, True, "base is not an ancestor"),
+            ("unrelated base", False, True, "base has no common history"),
         )
         for name, missing, unrelated, expected in cases:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
@@ -420,8 +455,8 @@ class ToolchainBootstrapTests(unittest.TestCase):
                         stdout = "b" * 40
                     elif "merge-base" in command:
                         if unrelated:
-                            raise BOOTSTRAP.BootstrapError("base is not an ancestor")
-                        stdout = ""
+                            raise BOOTSTRAP.BootstrapError("base has no common history")
+                        stdout = "c" * 40
                     else:
                         stdout = ""
                     return subprocess.CompletedProcess(
@@ -587,6 +622,7 @@ class ToolchainBootstrapTests(unittest.TestCase):
                 "evaluator_sha": "a" * 40,
                 "claimed_evaluator_sha": "a" * 40,
                 "checkout_head_sha": None,
+                "merge_base_sha": None,
                 "lock_sha256": None,
                 "python_version": "3.12.13",
                 "platform_system": "test",
@@ -699,10 +735,17 @@ class ToolchainBootstrapTests(unittest.TestCase):
     def test_main_rejects_output_boundaries_before_provision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._provision_paths(Path(tmp))
-            unsafe = paths["workspace"] / "unsafe.json"
+            workspace_unsafe = paths["workspace"] / "unsafe.json"
+            governance_unsafe = paths["governance"] / "unsafe.json"
             cases = (
-                ("failure receipt", unsafe, None),
-                ("GitHub output", paths["receipt"], unsafe),
+                ("workspace failure receipt", workspace_unsafe, None),
+                ("governance failure receipt", governance_unsafe, None),
+                ("workspace GitHub output", paths["receipt"], workspace_unsafe),
+                (
+                    "governance GitHub output",
+                    paths["receipt"],
+                    governance_unsafe,
+                ),
             )
             for name, failure_receipt, github_output in cases:
                 with self.subTest(name=name):
@@ -727,7 +770,8 @@ class ToolchainBootstrapTests(unittest.TestCase):
                     with mock.patch.object(BOOTSTRAP, "provision") as provision:
                         self.assertEqual(BOOTSTRAP.main(argv), 1)
                     provision.assert_not_called()
-                    self.assertFalse(unsafe.exists())
+                    self.assertFalse(workspace_unsafe.exists())
+                    self.assertFalse(governance_unsafe.exists())
 
     def _assert_lock_rejected(self, text: str, message: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -744,7 +788,9 @@ class ToolchainBootstrapTests(unittest.TestCase):
             return "a" * 40
         if command[-2:] == ("--verify", f"{'b' * 40}^{{commit}}"):
             return "b" * 40
-        if "merge-base" in command or "status" in command:
+        if "merge-base" in command:
+            return "c" * 40
+        if "status" in command:
             return ""
         return None
 

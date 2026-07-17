@@ -255,6 +255,7 @@ def _validate_receipt_semantics(receipt: Mapping[str, object]) -> None:
 def _validate_success_receipt(receipt: Mapping[str, object]) -> None:
     required = (
         "checkout_head_sha",
+        "merge_base_sha",
         "lock_sha256",
         "python_path",
         "ruff_module_origin",
@@ -303,7 +304,7 @@ def _valid_success_command_evidence(
         commands[0][-2:] == ("rev-parse", "--show-toplevel")
         and commands[1][-2:] == ("--verify", "HEAD^{commit}")
         and commands[2][-2:] == ("--verify", f"{base_sha}^{{commit}}")
-        and commands[3][-3:] == ("--is-ancestor", base_sha, evaluator_sha)
+        and commands[3][-3:] == ("merge-base", base_sha, evaluator_sha)
         and "status" in commands[4]
         and commands[5][1:4] == ("-I", "-m", "ensurepip")
         and commands[6][1:5] == ("-I", "-m", "pip", "install")
@@ -346,6 +347,10 @@ def _is_within(path: Path, parent: Path) -> bool:
     return True
 
 
+def _is_within_any(path: Path, parents: Sequence[Path]) -> bool:
+    return any(_is_within(path, parent) for parent in parents)
+
+
 def _runtime_paths(runtime_root: Path) -> tuple[Path, Path]:
     if os.name == "nt":
         runtime_bin = runtime_root / "Scripts"
@@ -373,13 +378,15 @@ def validate_checkout(
     evaluator_sha: str,
     source: Mapping[str, str],
     command_evidence: list[dict[str, object]],
-) -> str:
+) -> tuple[str, str]:
     git_command = shutil.which("git", path=source.get("PATH"))
     if git_command is None:
         raise BootstrapError("trusted Git executable unavailable")
     git_path = Path(git_command).resolve(strict=True)
-    if _is_within(git_path, workspace_root):
-        raise BootstrapError("Git executable resolves inside target workspace")
+    if _is_within_any(git_path, (workspace_root, governance_root)):
+        raise BootstrapError(
+            "Git executable resolves inside target workspace or governance checkout"
+        )
     environment = sanitized_git_environment(source)
     repository_root = Path(
         _run(
@@ -421,20 +428,20 @@ def validate_checkout(
     ).stdout.strip()
     if checkout_base != base_sha:
         raise BootstrapError("governance checkout base commit differs from base SHA")
-    _run(
+    merge_base = _run(
         (
             str(git_path),
             "-C",
             str(governance_root),
             "merge-base",
-            "--is-ancestor",
             base_sha,
             evaluator_sha,
         ),
         environment=environment,
         timeout_seconds=15,
         command_evidence=command_evidence,
-    )
+    ).stdout.strip()
+    _validate_sha("merge-base SHA", merge_base)
     status = _run(
         (
             str(git_path),
@@ -453,7 +460,7 @@ def validate_checkout(
         raise BootstrapError(
             "governance checkout contains uncommitted or ignored files"
         )
-    return checkout_head
+    return checkout_head, merge_base
 
 
 def provision(
@@ -476,14 +483,19 @@ def provision(
     if not _is_within(lock_path, governance_root):
         raise BootstrapError("toolchain lock escapes governance checkout")
     runtime_root = runtime_root.resolve(strict=False)
-    if _is_within(runtime_root, workspace_root):
-        raise BootstrapError("toolchain runtime must be outside target workspace")
+    protected_roots = (workspace_root, governance_root)
+    if _is_within_any(runtime_root, protected_roots):
+        raise BootstrapError(
+            "toolchain runtime must be outside target workspace and governance checkout"
+        )
     if runtime_root.exists():
         raise BootstrapError("toolchain runtime already exists")
     receipt_path = receipt_path.resolve(strict=False)
-    if _is_within(receipt_path, workspace_root):
-        raise BootstrapError("toolchain receipt must be outside target workspace")
-    checkout_head = validate_checkout(
+    if _is_within_any(receipt_path, protected_roots):
+        raise BootstrapError(
+            "toolchain receipt must be outside target workspace and governance checkout"
+        )
+    checkout_head, merge_base = validate_checkout(
         governance_root,
         workspace_root,
         base_sha,
@@ -564,6 +576,7 @@ def provision(
         "evaluator_sha": evaluator_sha,
         "claimed_evaluator_sha": evaluator_sha,
         "checkout_head_sha": checkout_head,
+        "merge_base_sha": merge_base,
         "lock_sha256": lock_sha256,
         "python_version": platform.python_version(),
         "platform_system": platform.system(),
@@ -601,6 +614,7 @@ def failure_receipt(
         "evaluator_sha": _normalized_sha(args.evaluator_sha),
         "claimed_evaluator_sha": args.evaluator_sha,
         "checkout_head_sha": None,
+        "merge_base_sha": None,
         "lock_sha256": None,
         "python_version": platform.python_version(),
         "platform_system": platform.system(),
@@ -654,12 +668,15 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def _validated_external_path(
-    workspace_root: Path, output_path: Path, label: str
+    governance_root: Path, workspace_root: Path, output_path: Path, label: str
 ) -> Path:
+    resolved_governance = governance_root.resolve(strict=True)
     resolved_workspace = workspace_root.resolve(strict=True)
     resolved_output = output_path.resolve(strict=False)
-    if _is_within(resolved_output, resolved_workspace):
-        raise BootstrapError(f"{label} must be outside target workspace")
+    if _is_within_any(resolved_output, (resolved_workspace, resolved_governance)):
+        raise BootstrapError(
+            f"{label} must be outside target workspace and governance checkout"
+        )
     return resolved_output
 
 
@@ -668,11 +685,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     command_evidence: list[dict[str, object]] = []
     try:
         failure_receipt_path = _validated_external_path(
-            args.workspace_root, args.failure_receipt, "failure receipt"
+            args.governance_root,
+            args.workspace_root,
+            args.failure_receipt,
+            "failure receipt",
         )
         if args.github_output is not None:
             _validated_external_path(
-                args.workspace_root, args.github_output, "GitHub output"
+                args.governance_root,
+                args.workspace_root,
+                args.github_output,
+                "GitHub output",
             )
     except (BootstrapError, OSError, ValueError) as exc:
         print(f"toolchain output boundary FAIL: {exc}", file=sys.stderr)
