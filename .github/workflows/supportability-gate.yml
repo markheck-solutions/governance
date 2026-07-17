@@ -273,7 +273,7 @@ jobs:
               >= datetime.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ")
               and timeout_seconds == "30"
               and timed_out_text in {"true", "false"}
-              and (timed_out_text == "true") == (exit_code == 124)
+              and (timed_out_text != "true" or exit_code == 124)
           )
           if outcome == "POSTED":
               valid = (

@@ -583,6 +583,17 @@ class ReusableWorkflowTests(unittest.TestCase):
                 },
                 0,
             ),
+            "transport_exit_124_without_timeout": (
+                {
+                    "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
+                    "REQUEST_TRANSPORT_TIMED_OUT": "false",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "124",
+                    "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64,
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                0,
+            ),
             "response_invalid": (
                 {
                     "REQUEST_OUTCOME": "RESPONSE_INVALID",
@@ -649,6 +660,17 @@ class ReusableWorkflowTests(unittest.TestCase):
             ),
             "wrong_timeout": ({"REQUEST_TRANSPORT_TIMEOUT_SECONDS": "31"}, 64),
             "contradictory_timeout": ({"REQUEST_TRANSPORT_TIMED_OUT": "true"}, 64),
+            "timeout_with_non_timeout_exit": (
+                {
+                    "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
+                    "REQUEST_TRANSPORT_TIMED_OUT": "true",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "1",
+                    "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64,
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                64,
+            ),
         }
         for name, (changes, expected) in cases.items():
             with self.subTest(case=name):

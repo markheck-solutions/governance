@@ -1144,6 +1144,16 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         result = evaluate_with_workflow_request(unavailable_snapshot, timeout_receipt)
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertTrue(result["workflow_request_receipt"]["transport_timed_out"])
+        child_exit_124_receipt = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE",
+            transport_exit_code=124,
+            transport_timed_out=False,
+        )
+        result = evaluate_with_workflow_request(
+            unavailable_snapshot, child_exit_124_receipt
+        )
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertFalse(result["workflow_request_receipt"]["transport_timed_out"])
 
         old_head = deepcopy(request_only)
         old_head["issue_comments"][0]["body"] = (
@@ -1275,6 +1285,12 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
             workflow_request_receipt(
                 "TRANSPORT_UNAVAILABLE",
                 comment_id=201,
+            )
+        with self.assertRaises(ValueError):
+            workflow_request_receipt(
+                "TRANSPORT_UNAVAILABLE",
+                transport_exit_code=1,
+                transport_timed_out=True,
             )
         for changes in (
             {"response_validation_error_sha256": None},

@@ -200,7 +200,7 @@ class TrustedWorkflowRequestReceipt:
         )
         if not valid_exit_code:
             raise ValueError("workflow request transport exit code is invalid")
-        if self.transport_timed_out != (self.transport_exit_code == 124):
+        if self.transport_timed_out and self.transport_exit_code != 124:
             raise ValueError("workflow request transport timeout evidence is invalid")
         if self.outcome == "POSTED":
             if (

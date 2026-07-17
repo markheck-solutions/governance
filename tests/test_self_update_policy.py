@@ -180,6 +180,7 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                 "POSTED",
                 "false",
                 "0",
+                "",
             ),
             (
                 subprocess.CompletedProcess(
@@ -188,15 +189,29 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                 "TRANSPORT_UNAVAILABLE",
                 "false",
                 "1",
+                "sha256:" + hashlib.sha256(b"unavailable").hexdigest(),
+            ),
+            (
+                subprocess.CompletedProcess(
+                    expected_command, 124, stdout=b"", stderr=b"child exit 124"
+                ),
+                "TRANSPORT_UNAVAILABLE",
+                "false",
+                "124",
+                "sha256:" + hashlib.sha256(b"child exit 124").hexdigest(),
             ),
             (
                 subprocess.TimeoutExpired(expected_command, 30, stderr=b"deadline"),
                 "TRANSPORT_UNAVAILABLE",
                 "true",
                 "124",
+                "sha256:"
+                + hashlib.sha256(
+                    b"deadline\nrequest timed out after 30 seconds"
+                ).hexdigest(),
             ),
         )
-        for transport, outcome, timed_out, exit_code in cases:
+        for transport, outcome, timed_out, exit_code, error_digest in cases:
             with self.subTest(outcome=outcome, timed_out=timed_out):
                 outputs, run = _execute_request_fixture(transport)
                 self.assertEqual(
@@ -207,6 +222,9 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                 self.assertEqual(outputs["request-transport-timed-out"], timed_out)
                 self.assertEqual(outputs["request-transport-exit-code"], exit_code)
                 self.assertEqual(outputs["request-outcome"], outcome)
+                self.assertEqual(
+                    outputs["request-transport-error-sha256"], error_digest
+                )
                 self.assertEqual(
                     outputs["request-response-validation-error-sha256"], ""
                 )
