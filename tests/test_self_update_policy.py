@@ -554,9 +554,9 @@ def _protected_enforcement_workflow(sha: str) -> str:
 
 
 def _current_enforcement_workflow() -> str:
-    return (REPO_ROOT / ".github/workflows/supportability-enforcement.yml").read_text(
-        encoding="utf-8"
-    )
+    return (
+        REPO_ROOT / "fixtures/supportability-enforcement-legacy-request.yml"
+    ).read_text(encoding="utf-8")
 
 
 def _activated_enforcement_workflow(sha: str) -> str:

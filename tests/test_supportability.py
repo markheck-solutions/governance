@@ -865,7 +865,9 @@ class SupportabilityGateTests(unittest.TestCase):
             repo = Path(tmp)
             workflow_dir = repo / ".github/workflows"
             workflow_dir.mkdir(parents=True)
-            source = self.root / ".github/workflows/supportability-enforcement.yml"
+            source = (
+                self.root / "fixtures/supportability-enforcement-legacy-request.yml"
+            )
             base = source.read_text(encoding="utf-8")
             fixture = (
                 self.root / "fixtures/supportability-enforcement-receipt-activated.yml"

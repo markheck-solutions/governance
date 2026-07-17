@@ -174,6 +174,12 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-gate.yml"],
         )
         enforcement = workflows["supportability-enforcement.yml"]
+        activated_fixture = (
+            (self.root / "fixtures/supportability-enforcement-receipt-activated.yml")
+            .read_text(encoding="utf-8")
+            .replace("2" * 40, "b86a0c94744f81c1a7799129e0b2c9215100329e")
+        )
+        self.assertEqual(enforcement, activated_fixture)
         self.assertIn("pull_request_target:", enforcement)
         self.assertNotIn("pull_request_review:", enforcement)
         self.assertNotIn("issue_comment:", enforcement)
@@ -185,7 +191,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("@codex review", enforcement)
         self.assertIn("Governance review request for exact head", enforcement)
         self.assertIn("issues: write", enforcement)
-        self.assertIn("if ! gh api --method POST", enforcement)
         self.assertIn("Codex review request transport unavailable", enforcement)
         self.assertIn("AI_REVIEW_UNAVAILABLE", enforcement)
         self.assertIn("needs: request-codex-review", enforcement)
@@ -207,9 +212,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             protected_refs,
             [
-                ("supportability-gate", "b038d8c3a5e9bde400c5031c8c09f63b0affdb5e"),
-                ("supportability-gate", "b038d8c3a5e9bde400c5031c8c09f63b0affdb5e"),
-                ("delivery-receipt", "b038d8c3a5e9bde400c5031c8c09f63b0affdb5e"),
+                ("supportability-gate", "b86a0c94744f81c1a7799129e0b2c9215100329e"),
+                ("supportability-gate", "b86a0c94744f81c1a7799129e0b2c9215100329e"),
+                ("delivery-receipt", "b86a0c94744f81c1a7799129e0b2c9215100329e"),
             ],
         )
         self.assertNotIn(
@@ -271,7 +276,7 @@ class WorkflowTests(unittest.TestCase):
             "  delivery-receipt:", 1
         )
         self.assertIn(
-            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@b038d8c3a5e9bde400c5031c8c09f63b0affdb5e",
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@b86a0c94744f81c1a7799129e0b2c9215100329e",
             baseline_block,
         )
         self.assertIn(
@@ -281,10 +286,10 @@ class WorkflowTests(unittest.TestCase):
             "target-head-sha: ${{ github.event.pull_request.head.sha }}", baseline_block
         )
         self.assertIn(
-            "governance-ref: b038d8c3a5e9bde400c5031c8c09f63b0affdb5e", baseline_block
+            "governance-ref: b86a0c94744f81c1a7799129e0b2c9215100329e", baseline_block
         )
         self.assertIn(
-            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@b038d8c3a5e9bde400c5031c8c09f63b0affdb5e",
+            "uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@b86a0c94744f81c1a7799129e0b2c9215100329e",
             candidate_block,
         )
         self.assertIn(
@@ -292,7 +297,7 @@ class WorkflowTests(unittest.TestCase):
             candidate_block,
         )
         self.assertIn(
-            "governance-ref: b038d8c3a5e9bde400c5031c8c09f63b0affdb5e", candidate_block
+            "governance-ref: b86a0c94744f81c1a7799129e0b2c9215100329e", candidate_block
         )
         self.assertNotIn(
             "governance-ref: ${{ github.event.pull_request.head.sha }}", enforcement
@@ -302,7 +307,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("candidate-supportability-artifact-id", delivery_block)
         self.assertIn("candidate-supportability-artifact-digest", delivery_block)
         self.assertIn(
-            "governance-ref: b038d8c3a5e9bde400c5031c8c09f63b0affdb5e", delivery_block
+            "governance-ref: b86a0c94744f81c1a7799129e0b2c9215100329e", delivery_block
         )
         self.assertIn(
             "if: ${{ github.event.pull_request.base.ref == 'main' }}",
@@ -806,7 +811,7 @@ class ReusableWorkflowTests(unittest.TestCase):
                 ).stdout.strip()
 
             legacy = (
-                self.root / ".github/workflows/supportability-enforcement.yml"
+                self.root / "fixtures/supportability-enforcement-legacy-request.yml"
             ).read_text(encoding="utf-8")
             legacy_pin = re.search(r"(?<=@)[0-9a-f]{40}", legacy)
             self.assertIsNotNone(legacy_pin)
