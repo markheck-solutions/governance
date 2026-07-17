@@ -295,6 +295,13 @@ jobs:
               ) != 3:
                   print("Legacy request caller pin shape is invalid", file=sys.stderr)
                   raise SystemExit(64)
+              caller_pins = sha_ref.findall(base_workflow) + [
+                  match[1] for match in governance_ref.findall(base_workflow)
+              ]
+              permitted_transition_pins = {os.environ["GOVERNANCE_REF"]}
+              if set(caller_pins) != permitted_transition_pins:
+                  print("Legacy request caller pins are not bound", file=sys.stderr)
+                  raise SystemExit(64)
               normalized = sha_ref.sub("<PIN>", base_workflow)
               normalized = governance_ref.sub(r"\1<PIN>\3", normalized)
               normalized_digest = hashlib.sha256(normalized.encode()).hexdigest()

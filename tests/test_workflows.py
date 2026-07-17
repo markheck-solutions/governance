@@ -796,6 +796,9 @@ class ReusableWorkflowTests(unittest.TestCase):
             legacy = (
                 self.root / ".github/workflows/supportability-enforcement.yml"
             ).read_text(encoding="utf-8")
+            legacy_pin = re.search(r"(?<=@)[0-9a-f]{40}", legacy)
+            self.assertIsNotNone(legacy_pin)
+            legacy_pin_text = legacy_pin.group(0)
             legacy_sha = commit_caller(legacy, "legacy")
             empty_receipt = {
                 "REQUEST_OUTCOME": "",
@@ -814,7 +817,7 @@ class ReusableWorkflowTests(unittest.TestCase):
                 "TARGET_REPOSITORY": "markheck-solutions/governance",
                 "TARGET_BASE_SHA": legacy_sha,
                 "TARGET_HEAD_SHA": "b" * 40,
-                "GOVERNANCE_REF": "c" * 40,
+                "GOVERNANCE_REF": legacy_pin_text,
                 "TARGET_PR_NUMBER": "57",
                 "ARTIFACT_NAME": "candidate-supportability-gate-evidence",
                 "CONFIG_PATH": ".github/governance/supportability.yml",
@@ -861,10 +864,39 @@ class ReusableWorkflowTests(unittest.TestCase):
                 },
                 "wrong event": {"REQUEST_EVENT_NAME": "pull_request"},
                 "rerun": {"REQUEST_RUN_ATTEMPT": "2"},
+                "wrong governance ref": {"GOVERNANCE_REF": "c" * 40},
             }
             for name, changes in negative_cases.items():
                 with self.subTest(name=name):
                     self.assertEqual(run(changes).returncode, 64)
+
+            rotated_pin = "d" * 40
+            rotated = re.sub(r"(?<=@)[0-9a-f]{40}", rotated_pin, legacy)
+            rotated = re.sub(
+                r"(?m)(^\s+governance-ref:\s+)[0-9a-f]{40}(\s*$)",
+                rf"\g<1>{rotated_pin}\2",
+                rotated,
+            )
+            rotated_sha = commit_caller(rotated, "rotated")
+            rotated_context = {
+                "TARGET_BASE_SHA": rotated_sha,
+                "REQUEST_WORKFLOW_SHA": rotated_sha,
+                "GOVERNANCE_REF": rotated_pin,
+            }
+            self.assertEqual(run(rotated_context).returncode, 0)
+
+            mixed = rotated.replace("@" + rotated_pin, "@" + "e" * 40, 1)
+            mixed_sha = commit_caller(mixed, "mixed")
+            self.assertEqual(
+                run(
+                    {
+                        "TARGET_BASE_SHA": mixed_sha,
+                        "REQUEST_WORKFLOW_SHA": mixed_sha,
+                        "GOVERNANCE_REF": rotated_pin,
+                    }
+                ).returncode,
+                64,
+            )
 
             activated = (
                 self.root / "fixtures/supportability-enforcement-receipt-activated.yml"
@@ -875,6 +907,7 @@ class ReusableWorkflowTests(unittest.TestCase):
                     {
                         "TARGET_BASE_SHA": activated_sha,
                         "REQUEST_WORKFLOW_SHA": activated_sha,
+                        "GOVERNANCE_REF": "2" * 40,
                     }
                 ).returncode,
                 64,
