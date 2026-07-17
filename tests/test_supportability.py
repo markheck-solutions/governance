@@ -724,6 +724,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 "governance_eval/codex_review_gate.py",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
+                "tests/test_codex_connector_collector.py",
                 "tests/test_codex_connector_evidence.py",
                 "tests/test_codex_review_gate.py",
                 "tests/test_supportability.py",
