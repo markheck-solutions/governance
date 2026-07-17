@@ -79,11 +79,114 @@ _CONNECTOR_APP = {
     "node_id": "A_kwHOAOQ6Gs4AEXij",
     "slug": "chatgpt-codex-connector",
 }
+_GITHUB_ACTIONS_USER = {
+    "login": "github-actions[bot]",
+    "id": 41898282,
+    "node_id": "MDM6Qm90NDE4OTgyODI=",
+    "type": "Bot",
+}
+_GITHUB_ACTIONS_APP = {
+    "id": 15368,
+    "node_id": "MDM6QXBwMTUzNjg=",
+    "slug": "github-actions",
+}
+_PROTECTED_REQUEST_WORKFLOW_PATH = ".github/workflows/supportability-enforcement.yml"
+_AUTOMATIC_REQUEST_EVENT_ACTIONS = frozenset(
+    {"opened", "reopened", "synchronize", "ready_for_review"}
+)
 _CONNECTOR_RESULT_IDENTITY = {
     "login": _CONNECTOR_USER["login"],
     "user_id": _CONNECTOR_USER["id"],
     "user_node_id": _CONNECTOR_USER["node_id"],
 }
+
+
+@dataclass(frozen=True)
+class TrustedWorkflowRequestReceipt:
+    workflow_ref: str
+    workflow_sha: str
+    event_name: str
+    event_action: str
+    run_id: int
+    run_attempt: int
+    repository_id: int
+    repository_full_name: str
+    pull_request_number: int
+    head_sha: str
+    review_window_started_at: str
+    job_id: str
+    request_endpoint: str
+    request_body_sha256: str
+    outcome: str
+    transport_exit_code: int
+    transport_error_sha256: str | None
+    comment_id: int | None
+    comment_created_at: str | None
+
+    def __post_init__(self) -> None:
+        expected_workflow_ref = (
+            f"{self.repository_full_name}/{_PROTECTED_REQUEST_WORKFLOW_PATH}"
+            "@refs/heads/main"
+        )
+        if self.workflow_ref != expected_workflow_ref:
+            raise ValueError("workflow request ref is not the protected caller")
+        if not _SHA_RE.fullmatch(self.workflow_sha):
+            raise ValueError("workflow request commit identity is invalid")
+        if self.event_name != "pull_request_target":
+            raise ValueError("workflow request event is not automatic")
+        if self.event_action not in _AUTOMATIC_REQUEST_EVENT_ACTIONS:
+            raise ValueError("workflow request event action is invalid")
+        if not _positive_int(self.run_id):
+            raise ValueError("workflow request run ID is invalid")
+        if not _positive_int(self.run_attempt) or self.run_attempt != 1:
+            raise ValueError("workflow request must come from the first run attempt")
+        if not _positive_int(self.repository_id):
+            raise ValueError("workflow request repository ID is invalid")
+        if not _REPOSITORY_RE.fullmatch(self.repository_full_name):
+            raise ValueError("workflow request repository name is invalid")
+        if not _positive_int(self.pull_request_number):
+            raise ValueError("workflow request pull request number is invalid")
+        if not _SHA_RE.fullmatch(self.head_sha):
+            raise ValueError("workflow request head identity is invalid")
+        if not _valid_timestamp(self.review_window_started_at):
+            raise ValueError("workflow request review window is invalid")
+        if self.job_id != "request-codex-review":
+            raise ValueError("workflow request job identity is invalid")
+        expected_endpoint = (
+            f"repos/{self.repository_full_name}/issues/"
+            f"{self.pull_request_number}/comments"
+        )
+        if self.request_endpoint != expected_endpoint:
+            raise ValueError("workflow request endpoint is invalid")
+        if self.request_body_sha256 != _workflow_request_body_digest(self.head_sha):
+            raise ValueError("workflow request body digest is invalid")
+        valid_exit_code = (
+            isinstance(self.transport_exit_code, int)
+            and not isinstance(self.transport_exit_code, bool)
+            and 0 <= self.transport_exit_code <= 255
+        )
+        if not valid_exit_code:
+            raise ValueError("workflow request transport exit code is invalid")
+        if self.outcome == "POSTED":
+            if (
+                self.transport_exit_code != 0
+                or self.transport_error_sha256 is not None
+                or not _positive_int(self.comment_id)
+                or not isinstance(self.comment_created_at, str)
+                or not _valid_timestamp(self.comment_created_at)
+            ):
+                raise ValueError("posted workflow request receipt is invalid")
+        elif self.outcome == "TRANSPORT_UNAVAILABLE":
+            if (
+                self.transport_exit_code == 0
+                or not isinstance(self.transport_error_sha256, str)
+                or not _DIGEST_RE.fullmatch(self.transport_error_sha256)
+                or self.comment_id is not None
+                or self.comment_created_at is not None
+            ):
+                raise ValueError("unavailable workflow request receipt is invalid")
+        else:
+            raise ValueError("workflow request outcome is invalid")
 
 
 @dataclass(frozen=True)
@@ -100,6 +203,7 @@ class TrustedCodexConnectorContext:
     review_window_started_at: str
     review_deadline_at: str
     resolved_clean_commit_sha: str | None
+    workflow_request_receipt: TrustedWorkflowRequestReceipt | None = None
 
     def __post_init__(self) -> None:
         if not _DIGEST_RE.fullmatch(self.snapshot_file_sha256):
@@ -133,6 +237,35 @@ class TrustedCodexConnectorContext:
             self.resolved_clean_commit_sha
         ):
             raise ValueError("resolved clean commit identity is invalid")
+        request = self.workflow_request_receipt
+        if request is not None:
+            expected_identity = (
+                self.repository_id,
+                self.repository_full_name,
+                self.pull_request_number,
+                self.head_sha,
+            )
+            actual_identity = (
+                request.repository_id,
+                request.repository_full_name,
+                request.pull_request_number,
+                request.head_sha,
+            )
+            if actual_identity != expected_identity:
+                raise ValueError(
+                    "workflow request identity does not match trusted context"
+                )
+            if request.review_window_started_at != self.review_window_started_at:
+                raise ValueError(
+                    "workflow request review window does not match context"
+                )
+            if request.comment_created_at is not None and not _timestamp_in_window(
+                request.comment_created_at,
+                self.review_window_started_at,
+                self.review_deadline_at,
+                include_lower=True,
+            ):
+                raise ValueError("workflow request comment is outside review window")
 
 
 def evaluate_codex_connector_evidence(
@@ -221,6 +354,9 @@ def _evaluate(
         "snapshot_file_sha256": observed_digest,
         "normalized_snapshot_sha256": normalized_digest,
         "resolved_clean_commit_sha": trusted.resolved_clean_commit_sha,
+        "workflow_request_receipt": _workflow_request_record(
+            trusted.workflow_request_receipt
+        ),
         "connector_identity": deepcopy(_CONNECTOR_RESULT_IDENTITY),
         "review_state": review_state,
         "capability_status": "PASS" if passed else "BLOCK_TECHNICAL",
@@ -478,11 +614,16 @@ def _collection_reasons(
         )
     ):
         reasons.append("SNAPSHOT_ITEM_AFTER_CAPTURE")
-    if _manual_request_present(
-        comments,
-        trusted.pull_request_created_at,
-        trusted.review_deadline_at,
+    request = trusted.workflow_request_receipt
+    if (
+        request is not None
+        and request.outcome == "POSTED"
+        and not any(
+            _authorized_workflow_request(comment, request) for comment in comments
+        )
     ):
+        reasons.append("WORKFLOW_REQUEST_RECEIPT_MISMATCH")
+    if _manual_request_present(comments, trusted):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
 
     def issue_in_window(value: str) -> bool:
@@ -734,20 +875,75 @@ def _safe_product_trailer(trailer: str) -> bool:
 
 def _manual_request_present(
     comments: list[dict[str, Any]],
-    pull_request_created_at: str,
-    deadline_at: str,
+    trusted: TrustedCodexConnectorContext,
 ) -> bool:
     return any(
         not _exact_connector_issue_comment(comment)
+        and not _authorized_workflow_request(comment, trusted.workflow_request_receipt)
         and _MANUAL_REQUEST_RE.search(comment["body"])
         and _timestamp_in_window(
             comment["created_at"],
-            pull_request_created_at,
-            deadline_at,
+            trusted.pull_request_created_at,
+            trusted.review_deadline_at,
             include_lower=True,
         )
         for comment in comments
     )
+
+
+def _authorized_workflow_request(
+    comment: dict[str, Any], receipt: TrustedWorkflowRequestReceipt | None
+) -> bool:
+    if receipt is None:
+        return False
+    if receipt.outcome != "POSTED":
+        return False
+    expected_body = _workflow_request_body(receipt.head_sha)
+    return bool(
+        comment.get("id") == receipt.comment_id
+        and comment.get("created_at") == receipt.comment_created_at
+        and comment.get("user") == _GITHUB_ACTIONS_USER
+        and comment.get("performed_via_github_app") == _GITHUB_ACTIONS_APP
+        and comment.get("body") == expected_body
+    )
+
+
+def _workflow_request_body(head_sha: str) -> str:
+    return f"@codex review\n\nGovernance review request for exact head `{head_sha}`."
+
+
+def _workflow_request_body_digest(head_sha: str) -> str:
+    return (
+        "sha256:" + sha256(_workflow_request_body(head_sha).encode("utf-8")).hexdigest()
+    )
+
+
+def _workflow_request_record(
+    receipt: TrustedWorkflowRequestReceipt | None,
+) -> dict[str, Any] | None:
+    if receipt is None:
+        return None
+    return {
+        "workflow_ref": receipt.workflow_ref,
+        "workflow_sha": receipt.workflow_sha,
+        "event_name": receipt.event_name,
+        "event_action": receipt.event_action,
+        "run_id": receipt.run_id,
+        "run_attempt": receipt.run_attempt,
+        "repository_id": receipt.repository_id,
+        "repository_full_name": receipt.repository_full_name,
+        "pull_request_number": receipt.pull_request_number,
+        "head_sha": receipt.head_sha,
+        "review_window_started_at": receipt.review_window_started_at,
+        "job_id": receipt.job_id,
+        "request_endpoint": receipt.request_endpoint,
+        "request_body_sha256": receipt.request_body_sha256,
+        "outcome": receipt.outcome,
+        "transport_exit_code": receipt.transport_exit_code,
+        "transport_error_sha256": receipt.transport_error_sha256,
+        "comment_id": receipt.comment_id,
+        "comment_created_at": receipt.comment_created_at,
+    }
 
 
 def _exact_connector_issue_comment(comment: dict[str, Any]) -> bool:
@@ -889,6 +1085,33 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
     ).total_seconds()
     if not 0 < review_window_seconds <= _MAX_REVIEW_WINDOW_SECONDS:
         raise ValueError("Codex connector evidence review window exceeds limit")
+    request_record = result["workflow_request_receipt"]
+    if request_record is not None:
+        request = TrustedWorkflowRequestReceipt(**request_record)
+        expected_identity = (
+            result["repository"]["id"],
+            result["repository"]["full_name"],
+            result["pull_request"]["number"],
+            result["pull_request"]["head_sha"],
+        )
+        actual_identity = (
+            request.repository_id,
+            request.repository_full_name,
+            request.pull_request_number,
+            request.head_sha,
+        )
+        comment_time_valid = request.comment_created_at is None or _timestamp_in_window(
+            request.comment_created_at,
+            result["review_window_started_at"],
+            result["review_deadline_at"],
+            include_lower=True,
+        )
+        if (
+            actual_identity != expected_identity
+            or request.review_window_started_at != result["review_window_started_at"]
+            or not comment_time_valid
+        ):
+            raise ValueError("Codex workflow request receipt binding is invalid")
     expected_hash = sha256_json({**result, "result_content_hash": ""})
     if result["result_content_hash"] != expected_hash:
         raise ValueError("Codex connector evidence result hash is invalid")

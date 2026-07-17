@@ -8,6 +8,7 @@ from hashlib import sha256
 from governance_eval.ai_review_gate import evaluate_ai_review_gate
 from governance_eval.codex_connector_evidence import (
     TrustedCodexConnectorContext,
+    TrustedWorkflowRequestReceipt,
     _classify_review_state,
     evaluate_codex_connector_evidence,
     serialize_codex_connector_evidence_result,
@@ -26,6 +27,10 @@ HEAD_SHA = "b" * 40
 EVALUATOR_SHA = "e" * 40
 ANCHOR = "2026-07-13T18:00:00Z"
 DEADLINE = "2026-07-13T18:05:00Z"
+WORKFLOW_SHA = "f" * 40
+WORKFLOW_REF = (
+    f"{REPOSITORY}/.github/workflows/supportability-enforcement.yml@refs/heads/main"
+)
 CONNECTOR_USER = {
     "login": "chatgpt-codex-connector[bot]",
     "id": 199175422,
@@ -307,12 +312,61 @@ def trusted(raw: bytes, **changes: object) -> TrustedCodexConnectorContext:
     return TrustedCodexConnectorContext(**values)  # type: ignore[arg-type]
 
 
+def workflow_request_receipt(
+    outcome: str = "POSTED",
+    **changes: object,
+) -> TrustedWorkflowRequestReceipt:
+    body = f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`."
+    values = {
+        "workflow_ref": WORKFLOW_REF,
+        "workflow_sha": WORKFLOW_SHA,
+        "event_name": "pull_request_target",
+        "event_action": "opened",
+        "run_id": 123456,
+        "run_attempt": 1,
+        "repository_id": REPOSITORY_ID,
+        "repository_full_name": REPOSITORY,
+        "pull_request_number": PR_NUMBER,
+        "head_sha": HEAD_SHA,
+        "review_window_started_at": ANCHOR,
+        "job_id": "request-codex-review",
+        "request_endpoint": f"repos/{REPOSITORY}/issues/{PR_NUMBER}/comments",
+        "request_body_sha256": "sha256:" + sha256(body.encode("utf-8")).hexdigest(),
+        "outcome": outcome,
+        "transport_exit_code": 0 if outcome == "POSTED" else 1,
+        "transport_error_sha256": (
+            None
+            if outcome == "POSTED"
+            else "sha256:" + sha256(b"transport unavailable").hexdigest()
+        ),
+        "comment_id": 201 if outcome == "POSTED" else None,
+        "comment_created_at": ("2026-07-13T18:01:00Z" if outcome == "POSTED" else None),
+    }
+    values.update(changes)
+    return TrustedWorkflowRequestReceipt(**values)  # type: ignore[arg-type]
+
+
 def evaluate(value: dict) -> dict:
     raw = raw_bytes(value)
     resolved = None if value.get("issue_reactions") else HEAD_SHA
     return evaluate_codex_connector_evidence(
         raw,
         trusted(raw, resolved_clean_commit_sha=resolved),
+    )
+
+
+def evaluate_with_workflow_request(
+    value: dict, receipt: TrustedWorkflowRequestReceipt
+) -> dict:
+    raw = raw_bytes(value)
+    resolved = None if value.get("issue_reactions") else HEAD_SHA
+    return evaluate_codex_connector_evidence(
+        raw,
+        trusted(
+            raw,
+            resolved_clean_commit_sha=resolved,
+            workflow_request_receipt=receipt,
+        ),
     )
 
 
@@ -1001,33 +1055,69 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         self.assertEqual(result["response"]["response_type"], "issue_comment")
         self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
 
-    def test_actions_request_without_trusted_receipt_is_manual_taint(self) -> None:
-        value = reaction_snapshot()
-        value["issue_comments"] = [
-            comment(
-                "@codex review\n\nGovernance review request for exact head "
-                f"`{HEAD_SHA}`.",
-                user={
-                    "login": "github-actions[bot]",
-                    "id": 41898282,
-                    "node_id": "MDM6Qm90NDE4OTgyODI=",
-                    "type": "Bot",
-                },
-                app={
-                    "id": 15368,
-                    "node_id": "MDM6QXBwMTUzNjg=",
-                    "slug": "github-actions",
-                },
-            )
-        ]
+    def test_actions_request_requires_exact_first_attempt_receipt(self) -> None:
+        request = comment(
+            f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`.",
+            comment_id=201,
+            user={
+                "login": "github-actions[bot]",
+                "id": 41898282,
+                "node_id": "MDM6Qm90NDE4OTgyODI=",
+                "type": "Bot",
+            },
+            app={
+                "id": 15368,
+                "node_id": "MDM6QXBwMTUzNjg=",
+                "slug": "github-actions",
+            },
+        )
+        request_only = reaction_snapshot()
+        request_only["issue_comments"] = [request]
 
-        result = evaluate(value)
+        result = evaluate(request_only)
 
         self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(
+            result["reasons"],
+            ["MANUAL_REVIEW_REQUEST_PRESENT", "NO_IN_WINDOW_RESPONSE"],
+        )
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["workflow_request_receipt"])
+
+        clean = snapshot()
+        clean["issue_comments"].append(deepcopy(request))
+        result = evaluate(clean)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
 
-        old_head = deepcopy(value)
+        receipt = workflow_request_receipt()
+        result = evaluate_with_workflow_request(request_only, receipt)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(result["reasons"], ["NO_IN_WINDOW_RESPONSE"])
+        self.assertEqual(
+            result["workflow_request_receipt"]["comment_id"],
+            request["id"],
+        )
+
+        result = evaluate_with_workflow_request(clean, receipt)
+        self.assertEqual(result["review_state"], "CLEAN")
+        self.assertEqual(result["capability_status"], "PASS")
+
+        unavailable_snapshot = reaction_snapshot()
+        unavailable_snapshot["issue_comments"] = []
+        unavailable_receipt = workflow_request_receipt("TRANSPORT_UNAVAILABLE")
+        result = evaluate_with_workflow_request(
+            unavailable_snapshot, unavailable_receipt
+        )
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(result["reasons"], ["NO_IN_WINDOW_RESPONSE"])
+        self.assertEqual(
+            result["workflow_request_receipt"]["outcome"],
+            "TRANSPORT_UNAVAILABLE",
+        )
+
+        old_head = deepcopy(request_only)
         old_head["issue_comments"][0]["body"] = (
             f"@codex review\n\nGovernance review request for exact head `{'c' * 40}`."
         )
@@ -1035,16 +1125,81 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
 
         for container, field, replacement in (
+            ("user", "login", "github-actions-lookalike[bot]"),
             ("user", "id", 1),
             ("user", "node_id", "BOT_lookalike"),
+            ("user", "type", "User"),
             ("performed_via_github_app", "id", 1),
             ("performed_via_github_app", "node_id", "APP_lookalike"),
+            ("performed_via_github_app", "slug", "github-actions-lookalike"),
         ):
             with self.subTest(container=container, field=field):
-                spoofed = deepcopy(value)
+                spoofed = deepcopy(request_only)
                 spoofed["issue_comments"][0][container][field] = replacement
                 result = evaluate(spoofed)
                 self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        owner_copy = deepcopy(request_only)
+        owner_copy["issue_comments"] = [human_comment(request["body"])]
+        result = evaluate(owner_copy)
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        duplicate = deepcopy(clean)
+        duplicate["issue_comments"].append(
+            {**deepcopy(request), "id": request["id"] + 1}
+        )
+        result = evaluate_with_workflow_request(duplicate, receipt)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        mismatched_comment = workflow_request_receipt(comment_id=999)
+        result = evaluate_with_workflow_request(clean, mismatched_comment)
+        self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
+        self.assertIn("WORKFLOW_REQUEST_RECEIPT_MISMATCH", result["reasons"])
+
+    def test_workflow_request_receipt_rejects_rerun_and_identity_evasions(
+        self,
+    ) -> None:
+        invalid_receipts = (
+            {"workflow_ref": WORKFLOW_REF.replace("supportability", "lookalike")},
+            {"workflow_sha": "not-a-sha"},
+            {"event_name": "workflow_dispatch"},
+            {"event_action": "edited"},
+            {"run_id": 0},
+            {"run_attempt": 2},
+            {"run_attempt": True},
+            {"job_id": "other-job"},
+            {"request_endpoint": "repos/other/repo/issues/31/comments"},
+            {"request_body_sha256": "sha256:" + "0" * 64},
+            {"outcome": "UNKNOWN"},
+            {"transport_exit_code": 1},
+            {"comment_id": 0},
+            {"comment_created_at": "not-a-time"},
+        )
+        for changes in invalid_receipts:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                workflow_request_receipt(**changes)
+
+        with self.assertRaises(ValueError):
+            workflow_request_receipt(
+                "TRANSPORT_UNAVAILABLE",
+                comment_id=201,
+            )
+
+        raw = raw_bytes(snapshot())
+        context_mismatches = (
+            {"repository_id": REPOSITORY_ID + 1},
+            {"pull_request_number": PR_NUMBER + 1},
+            {"head_sha": "c" * 40},
+            {"review_window_started_at": "2026-07-13T18:00:01Z"},
+            {"comment_created_at": "2026-07-13T18:05:01Z"},
+        )
+        for changes in context_mismatches:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                trusted(
+                    raw,
+                    workflow_request_receipt=workflow_request_receipt(**changes),
+                )
 
     def test_p0_p1_p2_findings_block_reaction_before_or_after_signal(self) -> None:
         for severity in ("P0", "P1", "P2"):
@@ -1781,6 +1936,7 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         validate_named("codex_connector_evidence_result_v3", result)
         prior_v2 = deepcopy(result)
         prior_v2["schema_version"] = "2.0"
+        prior_v2.pop("workflow_request_receipt")
         prior_v2["result_content_hash"] = sha256_json(
             {**prior_v2, "result_content_hash": ""}
         )
@@ -1820,6 +1976,49 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
                 )
                 with self.assertRaises(ValueError):
                     validate_codex_connector_evidence_result(candidate, raw, context)
+
+        requested = snapshot()
+        requested["issue_comments"].append(
+            comment(
+                "@codex review\n\nGovernance review request for exact head "
+                f"`{HEAD_SHA}`.",
+                comment_id=201,
+                user={
+                    "login": "github-actions[bot]",
+                    "id": 41898282,
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "type": "Bot",
+                },
+                app={
+                    "id": 15368,
+                    "node_id": "MDM6QXBwMTUzNjg=",
+                    "slug": "github-actions",
+                },
+            )
+        )
+        requested_raw = raw_bytes(requested)
+        requested_context = trusted(
+            requested_raw,
+            workflow_request_receipt=workflow_request_receipt(),
+        )
+        requested_result = evaluate_codex_connector_evidence(
+            requested_raw, requested_context
+        )
+        substituted = deepcopy(requested_result)
+        substituted["workflow_request_receipt"]["run_id"] += 1
+        substituted["result_content_hash"] = sha256_json(
+            {**substituted, "result_content_hash": ""}
+        )
+        with self.assertRaises(ValueError):
+            validate_codex_connector_evidence_result(
+                substituted, requested_raw, requested_context
+            )
+
+        rerun = deepcopy(requested_result)
+        rerun["workflow_request_receipt"]["run_attempt"] = 2
+        rerun["result_content_hash"] = sha256_json({**rerun, "result_content_hash": ""})
+        with self.assertRaises(ValueError):
+            serialize_codex_connector_evidence_result(rerun)
 
         quota = snapshot()
         quota["issue_comments"][0]["body"] = (

@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from governance_eval.codex_connector_evidence import TrustedWorkflowRequestReceipt
 from governance_eval.codex_review_gate import (
     bind_supportability_config,
     main,
@@ -23,6 +24,11 @@ HEAD = "b" * 40
 BASE = "a" * 40
 GOVERNANCE = "c" * 40
 CONFIG_SOURCE_PATH = ".github/governance/supportability.yml"
+WORKFLOW_SHA = "f" * 40
+WORKFLOW_REF = (
+    "owner/repo/.github/workflows/supportability-enforcement.yml@refs/heads/main"
+)
+REQUEST_CREATED_AT = "2026-07-13T00:01:00Z"
 
 
 def snapshot(captured_at: str) -> dict:
@@ -80,8 +86,8 @@ def binding_digest(raw: bytes) -> str:
     )
 
 
-def cli_args(output_dir: Path) -> list[str]:
-    return [
+def cli_args(output_dir: Path, *, include_request: bool = True) -> list[str]:
+    args = [
         "--repo",
         "owner/repo",
         "--pr",
@@ -97,6 +103,81 @@ def cli_args(output_dir: Path) -> list[str]:
         "--output-dir",
         str(output_dir),
     ]
+    if include_request:
+        args.extend(request_cli_args())
+    return args
+
+
+def workflow_request_receipt(
+    outcome: str = "POSTED",
+) -> TrustedWorkflowRequestReceipt:
+    body = f"@codex review\n\nGovernance review request for exact head `{HEAD}`."
+    return TrustedWorkflowRequestReceipt(
+        workflow_ref=WORKFLOW_REF,
+        workflow_sha=WORKFLOW_SHA,
+        event_name="pull_request_target",
+        event_action="opened",
+        run_id=123456,
+        run_attempt=1,
+        repository_id=1,
+        repository_full_name="owner/repo",
+        pull_request_number=1,
+        head_sha=HEAD,
+        review_window_started_at="2026-07-13T00:00:00Z",
+        job_id="request-codex-review",
+        request_endpoint="repos/owner/repo/issues/1/comments",
+        request_body_sha256="sha256:"
+        + hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        outcome=outcome,
+        transport_exit_code=0 if outcome == "POSTED" else 1,
+        transport_error_sha256=(
+            None
+            if outcome == "POSTED"
+            else "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest()
+        ),
+        comment_id=201 if outcome == "POSTED" else None,
+        comment_created_at=REQUEST_CREATED_AT if outcome == "POSTED" else None,
+    )
+
+
+def request_cli_args(outcome: str = "POSTED") -> list[str]:
+    args = [
+        "--request-workflow-ref",
+        WORKFLOW_REF,
+        "--request-workflow-sha",
+        WORKFLOW_SHA,
+        "--request-event-name",
+        "pull_request_target",
+        "--request-event-action",
+        "opened",
+        "--request-run-id",
+        "123456",
+        "--request-run-attempt",
+        "1",
+        "--request-repository-id",
+        "1",
+        "--request-outcome",
+        outcome,
+        "--request-transport-exit-code",
+        "0" if outcome == "POSTED" else "1",
+    ]
+    if outcome == "POSTED":
+        args.extend(
+            [
+                "--request-comment-id",
+                "201",
+                "--request-comment-created-at",
+                REQUEST_CREATED_AT,
+            ]
+        )
+    else:
+        args.extend(
+            [
+                "--request-transport-error-sha256",
+                "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest(),
+            ]
+        )
+    return args
 
 
 class CodexReviewGateTests(unittest.TestCase):
@@ -176,6 +257,7 @@ class CodexReviewGateTests(unittest.TestCase):
                 ]
             )
             sleeps: list[float] = []
+            request_receipt = workflow_request_receipt()
             result = run_codex_review_gate(
                 config_path=bound_path,
                 config_source_path=CONFIG_SOURCE_PATH,
@@ -187,11 +269,16 @@ class CodexReviewGateTests(unittest.TestCase):
                 governance_sha=GOVERNANCE,
                 review_window_started_at="2026-07-13T00:00:00Z",
                 output_dir=output_dir,
+                workflow_request_receipt=request_receipt,
                 collector=lambda *_: next(captures),
                 sleeper=sleeps.append,
             )
             self.assertEqual(result["owner_status"], "GREEN")
             self.assertEqual(sleeps, [62.0])
+            self.assertEqual(
+                evaluate.call_args.args[1].workflow_request_receipt,
+                request_receipt,
+            )
             self.assertEqual(
                 sorted(path.name for path in output_dir.iterdir()),
                 [
@@ -236,6 +323,7 @@ class CodexReviewGateTests(unittest.TestCase):
                     governance_sha=GOVERNANCE,
                     review_window_started_at="2026-07-13T00:00:00Z",
                     output_dir=root,
+                    workflow_request_receipt=workflow_request_receipt(),
                     collector=lambda *_: next(calls),
                     sleeper=lambda _: None,
                 )
@@ -274,6 +362,7 @@ class CodexReviewGateTests(unittest.TestCase):
                     governance_sha=GOVERNANCE,
                     review_window_started_at="invalid timestamp",
                     output_dir=output_dir,
+                    workflow_request_receipt=workflow_request_receipt(),
                     collector=collector,
                     sleeper=sleeper,
                 )
@@ -343,6 +432,7 @@ class CodexReviewGateTests(unittest.TestCase):
                         governance_sha=GOVERNANCE,
                         review_window_started_at="invalid timestamp",
                         output_dir=output_dir,
+                        workflow_request_receipt=workflow_request_receipt(),
                         collector=collector,
                         sleeper=sleeper,
                     )
@@ -489,6 +579,98 @@ class CodexReviewGateTests(unittest.TestCase):
                         "sha256:" + "d" * 64,
                     )
                     run_gate.reset_mock()
+
+    @patch(
+        "governance_eval.codex_review_gate.run_codex_review_gate",
+        return_value={"owner_status": "GREEN"},
+    )
+    def test_cli_passes_complete_first_attempt_request_receipt(
+        self, run_gate: Mock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = write_config(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--config-source-path",
+                        CONFIG_SOURCE_PATH,
+                        "--config-binding-digest",
+                        "sha256:" + "d" * 64,
+                        *cli_args(root / "out"),
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            run_gate.call_args.kwargs["workflow_request_receipt"],
+            workflow_request_receipt(),
+        )
+
+    @patch(
+        "governance_eval.codex_review_gate.run_codex_review_gate",
+        return_value={"owner_status": "GREEN"},
+    )
+    def test_cli_passes_transport_unavailable_request_receipt(
+        self, run_gate: Mock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = write_config(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--config-source-path",
+                        CONFIG_SOURCE_PATH,
+                        "--config-binding-digest",
+                        "sha256:" + "d" * 64,
+                        *cli_args(root / "out", include_request=False),
+                        *request_cli_args("TRANSPORT_UNAVAILABLE"),
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            run_gate.call_args.kwargs["workflow_request_receipt"],
+            workflow_request_receipt("TRANSPORT_UNAVAILABLE"),
+        )
+
+    @patch(
+        "governance_eval.codex_review_gate.run_codex_review_gate",
+        return_value={"owner_status": "GREEN"},
+    )
+    def test_cli_rejects_partial_or_rerun_request_receipt(self, run_gate: Mock) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = write_config(root)
+            base = [
+                "--config",
+                str(config_path),
+                "--config-source-path",
+                CONFIG_SOURCE_PATH,
+                "--config-binding-digest",
+                "sha256:" + "d" * 64,
+                *cli_args(root / "out", include_request=False),
+            ]
+            rerun_args = request_cli_args()
+            rerun_args[rerun_args.index("--request-run-attempt") + 1] = "2"
+            cases = (
+                [],
+                ["--request-workflow-ref", WORKFLOW_REF],
+                rerun_args,
+            )
+            for request_args in cases:
+                with self.subTest(request_args=request_args):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(SystemExit) as raised:
+                            main([*base, *request_args])
+                    self.assertEqual(raised.exception.code, 2)
+
+        run_gate.assert_not_called()
 
     def test_cli_unreadable_config_exits_two(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
