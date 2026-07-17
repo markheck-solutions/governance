@@ -49,7 +49,7 @@ def generate_adoption_bundle(
     config_source: Path,
     output_dir: Path,
 ) -> dict[str, Any]:
-    _validate_inputs(repository, governance_sha, output_dir)
+    _validate_inputs(governance_root, repository, governance_sha, output_dir)
     config = load_supportability_config(config_source)
     config_errors = validate_supportability_config(config)
     if config_errors:
@@ -87,15 +87,30 @@ def generate_adoption_bundle(
         (temporary / MANIFEST_PATH).write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+        temporary_result = validate_adoption_bundle(
+            governance_root=governance_root, bundle_dir=temporary
+        )
+        if not temporary_result["valid"]:
+            raise AdoptionError(
+                "generated bundle failed validation: "
+                + "; ".join(temporary_result["errors"])
+            )
         os.replace(temporary, output_dir)
     except Exception:
         if temporary.exists():
             shutil.rmtree(temporary)
         raise
-    return validate_adoption_bundle(
+    result = validate_adoption_bundle(
         governance_root=governance_root,
         bundle_dir=output_dir,
     )
+    if not result["valid"]:
+        shutil.rmtree(output_dir)
+        raise AdoptionError(
+            "generated bundle failed post-write validation: "
+            + "; ".join(result["errors"])
+        )
+    return result
 
 
 def validate_adoption_bundle(
@@ -104,6 +119,9 @@ def validate_adoption_bundle(
     errors: list[str] = []
     if bundle_dir.is_symlink() or _is_junction(bundle_dir):
         return {"valid": False, "errors": ["bundle directory must not be a link"]}
+    errors.extend(_bundle_inventory_errors(bundle_dir))
+    if any("link" in error or "special" in error for error in errors):
+        return {"valid": False, "errors": errors}
     manifest_path = bundle_dir / MANIFEST_PATH
     if not manifest_path.is_file():
         return {"valid": False, "errors": [f"missing {MANIFEST_PATH}"]}
@@ -159,6 +177,13 @@ def validate_adoption_bundle(
             errors.append(f"caller validation failed: {exc}")
     if manifest.get("required_contexts") != list(REQUIRED_CONTEXTS):
         errors.append("required-context mapping mismatch")
+    protection_path = bundle_dir / PROTECTION_PATH
+    repository = manifest.get("repository", "")
+    if protection_path.is_file() and REPOSITORY_RE.fullmatch(repository):
+        if protection_path.read_text(encoding="utf-8") != _protection_document(
+            repository
+        ):
+            errors.append("protection instructions differ from repository binding")
     return {
         "valid": not errors,
         "decision": ADOPTION_READY if not errors else "BLOCK_TECHNICAL",
@@ -211,7 +236,9 @@ def prove_adoption(
     return result
 
 
-def _validate_inputs(repository: str, governance_sha: str, output_dir: Path) -> None:
+def _validate_inputs(
+    governance_root: Path, repository: str, governance_sha: str, output_dir: Path
+) -> None:
     if not REPOSITORY_RE.fullmatch(repository):
         raise AdoptionError("repository must be owner/name")
     if not SHA_RE.fullmatch(governance_sha):
@@ -223,6 +250,9 @@ def _validate_inputs(repository: str, governance_sha: str, output_dir: Path) -> 
     for candidate in output_dir.parents:
         if candidate.exists() and (candidate.is_symlink() or _is_junction(candidate)):
             raise AdoptionError(f"output parent must not be a link: {candidate}")
+    containing_root = _containing_git_root(output_dir.parent)
+    if containing_root is not None and containing_root != governance_root.resolve():
+        raise AdoptionError("output directory must not be inside a target Git worktree")
 
 
 def _validate_standard(config: dict[str, Any], standard_bytes: bytes) -> None:
@@ -238,8 +268,18 @@ def _validate_standard(config: dict[str, Any], standard_bytes: bytes) -> None:
 def _git_bytes(root: Path, sha: str, relative: str) -> bytes:
     if not SHA_RE.fullmatch(sha):
         raise AdoptionError("invalid Governance SHA")
+    object_type = subprocess.run(
+        ["git", "--no-replace-objects", "cat-file", "-t", sha],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if object_type.returncode != 0 or object_type.stdout.strip() != "commit":
+        raise AdoptionError("Governance SHA must identify an exact commit object")
     completed = subprocess.run(
-        ["git", "show", f"{sha}:{relative}"],
+        ["git", "--no-replace-objects", "show", f"{sha}:{relative}"],
         cwd=root,
         check=False,
         capture_output=True,
@@ -315,3 +355,49 @@ def _manifest(
 def _is_junction(path: Path) -> bool:
     checker = getattr(path, "is_junction", None)
     return bool(checker and checker())
+
+
+def _bundle_inventory_errors(bundle_dir: Path) -> list[str]:
+    expected = {CONFIG_PATH, CALLER_PATH, STANDARD_PATH, PROTECTION_PATH, MANIFEST_PATH}
+    actual: set[str] = set()
+    errors: list[str] = []
+    if not bundle_dir.is_dir():
+        return ["bundle directory is missing"]
+    resolved_root = bundle_dir.resolve()
+    for current, directories, filenames in os.walk(bundle_dir, followlinks=False):
+        current_path = Path(current)
+        for name in directories:
+            path = current_path / name
+            if path.is_symlink() or _is_junction(path):
+                errors.append(
+                    f"bundle directory link forbidden: {path.relative_to(bundle_dir).as_posix()}"
+                )
+        for name in filenames:
+            path = current_path / name
+            relative = path.relative_to(bundle_dir).as_posix()
+            actual.add(relative)
+            if path.is_symlink() or _is_junction(path):
+                errors.append(f"bundle file link forbidden: {relative}")
+            elif not path.is_file():
+                errors.append(f"bundle special file forbidden: {relative}")
+            elif not path.resolve().is_relative_to(resolved_root):
+                errors.append(f"bundle file escapes root: {relative}")
+    if actual != expected:
+        errors.append("bundle disk file inventory mismatch")
+    return errors
+
+
+def _containing_git_root(path: Path) -> Path | None:
+    candidate = path
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+    completed = subprocess.run(
+        ["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if completed.returncode != 0:
+        return None
+    return Path(completed.stdout.strip()).resolve()

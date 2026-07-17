@@ -12,7 +12,6 @@ from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
 from governance_eval.architecture_gate import main as architecture_gate_main
-from governance_eval.adoption import AdoptionError
 from governance_eval.adoption import generate_adoption_bundle
 from governance_eval.adoption import prove_adoption
 from governance_eval.adoption import validate_adoption_bundle
@@ -96,7 +95,7 @@ def _run_adoption_command(args: argparse.Namespace, root: Path) -> int | None:
             )
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0 if result["valid"] else 1
-    except (AdoptionError, OSError) as exc:
+    except (ValueError, OSError) as exc:
         print(json.dumps({"decision": "BLOCK_TECHNICAL", "error": str(exc)}))
         return 2
     return None

@@ -4,7 +4,10 @@ import json
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from governance_eval.adoption import (
     ADOPTION_PROOF_PASS,
@@ -17,7 +20,7 @@ from governance_eval.adoption import (
     prove_adoption,
     validate_adoption_bundle,
 )
-from governance_eval.hashing import sha256_json
+from governance_eval.hashing import sha256_file, sha256_json
 from governance_eval.supportability import load_supportability_config
 from governance_eval.cli import main as cli_main
 
@@ -192,8 +195,6 @@ class AdoptionBundleTests(unittest.TestCase):
             )
             manifest_path = bundle / MANIFEST_PATH
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            from governance_eval.hashing import sha256_file
-
             manifest["files"][CALLER_PATH] = sha256_file(caller_path)
             unhashed = {
                 key: value
@@ -280,6 +281,127 @@ class AdoptionBundleTests(unittest.TestCase):
             self.assertEqual(cli_main(args), 0)
             (bundle / CALLER_PATH).write_text("tampered\n", encoding="utf-8")
             self.assertEqual(cli_main(args), 1)
+
+    def test_extra_file_and_protection_tamper_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            extra_bundle = parent / "extra"
+            self._generate(extra_bundle)
+            (extra_bundle / ".github/workflows/evil.yml").write_text(
+                "name: bypass\n", encoding="utf-8"
+            )
+            extra_result = validate_adoption_bundle(
+                governance_root=self.root, bundle_dir=extra_bundle
+            )
+            self.assertFalse(extra_result["valid"])
+            self.assertIn("bundle disk file inventory mismatch", extra_result["errors"])
+
+            protection_bundle = parent / "protection"
+            self._generate(protection_bundle)
+            protection = protection_bundle / "docs/governance-protection-setup.md"
+            protection.write_text("weakened\n", encoding="utf-8")
+            manifest_path = protection_bundle / MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["files"]["docs/governance-protection-setup.md"] = sha256_file(
+                protection
+            )
+            self._rehash_manifest(manifest)
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            protection_result = validate_adoption_bundle(
+                governance_root=self.root, bundle_dir=protection_bundle
+            )
+            self.assertFalse(protection_result["valid"])
+            self.assertIn(
+                "protection instructions differ from repository binding",
+                protection_result["errors"],
+            )
+
+    def test_child_symlink_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            self._generate(bundle)
+            protection = bundle / "docs/governance-protection-setup.md"
+            original_is_symlink = Path.is_symlink
+
+            def simulated_symlink(path: Path) -> bool:
+                return path == protection or original_is_symlink(path)
+
+            with patch.object(Path, "is_symlink", simulated_symlink):
+                result = validate_adoption_bundle(
+                    governance_root=self.root, bundle_dir=bundle
+                )
+            self.assertFalse(result["valid"])
+            self.assertIn(
+                "bundle file link forbidden: docs/governance-protection-setup.md",
+                result["errors"],
+            )
+
+    def test_tree_sha_and_target_worktree_output_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            tree_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=self.root,
+                check=True,
+                text=True,
+                capture_output=True,
+                timeout=10,
+            ).stdout.strip()
+            with self.assertRaisesRegex(AdoptionError, "exact commit object"):
+                generate_adoption_bundle(
+                    governance_root=self.root,
+                    repository="owner/repo",
+                    governance_sha=tree_sha,
+                    config_source=self.root / CONFIG_PATH,
+                    output_dir=parent / "tree-output",
+                )
+
+            target = parent / "target"
+            target.mkdir()
+            subprocess.run(
+                ["git", "init", "--quiet"], cwd=target, check=True, timeout=10
+            )
+            with self.assertRaisesRegex(AdoptionError, "target Git worktree"):
+                generate_adoption_bundle(
+                    governance_root=self.root,
+                    repository="owner/repo",
+                    governance_sha=self.sha,
+                    config_source=self.root / CONFIG_PATH,
+                    output_dir=target / "bundle",
+                )
+            self.assertEqual(sorted(path.name for path in target.iterdir()), [".git"])
+
+    def test_malformed_config_cli_returns_block_technical(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            malformed = parent / "malformed.json"
+            malformed.write_text("{", encoding="utf-8")
+            output = parent / "output"
+            captured = StringIO()
+            with redirect_stdout(captured):
+                exit_code = cli_main(
+                    [
+                        "adoption-bundle",
+                        "--root",
+                        str(self.root),
+                        "--repository",
+                        "owner/repo",
+                        "--governance-sha",
+                        self.sha,
+                        "--config-source",
+                        str(malformed),
+                        "--output-dir",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(
+                json.loads(captured.getvalue())["decision"], "BLOCK_TECHNICAL"
+            )
+            self.assertFalse(output.exists())
 
     def _generate(self, output: Path) -> dict:
         return generate_adoption_bundle(
