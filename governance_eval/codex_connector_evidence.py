@@ -252,7 +252,7 @@ class TrustedCodexConnectorContext:
     review_window_started_at: str
     review_deadline_at: str
     resolved_clean_commit_sha: str | None
-    workflow_request_receipt: TrustedWorkflowRequestReceipt | None = None
+    workflow_request_receipt: TrustedWorkflowRequestReceipt
 
     def __post_init__(self) -> None:
         if not _DIGEST_RE.fullmatch(self.snapshot_file_sha256):
@@ -287,31 +287,28 @@ class TrustedCodexConnectorContext:
         ):
             raise ValueError("resolved clean commit identity is invalid")
         request = self.workflow_request_receipt
-        if request is not None:
-            expected_identity = (
-                self.repository_id,
-                self.repository_full_name,
-                self.pull_request_number,
-                self.head_sha,
-            )
-            actual_identity = (
-                request.repository_id,
-                request.repository_full_name,
-                request.pull_request_number,
-                request.head_sha,
-            )
-            if actual_identity != expected_identity:
-                raise ValueError(
-                    "workflow request identity does not match trusted context"
-                )
-            if request.review_window_started_at != self.review_window_started_at:
-                raise ValueError(
-                    "workflow request review window does not match context"
-                )
-            if request.comment_created_at is not None and _timestamp(
-                request.comment_created_at
-            ) < _timestamp(self.review_window_started_at):
-                raise ValueError("workflow request comment predates review window")
+        if request is None:
+            raise ValueError("automatic workflow request receipt is required")
+        expected_identity = (
+            self.repository_id,
+            self.repository_full_name,
+            self.pull_request_number,
+            self.head_sha,
+        )
+        actual_identity = (
+            request.repository_id,
+            request.repository_full_name,
+            request.pull_request_number,
+            request.head_sha,
+        )
+        if actual_identity != expected_identity:
+            raise ValueError("workflow request identity does not match trusted context")
+        if request.review_window_started_at != self.review_window_started_at:
+            raise ValueError("workflow request review window does not match context")
+        if request.comment_created_at is not None and _timestamp(
+            request.comment_created_at
+        ) < _timestamp(self.review_window_started_at):
+            raise ValueError("workflow request comment predates review window")
 
 
 def evaluate_codex_connector_evidence(
@@ -345,8 +342,6 @@ def _evaluate(
     observed_digest = _file_digest(raw)
     snapshot, parse_reasons = _load_snapshot(raw)
     reasons = list(parse_reasons)
-    if trusted.workflow_request_receipt is None:
-        reasons.append("WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE")
     if observed_digest != trusted.snapshot_file_sha256:
         reasons.append("SNAPSHOT_FILE_DIGEST_MISMATCH")
     normalized_digest = None
@@ -444,7 +439,6 @@ def _classify_review_state(
         "REVIEWED_COMMIT_NOT_HEAD",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
         "WORKFLOW_REQUEST_RESPONSE_INVALID",
-        "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
     }:
         return "BLOCKING_FINDINGS_PRESENT"
     if reason_set and reason_set <= {
@@ -454,7 +448,6 @@ def _classify_review_state(
         "ONLY_LATE_RESPONSE",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
         "WORKFLOW_REQUEST_RESPONSE_INVALID",
-        "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     if reason_set & {
@@ -468,7 +461,6 @@ def _classify_review_state(
         "RESPONSE_BODY_UNRECOGNIZED",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
         "WORKFLOW_REQUEST_RESPONSE_INVALID",
-        "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     if "CONNECTOR_FAILURE_PRESENT" in reason_set and reason_set <= {
@@ -478,7 +470,6 @@ def _classify_review_state(
         "RESPONSE_BODY_UNRECOGNIZED",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
         "WORKFLOW_REQUEST_RESPONSE_INVALID",
-        "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     return "INVALID_EVIDENCE"
@@ -1210,30 +1201,28 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
     ).total_seconds()
     if not 0 < review_window_seconds <= _MAX_REVIEW_WINDOW_SECONDS:
         raise ValueError("Codex connector evidence review window exceeds limit")
-    request_record = result["workflow_request_receipt"]
-    if request_record is not None:
-        request = TrustedWorkflowRequestReceipt(**request_record)
-        expected_identity = (
-            result["repository"]["id"],
-            result["repository"]["full_name"],
-            result["pull_request"]["number"],
-            result["pull_request"]["head_sha"],
-        )
-        actual_identity = (
-            request.repository_id,
-            request.repository_full_name,
-            request.pull_request_number,
-            request.head_sha,
-        )
-        comment_time_valid = request.comment_created_at is None or _timestamp(
-            request.comment_created_at
-        ) >= _timestamp(result["review_window_started_at"])
-        if (
-            actual_identity != expected_identity
-            or request.review_window_started_at != result["review_window_started_at"]
-            or not comment_time_valid
-        ):
-            raise ValueError("Codex workflow request receipt binding is invalid")
+    request = TrustedWorkflowRequestReceipt(**result["workflow_request_receipt"])
+    expected_identity = (
+        result["repository"]["id"],
+        result["repository"]["full_name"],
+        result["pull_request"]["number"],
+        result["pull_request"]["head_sha"],
+    )
+    actual_identity = (
+        request.repository_id,
+        request.repository_full_name,
+        request.pull_request_number,
+        request.head_sha,
+    )
+    comment_time_valid = request.comment_created_at is None or _timestamp(
+        request.comment_created_at
+    ) >= _timestamp(result["review_window_started_at"])
+    if (
+        actual_identity != expected_identity
+        or request.review_window_started_at != result["review_window_started_at"]
+        or not comment_time_valid
+    ):
+        raise ValueError("Codex workflow request receipt binding is invalid")
     expected_hash = sha256_json({**result, "result_content_hash": ""})
     if result["result_content_hash"] != expected_hash:
         raise ValueError("Codex connector evidence result hash is invalid")

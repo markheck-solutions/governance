@@ -307,9 +307,17 @@ def trusted(raw: bytes, **changes: object) -> TrustedCodexConnectorContext:
         "review_window_started_at": ANCHOR,
         "review_deadline_at": DEADLINE,
         "resolved_clean_commit_sha": HEAD_SHA,
-        "workflow_request_receipt": workflow_request_receipt("TRANSPORT_UNAVAILABLE"),
     }
     values.update(changes)
+    if "workflow_request_receipt" not in changes:
+        values["workflow_request_receipt"] = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE",
+            repository_id=values["repository_id"],
+            repository_full_name=values["repository_full_name"],
+            pull_request_number=values["pull_request_number"],
+            head_sha=values["head_sha"],
+            review_window_started_at=values["review_window_started_at"],
+        )
     return TrustedCodexConnectorContext(**values)  # type: ignore[arg-type]
 
 
@@ -317,30 +325,37 @@ def workflow_request_receipt(
     outcome: str = "POSTED",
     **changes: object,
 ) -> TrustedWorkflowRequestReceipt:
-    body = f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`."
+    repository = str(changes.get("repository_full_name", REPOSITORY))
+    pull_request_number = int(changes.get("pull_request_number", PR_NUMBER))
+    head_sha = str(changes.get("head_sha", HEAD_SHA))
+    body = f"@codex review\n\nGovernance review request for exact head `{head_sha}`."
+    endpoint = f"repos/{repository}/issues/{pull_request_number}/comments"
     command = [
         "gh",
         "api",
         "--method",
         "POST",
-        f"repos/{REPOSITORY}/issues/{PR_NUMBER}/comments",
+        endpoint,
         "-f",
         f"body={body}",
     ]
     values = {
-        "workflow_ref": WORKFLOW_REF,
+        "workflow_ref": (
+            f"{repository}/.github/workflows/"
+            "supportability-enforcement.yml@refs/heads/main"
+        ),
         "workflow_sha": WORKFLOW_SHA,
         "event_name": "pull_request_target",
         "event_action": "opened",
         "run_id": 123456,
         "run_attempt": 1,
         "repository_id": REPOSITORY_ID,
-        "repository_full_name": REPOSITORY,
-        "pull_request_number": PR_NUMBER,
-        "head_sha": HEAD_SHA,
+        "repository_full_name": repository,
+        "pull_request_number": pull_request_number,
+        "head_sha": head_sha,
         "review_window_started_at": ANCHOR,
         "job_id": "request-codex-review",
-        "request_endpoint": f"repos/{REPOSITORY}/issues/{PR_NUMBER}/comments",
+        "request_endpoint": endpoint,
         "request_body_sha256": "sha256:" + sha256(body.encode("utf-8")).hexdigest(),
         "outcome": outcome,
         "transport_command": command,
@@ -386,19 +401,6 @@ def evaluate_with_workflow_request(
             raw,
             resolved_clean_commit_sha=resolved,
             workflow_request_receipt=receipt,
-        ),
-    )
-
-
-def evaluate_without_workflow_request(value: dict) -> dict:
-    raw = raw_bytes(value)
-    resolved = None if value.get("issue_reactions") else HEAD_SHA
-    return evaluate_codex_connector_evidence(
-        raw,
-        trusted(
-            raw,
-            resolved_clean_commit_sha=resolved,
-            workflow_request_receipt=None,
         ),
     )
 
@@ -1089,8 +1091,6 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         self.assertEqual(result["response"]["response_type"], "issue_comment")
         self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
 
-
-class CodexConnectorWorkflowRequestReceiptTests(unittest.TestCase):
     def test_actions_request_requires_exact_first_attempt_receipt(self) -> None:
         request = comment(
             f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`.",
@@ -1110,35 +1110,25 @@ class CodexConnectorWorkflowRequestReceiptTests(unittest.TestCase):
         request_only = reaction_snapshot()
         request_only["issue_comments"] = [request]
 
-        result = evaluate_without_workflow_request(request_only)
+        result = evaluate(request_only)
 
         self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertEqual(
             result["reasons"],
-            [
-                "MANUAL_REVIEW_REQUEST_PRESENT",
-                "NO_IN_WINDOW_RESPONSE",
-                "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
-            ],
+            ["MANUAL_REVIEW_REQUEST_PRESENT", "NO_IN_WINDOW_RESPONSE"],
         )
         self.assertIsNone(result["response"])
-        self.assertIsNone(result["workflow_request_receipt"])
+        self.assertEqual(
+            result["workflow_request_receipt"]["outcome"],
+            "TRANSPORT_UNAVAILABLE",
+        )
 
         clean = snapshot()
         clean["issue_comments"].append(deepcopy(request))
-        result = evaluate_without_workflow_request(clean)
+        result = evaluate(clean)
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
-        self.assertIn("WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE", result["reasons"])
-
-        blocking = snapshot()
-        blocking["pull_request_reviews"] = [connector_review()]
-        blocking["review_comments"] = [connector_review_comment(severity="P1")]
-        result = evaluate_without_workflow_request(blocking)
-        self.assertEqual(result["review_state"], "BLOCKING_FINDINGS_PRESENT")
-        self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
-        self.assertIn("WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE", result["reasons"])
 
         receipt = workflow_request_receipt()
         result = evaluate_with_workflow_request(request_only, receipt)
@@ -1533,7 +1523,6 @@ class CodexConnectorWorkflowRequestReceiptTests(unittest.TestCase):
             review_window_started_at="2026-07-13T22:07:10Z",
             review_deadline_at="2026-07-13T22:12:10Z",
             resolved_clean_commit_sha=None,
-            workflow_request_receipt=None,
         )
 
         result = evaluate_codex_connector_evidence(raw, context)
@@ -1894,31 +1883,18 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
 
         raw = raw_bytes(snapshot())
         mismatch_contexts = (
-            trusted(raw, repository_id=999, workflow_request_receipt=None),
-            trusted(
-                raw,
-                repository_full_name="evil/repo",
-                workflow_request_receipt=None,
-            ),
-            trusted(raw, pull_request_number=99, workflow_request_receipt=None),
-            trusted(raw, base_sha="c" * 40, workflow_request_receipt=None),
-            trusted(raw, head_sha="c" * 40, workflow_request_receipt=None),
+            trusted(raw, repository_id=999),
+            trusted(raw, repository_full_name="evil/repo"),
+            trusted(raw, pull_request_number=99),
+            trusted(raw, base_sha="c" * 40),
+            trusted(raw, head_sha="c" * 40),
             trusted(
                 raw,
                 review_window_started_at="2026-07-13T19:00:00Z",
                 review_deadline_at="2026-07-13T19:05:00Z",
-                workflow_request_receipt=None,
             ),
-            trusted(
-                raw,
-                snapshot_file_sha256="sha256:" + "0" * 64,
-                workflow_request_receipt=None,
-            ),
-            trusted(
-                raw,
-                resolved_clean_commit_sha="c" * 40,
-                workflow_request_receipt=None,
-            ),
+            trusted(raw, snapshot_file_sha256="sha256:" + "0" * 64),
+            trusted(raw, resolved_clean_commit_sha="c" * 40),
         )
         for context in mismatch_contexts:
             with self.subTest(context=context):
@@ -2205,6 +2181,29 @@ class WorkflowRequestLaunchFailureTests(unittest.TestCase):
 
 
 class CodexConnectorResultValidationTests(unittest.TestCase):
+    def test_context_and_v4_schema_reject_missing_request_receipt(self) -> None:
+        raw = raw_bytes(snapshot())
+        with self.assertRaisesRegex(
+            ValueError, "automatic workflow request receipt is required"
+        ):
+            trusted(raw, workflow_request_receipt=None)
+
+        context = trusted(raw)
+        result = evaluate_codex_connector_evidence(raw, context)
+        missing_receipt = deepcopy(result)
+        missing_receipt["workflow_request_receipt"] = None
+        missing_receipt["result_content_hash"] = sha256_json(
+            {**missing_receipt, "result_content_hash": ""}
+        )
+        with self.assertRaises(ValueError):
+            validate_named("codex_connector_evidence_result_v4", missing_receipt)
+        with self.assertRaises(ValueError):
+            validate_codex_connector_evidence_result(
+                missing_receipt,
+                raw,
+                context,
+            )
+
     def test_signal_normalized_transport_receipt_is_schema_valid(self) -> None:
         receipt = workflow_request_receipt(
             "TRANSPORT_UNAVAILABLE", transport_exit_code=143

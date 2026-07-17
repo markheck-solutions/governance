@@ -38,7 +38,7 @@
     "normalized_snapshot_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
     "resolved_clean_commit_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
     "workflow_request_receipt": {
-      "type": ["object", "null"],
+      "type": "object",
       "additionalProperties": false,
       "required": ["workflow_ref", "workflow_sha", "event_name", "event_action", "run_id", "run_attempt", "repository_id", "repository_full_name", "pull_request_number", "head_sha", "review_window_started_at", "job_id", "request_endpoint", "request_body_sha256", "outcome", "transport_command", "transport_started_at", "transport_completed_at", "transport_timeout_seconds", "transport_timed_out", "transport_exit_code", "transport_error_sha256", "response_validation_error_sha256", "comment_id", "comment_created_at"],
       "properties": {

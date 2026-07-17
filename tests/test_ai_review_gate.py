@@ -1,13 +1,60 @@
 from __future__ import annotations
 
 import unittest
+from hashlib import sha256
 from unittest.mock import patch
 
 from governance_eval.ai_review_gate import evaluate_ai_review_gate
-from governance_eval.codex_connector_evidence import TrustedCodexConnectorContext
+from governance_eval.codex_connector_evidence import (
+    TrustedCodexConnectorContext,
+    TrustedWorkflowRequestReceipt,
+)
 
 
 HEAD_SHA = "a" * 40
+
+
+def request_receipt() -> TrustedWorkflowRequestReceipt:
+    body = f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`."
+    endpoint = "repos/owner/repo/issues/1/comments"
+    return TrustedWorkflowRequestReceipt(
+        workflow_ref=(
+            "owner/repo/.github/workflows/"
+            "supportability-enforcement.yml@refs/heads/main"
+        ),
+        workflow_sha="e" * 40,
+        event_name="pull_request_target",
+        event_action="opened",
+        run_id=1,
+        run_attempt=1,
+        repository_id=1,
+        repository_full_name="owner/repo",
+        pull_request_number=1,
+        head_sha=HEAD_SHA,
+        review_window_started_at="2026-07-13T00:00:00Z",
+        job_id="request-codex-review",
+        request_endpoint=endpoint,
+        request_body_sha256="sha256:" + sha256(body.encode("utf-8")).hexdigest(),
+        outcome="TRANSPORT_UNAVAILABLE",
+        transport_command=[
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            endpoint,
+            "-f",
+            f"body={body}",
+        ],
+        transport_started_at="2026-07-13T00:00:01Z",
+        transport_completed_at="2026-07-13T00:00:02Z",
+        transport_timeout_seconds=30,
+        transport_timed_out=False,
+        transport_exit_code=1,
+        transport_error_sha256="sha256:" + sha256(b"unavailable").hexdigest(),
+        response_validation_error_sha256=None,
+        comment_id=None,
+        comment_created_at=None,
+    )
 
 
 class AiReviewGateTests(unittest.TestCase):
@@ -25,6 +72,7 @@ class AiReviewGateTests(unittest.TestCase):
             review_window_started_at="2026-07-13T00:00:00Z",
             review_deadline_at="2026-07-13T00:05:00Z",
             resolved_clean_commit_sha=HEAD_SHA,
+            workflow_request_receipt=request_receipt(),
         )
 
     def gate(
@@ -89,24 +137,6 @@ class AiReviewGateTests(unittest.TestCase):
         self.assertFalse(result["blocking_findings_present"])
         self.assertEqual(result["head_sha"], HEAD_SHA)
         self.assertEqual(result["unavailable_after_cutoff"], "non_blocking")
-
-    def test_missing_workflow_request_receipt_is_unavailable_not_approval(
-        self,
-    ) -> None:
-        result = self.gate(
-            {
-                "capability_status": "BLOCK_TECHNICAL",
-                "review_state": "AI_REVIEW_UNAVAILABLE",
-                "reviewed_head_sha": None,
-                "reconciled_head_sha": HEAD_SHA,
-                "reasons": ["WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE"],
-                "result_content_hash": "b" * 64,
-            }
-        )
-
-        self.assertEqual(result["owner_status"], "GREEN")
-        self.assertEqual(result["evidence_status"], "AI_REVIEW_UNAVAILABLE")
-        self.assertFalse(result["approval_provided"])
 
     def test_manual_request_is_unavailable_not_approval(self) -> None:
         result = self.gate(

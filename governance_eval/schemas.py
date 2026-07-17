@@ -32,7 +32,6 @@ SCHEMA_FILES = {
     "codex_connector_evidence_result_v4": "codex_connector_evidence_result.schema.json",
     "execution_plan": "execution_plan.schema.json",
     "execution_result": "execution_result.schema.json",
-    "subprocess_evidence": "subprocess_evidence.schema.json",
 }
 
 SCHEMA_VERSIONS = {

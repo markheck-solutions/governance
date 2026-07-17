@@ -28,33 +28,26 @@ on:
         required: true
         type: string
       request-outcome:
-        required: false
+        required: true
         type: string
-        default: ""
       request-transport-command-json:
-        required: false
+        required: true
         type: string
-        default: ""
       request-transport-started-at:
-        required: false
+        required: true
         type: string
-        default: ""
       request-transport-completed-at:
-        required: false
+        required: true
         type: string
-        default: ""
       request-transport-timeout-seconds:
-        required: false
+        required: true
         type: string
-        default: ""
       request-transport-timed-out:
-        required: false
+        required: true
         type: string
-        default: ""
       request-transport-exit-code:
-        required: false
+        required: true
         type: string
-        default: ""
       request-transport-error-sha256:
         required: false
         type: string
@@ -155,27 +148,14 @@ jobs:
         with:
           python-version: "3.12"
       - name: Validate workflow inputs
-        id: validate_inputs
         shell: bash
         run: |
           python - <<'PY'
-          import hashlib
           import json
           import os
           import re
           import sys
           from datetime import datetime
-          from pathlib import Path
-
-          sys.path.insert(0, "governance")
-
-          from governance_eval.subprocess_evidence import run_recorded_subprocess
-
-          caller_evidence_path = (
-              Path(os.environ["RUNNER_TEMP"])
-              / "legacy-request-caller-subprocess-evidence.json"
-          )
-          caller_evidence_path.unlink(missing_ok=True)
 
           sha_re = re.compile(r"^[0-9a-f]{40}$")
           ref_re = re.compile(r"^[0-9a-f]{40}$")
@@ -258,87 +238,6 @@ jobs:
           ]
           comment_id = os.environ["REQUEST_COMMENT_ID"]
           comment_created_at = os.environ["REQUEST_COMMENT_CREATED_AT"]
-          receipt_inputs = (
-              outcome,
-              command_json,
-              started_at,
-              completed_at,
-              timeout_seconds,
-              timed_out_text,
-              exit_code_text,
-              error_digest,
-              response_error_digest,
-              comment_id,
-              comment_created_at,
-          )
-          if not any(receipt_inputs):
-              if os.environ["TARGET_REPOSITORY"] != "markheck-solutions/governance":
-                  print("Legacy request receipt bridge is Governance-only", file=sys.stderr)
-                  raise SystemExit(64)
-              if os.environ["REQUEST_WORKFLOW_SHA"] != os.environ["TARGET_BASE_SHA"]:
-                  print("Legacy request caller must equal target base", file=sys.stderr)
-                  raise SystemExit(64)
-              caller_command = [
-                  "git",
-                  "-C",
-                  "target",
-                  "show",
-                  os.environ["TARGET_BASE_SHA"]
-                  + ":.github/workflows/supportability-enforcement.yml",
-              ]
-              caller_evidence, base_workflow_bytes = run_recorded_subprocess(
-                  caller_command,
-                  repository=os.environ["TARGET_REPOSITORY"],
-                  pull_request=int(os.environ["TARGET_PR_NUMBER"]),
-                  base_sha=os.environ["TARGET_BASE_SHA"],
-                  head_sha=os.environ["TARGET_HEAD_SHA"],
-                  evaluator_sha=os.environ["GOVERNANCE_REF"],
-                  caller_workflow_sha=os.environ["REQUEST_WORKFLOW_SHA"],
-                  output_path=caller_evidence_path,
-                  timeout_seconds=10,
-              )
-              if caller_evidence["decision"] != "PASS":
-                  print("Legacy request caller cannot be read", file=sys.stderr)
-                  raise SystemExit(64)
-              if caller_evidence["stdout"]["truncated"]:
-                  print("Legacy request caller evidence is truncated", file=sys.stderr)
-                  raise SystemExit(64)
-              try:
-                  base_workflow = base_workflow_bytes.decode("utf-8").replace(
-                      "\r\n", "\n"
-                  )
-              except UnicodeError:
-                  print("Legacy request caller cannot be decoded", file=sys.stderr)
-                  raise SystemExit(64)
-              if "\r" in base_workflow:
-                  print("Legacy request caller newlines are invalid", file=sys.stderr)
-                  raise SystemExit(64)
-              sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
-              governance_ref = re.compile(
-                  r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)"
-              )
-              if len(sha_ref.findall(base_workflow)) != 3 or len(
-                  governance_ref.findall(base_workflow)
-              ) != 3:
-                  print("Legacy request caller pin shape is invalid", file=sys.stderr)
-                  raise SystemExit(64)
-              caller_pins = sha_ref.findall(base_workflow) + [
-                  match[1] for match in governance_ref.findall(base_workflow)
-              ]
-              permitted_transition_pins = {os.environ["GOVERNANCE_REF"]}
-              if set(caller_pins) != permitted_transition_pins:
-                  print("Legacy request caller pins are not bound", file=sys.stderr)
-                  raise SystemExit(64)
-              normalized = sha_ref.sub("<PIN>", base_workflow)
-              normalized = governance_ref.sub(r"\1<PIN>\3", normalized)
-              normalized_digest = hashlib.sha256(normalized.encode()).hexdigest()
-              if normalized_digest != (
-                  "09f318698fa421b130f527b6f51376302"
-                  "ae7b6c7b2983641238ebd266136ddd9"
-              ):
-                  print("Legacy request caller digest is invalid", file=sys.stderr)
-                  raise SystemExit(64)
-              raise SystemExit(0)
           if exit_code_text == "":
               exit_code = None
           elif not exit_code_re.fullmatch(exit_code_text):
@@ -414,59 +313,6 @@ jobs:
               print("Invalid automatic request receipt", file=sys.stderr)
               raise SystemExit(64)
           PY
-          if [[ -z "$REQUEST_OUTCOME" ]]; then
-            echo "legacy-request-receipt=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "legacy-request-receipt=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Validate legacy caller subprocess evidence for upload
-        id: validate_legacy_caller_evidence
-        if: always()
-        shell: bash
-        working-directory: governance
-        env:
-          LEGACY_CALLER_EVIDENCE_PATH: ${{ runner.temp }}/legacy-request-caller-subprocess-evidence.json
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          from governance_eval.subprocess_evidence import (
-              validate_subprocess_evidence_integrity,
-          )
-
-          path = Path(os.environ["LEGACY_CALLER_EVIDENCE_PATH"])
-
-          def emit(value: str) -> None:
-              with Path(os.environ["GITHUB_OUTPUT"]).open(
-                  "a", encoding="utf-8", newline="\n"
-              ) as output:
-                  output.write(f"upload={value}\n")
-
-          if not path.exists():
-              emit("false")
-              raise SystemExit(0)
-          if path.is_symlink() or not path.is_file():
-              emit("false")
-              raise SystemExit("Legacy caller subprocess evidence is not a regular file")
-          try:
-              evidence = json.loads(path.read_text(encoding="utf-8"))
-              validate_subprocess_evidence_integrity(evidence)
-          except (KeyError, OSError, TypeError, ValueError):
-              emit("false")
-              path.unlink(missing_ok=True)
-              raise SystemExit("Legacy caller subprocess evidence is invalid")
-          emit("true")
-          PY
-      - name: Upload legacy caller subprocess evidence
-        if: always() && steps.validate_legacy_caller_evidence.outputs.upload == 'true'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        with:
-          name: ${{ inputs.artifact-name }}-legacy-caller-subprocess-evidence
-          path: ${{ runner.temp }}/legacy-request-caller-subprocess-evidence.json
-          if-no-files-found: error
-          retention-days: 90
       - name: Bind validated AI-review supportability config
         id: bind_ai_config
         shell: bash
@@ -567,43 +413,37 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          LEGACY_REQUEST_RECEIPT: ${{ steps.validate_inputs.outputs.legacy-request-receipt }}
         run: |
           cd governance
-          receipt_args=()
-          if [[ "$LEGACY_REQUEST_RECEIPT" == "true" ]]; then
-            receipt_args+=(--allow-legacy-caller-without-request-receipt)
-          else
-            receipt_args=(
-              --request-workflow-ref "$REQUEST_WORKFLOW_REF"
-              --request-workflow-sha "$REQUEST_WORKFLOW_SHA"
-              --request-event-name "$REQUEST_EVENT_NAME"
-              --request-event-action "$REQUEST_EVENT_ACTION"
-              --request-run-id "$REQUEST_RUN_ID"
-              --request-run-attempt "$REQUEST_RUN_ATTEMPT"
-              --request-repository-id "$REQUEST_REPOSITORY_ID"
-              --request-outcome "$REQUEST_OUTCOME"
-              --request-transport-command-json "$REQUEST_TRANSPORT_COMMAND_JSON"
-              --request-transport-started-at "$REQUEST_TRANSPORT_STARTED_AT"
-              --request-transport-completed-at "$REQUEST_TRANSPORT_COMPLETED_AT"
-              --request-transport-timeout-seconds "$REQUEST_TRANSPORT_TIMEOUT_SECONDS"
-              --request-transport-timed-out "$REQUEST_TRANSPORT_TIMED_OUT"
-              --request-transport-exit-code "$REQUEST_TRANSPORT_EXIT_CODE"
+          receipt_args=(
+            --request-workflow-ref "$REQUEST_WORKFLOW_REF"
+            --request-workflow-sha "$REQUEST_WORKFLOW_SHA"
+            --request-event-name "$REQUEST_EVENT_NAME"
+            --request-event-action "$REQUEST_EVENT_ACTION"
+            --request-run-id "$REQUEST_RUN_ID"
+            --request-run-attempt "$REQUEST_RUN_ATTEMPT"
+            --request-repository-id "$REQUEST_REPOSITORY_ID"
+            --request-outcome "$REQUEST_OUTCOME"
+            --request-transport-command-json "$REQUEST_TRANSPORT_COMMAND_JSON"
+            --request-transport-started-at "$REQUEST_TRANSPORT_STARTED_AT"
+            --request-transport-completed-at "$REQUEST_TRANSPORT_COMPLETED_AT"
+            --request-transport-timeout-seconds "$REQUEST_TRANSPORT_TIMEOUT_SECONDS"
+            --request-transport-timed-out "$REQUEST_TRANSPORT_TIMED_OUT"
+            --request-transport-exit-code "$REQUEST_TRANSPORT_EXIT_CODE"
+          )
+          if [[ "$REQUEST_OUTCOME" == "POSTED" ]]; then
+            receipt_args+=(
+              --request-comment-id "$REQUEST_COMMENT_ID"
+              --request-comment-created-at "$REQUEST_COMMENT_CREATED_AT"
             )
-            if [[ "$REQUEST_OUTCOME" == "POSTED" ]]; then
-              receipt_args+=(
-                --request-comment-id "$REQUEST_COMMENT_ID"
-                --request-comment-created-at "$REQUEST_COMMENT_CREATED_AT"
-              )
-            elif [[ "$REQUEST_OUTCOME" == "TRANSPORT_UNAVAILABLE" ]]; then
-              receipt_args+=(
-                --request-transport-error-sha256 "$REQUEST_TRANSPORT_ERROR_SHA256"
-              )
-            else
-              receipt_args+=(
-                --request-response-validation-error-sha256 "$REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"
-              )
-            fi
+          elif [[ "$REQUEST_OUTCOME" == "TRANSPORT_UNAVAILABLE" ]]; then
+            receipt_args+=(
+              --request-transport-error-sha256 "$REQUEST_TRANSPORT_ERROR_SHA256"
+            )
+          else
+            receipt_args+=(
+              --request-response-validation-error-sha256 "$REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"
+            )
           fi
           python -m governance_eval.codex_review_gate \
             --config "${{ steps.bind_ai_config.outputs.bound-config-path }}" \
