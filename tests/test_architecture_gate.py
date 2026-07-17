@@ -58,21 +58,16 @@ class ArchitectureGateTests(unittest.TestCase):
             )
         )
 
-    def test_request_receipt_slice_has_architecture_coverage(self) -> None:
+    def test_receipt_compatibility_bridge_has_architecture_coverage(self) -> None:
         changed_files = [
             ".github/workflows/supportability-gate.yml",
-            "fixtures/supportability-enforcement-receipt-activated.yml",
             "governance_eval/ai_review_gate.py",
             "governance_eval/codex_connector_evidence.py",
             "governance_eval/codex_review_gate.py",
-            "governance_eval/schemas.py",
-            "governance_eval/supportability.py",
-            "schemas/v4/codex_connector_evidence_result.schema.json",
             "tests/test_ai_review_gate.py",
             "tests/test_architecture_gate.py",
             "tests/test_codex_connector_evidence.py",
             "tests/test_codex_review_gate.py",
-            "tests/test_self_update_policy.py",
             "tests/test_supportability.py",
             "tests/test_workflows.py",
         ]
