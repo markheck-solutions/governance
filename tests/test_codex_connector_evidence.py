@@ -317,6 +317,15 @@ def workflow_request_receipt(
     **changes: object,
 ) -> TrustedWorkflowRequestReceipt:
     body = f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`."
+    command = [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{REPOSITORY}/issues/{PR_NUMBER}/comments",
+        "-f",
+        f"body={body}",
+    ]
     values = {
         "workflow_ref": WORKFLOW_REF,
         "workflow_sha": WORKFLOW_SHA,
@@ -333,11 +342,21 @@ def workflow_request_receipt(
         "request_endpoint": f"repos/{REPOSITORY}/issues/{PR_NUMBER}/comments",
         "request_body_sha256": "sha256:" + sha256(body.encode("utf-8")).hexdigest(),
         "outcome": outcome,
-        "transport_exit_code": 0 if outcome == "POSTED" else 1,
+        "transport_command": command,
+        "transport_started_at": "2026-07-13T18:00:30Z",
+        "transport_completed_at": "2026-07-13T18:00:31Z",
+        "transport_timeout_seconds": 30,
+        "transport_timed_out": False,
+        "transport_exit_code": (0 if outcome in {"POSTED", "RESPONSE_INVALID"} else 1),
         "transport_error_sha256": (
-            None
-            if outcome == "POSTED"
-            else "sha256:" + sha256(b"transport unavailable").hexdigest()
+            "sha256:" + sha256(b"transport unavailable").hexdigest()
+            if outcome == "TRANSPORT_UNAVAILABLE"
+            else None
+        ),
+        "response_validation_error_sha256": (
+            "sha256:" + sha256(b"INVALID_JSON\0{").hexdigest()
+            if outcome == "RESPONSE_INVALID"
+            else None
         ),
         "comment_id": 201 if outcome == "POSTED" else None,
         "comment_created_at": ("2026-07-13T18:01:00Z" if outcome == "POSTED" else None),
@@ -1117,7 +1136,24 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
             result["workflow_request_receipt"]["outcome"],
             "TRANSPORT_UNAVAILABLE",
         )
-
+        timeout_receipt = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE",
+            transport_exit_code=124,
+            transport_timed_out=True,
+        )
+        result = evaluate_with_workflow_request(unavailable_snapshot, timeout_receipt)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertTrue(result["workflow_request_receipt"]["transport_timed_out"])
+        child_exit_124_receipt = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE",
+            transport_exit_code=124,
+            transport_timed_out=False,
+        )
+        result = evaluate_with_workflow_request(
+            unavailable_snapshot, child_exit_124_receipt
+        )
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertFalse(result["workflow_request_receipt"]["transport_timed_out"])
         old_head = deepcopy(request_only)
         old_head["issue_comments"][0]["body"] = (
             f"@codex review\n\nGovernance review request for exact head `{'c' * 40}`."
@@ -1158,6 +1194,61 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
         self.assertIn("WORKFLOW_REQUEST_RECEIPT_MISMATCH", result["reasons"])
 
+        late = deepcopy(request_only)
+        late["issue_comments"][0]["created_at"] = "2026-07-13T18:05:01Z"
+        late["captured_at"] = "2026-07-13T18:05:02Z"
+        late_receipt = workflow_request_receipt(
+            comment_created_at="2026-07-13T18:05:01Z"
+        )
+        result = evaluate_with_workflow_request(late, late_receipt)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(
+            result["reasons"],
+            [
+                "NO_IN_WINDOW_RESPONSE",
+                "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
+            ],
+        )
+
+        late_failure = deepcopy(late)
+        late_failure["issue_comments"].append(
+            comment(
+                "You have reached your Codex usage limits for code reviews.",
+                comment_id=202,
+                created_at="2026-07-13T18:02:00Z",
+            )
+        )
+        raw = raw_bytes(late_failure)
+        context = trusted(raw, workflow_request_receipt=late_receipt)
+        result = evaluate_codex_connector_evidence(raw, context)
+        owner = evaluate_ai_review_gate(
+            HEAD_SHA,
+            codex_result=result,
+            raw_snapshot_bytes=raw,
+            trusted_context=context,
+        )
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(owner["owner_status"], "GREEN")
+        self.assertIn("CONNECTOR_FAILURE_PRESENT", result["reasons"])
+        self.assertIn("WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE", result["reasons"])
+
+        blocking_late = deepcopy(late)
+        blocking_late["pull_request_reviews"] = [connector_review()]
+        blocking_late["review_comments"] = [connector_review_comment(severity="P1")]
+        result = evaluate_with_workflow_request(blocking_late, late_receipt)
+        self.assertEqual(result["review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertIn("WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE", result["reasons"])
+
+        result = evaluate_with_workflow_request(
+            late,
+            workflow_request_receipt(
+                comment_id=999,
+                comment_created_at="2026-07-13T18:05:01Z",
+            ),
+        )
+        self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
+        self.assertIn("WORKFLOW_REQUEST_RECEIPT_MISMATCH", result["reasons"])
+
     def test_workflow_request_receipt_rejects_rerun_and_identity_evasions(
         self,
     ) -> None:
@@ -1173,7 +1264,16 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
             {"request_endpoint": "repos/other/repo/issues/31/comments"},
             {"request_body_sha256": "sha256:" + "0" * 64},
             {"outcome": "UNKNOWN"},
+            {"transport_command": ["gh", "api"]},
+            {"transport_started_at": "not-a-time"},
+            {"transport_completed_at": "2026-07-13T18:00:29Z"},
+            {"transport_timeout_seconds": 31},
+            {"transport_timeout_seconds": True},
+            {"transport_timed_out": "false"},
+            {"transport_timed_out": True},
+            {"transport_exit_code": None},
             {"transport_exit_code": 1},
+            {"response_validation_error_sha256": "sha256:" + "0" * 64},
             {"comment_id": 0},
             {"comment_created_at": "not-a-time"},
         )
@@ -1186,6 +1286,20 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
                 "TRANSPORT_UNAVAILABLE",
                 comment_id=201,
             )
+        with self.assertRaises(ValueError):
+            workflow_request_receipt(
+                "TRANSPORT_UNAVAILABLE",
+                transport_exit_code=1,
+                transport_timed_out=True,
+            )
+        for changes in (
+            {"response_validation_error_sha256": None},
+            {"transport_exit_code": None},
+            {"transport_exit_code": 1},
+            {"comment_id": 201},
+        ):
+            with self.subTest(response_invalid=changes), self.assertRaises(ValueError):
+                workflow_request_receipt("RESPONSE_INVALID", **changes)
 
         raw = raw_bytes(snapshot())
         context_mismatches = (
@@ -1193,7 +1307,7 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
             {"pull_request_number": PR_NUMBER + 1},
             {"head_sha": "c" * 40},
             {"review_window_started_at": "2026-07-13T18:00:01Z"},
-            {"comment_created_at": "2026-07-13T18:05:01Z"},
+            {"comment_created_at": "2026-07-13T17:59:59Z"},
         )
         for changes in context_mismatches:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -2019,6 +2133,91 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
             right["normalized_snapshot_sha256"],
         )
 
+
+class WorkflowRequestLaunchFailureTests(unittest.TestCase):
+    def test_launch_failure_receipt_is_schema_valid_unavailable(self) -> None:
+        unavailable_snapshot = reaction_snapshot()
+        unavailable_snapshot["issue_comments"] = []
+        receipt = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE",
+            transport_exit_code=None,
+        )
+
+        result = evaluate_with_workflow_request(unavailable_snapshot, receipt)
+
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIsNone(result["workflow_request_receipt"]["transport_exit_code"])
+
+    def test_launch_failure_receipt_rejects_contradictions(self) -> None:
+        for changes in (
+            {"transport_timed_out": True},
+            {"transport_error_sha256": None},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                workflow_request_receipt(
+                    "TRANSPORT_UNAVAILABLE",
+                    transport_exit_code=None,
+                    **changes,
+                )
+
+
+class CodexConnectorResultValidationTests(unittest.TestCase):
+    def test_signal_normalized_transport_receipt_is_schema_valid(self) -> None:
+        receipt = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE", transport_exit_code=143
+        )
+        self.assertEqual(receipt.transport_exit_code, 143)
+        with self.assertRaises(ValueError):
+            workflow_request_receipt("TRANSPORT_UNAVAILABLE", transport_exit_code=-15)
+
+    def test_invalid_request_response_is_reconciled_unavailable(self) -> None:
+        value = reaction_snapshot()
+        value["issue_comments"] = []
+        raw = raw_bytes(value)
+        context = trusted(
+            raw,
+            resolved_clean_commit_sha=None,
+            workflow_request_receipt=workflow_request_receipt("RESPONSE_INVALID"),
+        )
+
+        result = evaluate_codex_connector_evidence(raw, context)
+        owner = evaluate_ai_review_gate(
+            HEAD_SHA,
+            codex_result=result,
+            raw_snapshot_bytes=raw,
+            trusted_context=context,
+        )
+
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(
+            result["reasons"],
+            ["NO_IN_WINDOW_RESPONSE", "WORKFLOW_REQUEST_RESPONSE_INVALID"],
+        )
+        self.assertEqual(
+            result["workflow_request_receipt"]["response_validation_error_sha256"],
+            workflow_request_receipt(
+                "RESPONSE_INVALID"
+            ).response_validation_error_sha256,
+        )
+        self.assertEqual(owner["owner_status"], "GREEN")
+        self.assertFalse(owner["approval_provided"])
+
+        blocking = reaction_snapshot()
+        blocking["issue_comments"] = []
+        blocking["pull_request_reviews"] = [connector_review()]
+        blocking["review_comments"] = [connector_review_comment(severity="P1")]
+        blocking_raw = raw_bytes(blocking)
+        blocking_result = evaluate_codex_connector_evidence(
+            blocking_raw,
+            trusted(
+                blocking_raw,
+                resolved_clean_commit_sha=None,
+                workflow_request_receipt=workflow_request_receipt("RESPONSE_INVALID"),
+            ),
+        )
+        self.assertEqual(blocking_result["review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertIn("WORKFLOW_REQUEST_RESPONSE_INVALID", blocking_result["reasons"])
+
     def test_result_validation_replays_source_and_rejects_coherent_mutation(
         self,
     ) -> None:
@@ -2026,8 +2225,18 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         raw = raw_bytes(value)
         context = trusted(raw)
         result = evaluate_codex_connector_evidence(raw, context)
-        validate_named("codex_connector_evidence_result_v3", result)
-        prior_v2 = deepcopy(result)
+        validate_named("codex_connector_evidence_result_v4", result)
+        with self.assertRaises(ValueError):
+            validate_named("codex_connector_evidence_result_v3", result)
+        prior_v3 = deepcopy(result)
+        prior_v3["schema_version"] = "3.0"
+        prior_v3["result_content_hash"] = sha256_json(
+            {**prior_v3, "result_content_hash": ""}
+        )
+        validate_named("codex_connector_evidence_result_v3", prior_v3)
+        with self.assertRaises(ValueError):
+            validate_named("codex_connector_evidence_result_v4", prior_v3)
+        prior_v2 = deepcopy(prior_v3)
         prior_v2["schema_version"] = "2.0"
         prior_v2.pop("workflow_request_receipt")
         prior_v2["result_content_hash"] = sha256_json(
@@ -2151,6 +2360,10 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         self.assertEqual(
             load_schema("codex_connector_evidence_result_v3")["title"],
             "Codex Connector Evidence Result v3",
+        )
+        self.assertEqual(
+            load_schema("codex_connector_evidence_result_v4")["title"],
+            "Codex Connector Evidence Result v4",
         )
         raw = raw_bytes(snapshot())
         with self.assertRaises(ValueError):

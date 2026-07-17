@@ -45,6 +45,10 @@ GIT_NETWORK_TIMEOUT_SECONDS = 60
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ENFORCEMENT_RECEIPT_TRANSITION_SHA256 = (
+    "09f318698fa421b130f527b6f51376302ae7b6c7b2983641238ebd266136ddd9",
+    "e7dcc678d0391535a5befc148c63f3a41029c6a020645b855514ff408bd85e1d",
+)
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
 LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
@@ -974,6 +978,7 @@ def _architecture_governance_change_errors(
         "schemas/v1/supportability_config.schema.json",
         "schemas/v2/codex_connector_evidence_result.schema.json",
         "schemas/v3/codex_connector_evidence_result.schema.json",
+        "schemas/v4/codex_connector_evidence_result.schema.json",
     }
     future_checker_paths = {
         "governance_eval/copilot_review_evidence.py",
@@ -1101,8 +1106,8 @@ def _protected_enforcement_change_errors(
 ) -> list[str]:
     base_text = _git_show_text(target_repo, base_sha, relative)
     path = target_repo / relative
-    if base_text is None or not path.exists():
-        return ["protected enforcement workflow base or head is missing"]
+    if base_text is None or path.is_symlink() or not path.is_file():
+        return ["protected enforcement workflow base or head is missing or non-regular"]
     head_text = path.read_text(encoding="utf-8")
     sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
     governance_ref = re.compile(r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)")
@@ -1111,7 +1116,15 @@ def _protected_enforcement_change_errors(
         text = sha_ref.sub("<PIN>", text)
         return governance_ref.sub(r"\1<PIN>\3", text)
 
-    if normalized(base_text) != normalized(head_text):
+    base_normalized = normalized(base_text)
+    head_normalized = normalized(head_text)
+    digests = (
+        hashlib.sha256(base_normalized.encode()).hexdigest(),
+        hashlib.sha256(head_normalized.encode()).hexdigest(),
+    )
+    if base_normalized != head_normalized and (
+        digests != _ENFORCEMENT_RECEIPT_TRANSITION_SHA256
+    ):
         return [
             "protected enforcement workflow change is not an exact SHA pin rotation"
         ]

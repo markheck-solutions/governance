@@ -29,6 +29,21 @@ WORKFLOW_REF = (
     "owner/repo/.github/workflows/supportability-enforcement.yml@refs/heads/main"
 )
 REQUEST_CREATED_AT = "2026-07-13T00:01:00Z"
+TRANSPORT_STARTED_AT = "2026-07-13T00:00:30Z"
+TRANSPORT_COMPLETED_AT = "2026-07-13T00:00:31Z"
+
+
+def request_transport_command() -> list[str]:
+    body = f"@codex review\n\nGovernance review request for exact head `{HEAD}`."
+    return [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        "repos/owner/repo/issues/1/comments",
+        "-f",
+        f"body={body}",
+    ]
 
 
 def snapshot(captured_at: str) -> dict:
@@ -110,6 +125,8 @@ def cli_args(output_dir: Path, *, include_request: bool = True) -> list[str]:
 
 def workflow_request_receipt(
     outcome: str = "POSTED",
+    *,
+    launch_failed: bool = False,
 ) -> TrustedWorkflowRequestReceipt:
     body = f"@codex review\n\nGovernance review request for exact head `{HEAD}`."
     return TrustedWorkflowRequestReceipt(
@@ -129,18 +146,34 @@ def workflow_request_receipt(
         request_body_sha256="sha256:"
         + hashlib.sha256(body.encode("utf-8")).hexdigest(),
         outcome=outcome,
-        transport_exit_code=0 if outcome == "POSTED" else 1,
-        transport_error_sha256=(
+        transport_command=request_transport_command(),
+        transport_started_at=TRANSPORT_STARTED_AT,
+        transport_completed_at=TRANSPORT_COMPLETED_AT,
+        transport_timeout_seconds=30,
+        transport_timed_out=False,
+        transport_exit_code=(
             None
-            if outcome == "POSTED"
-            else "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest()
+            if launch_failed
+            else (0 if outcome in {"POSTED", "RESPONSE_INVALID"} else 1)
+        ),
+        transport_error_sha256=(
+            "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest()
+            if outcome == "TRANSPORT_UNAVAILABLE"
+            else None
+        ),
+        response_validation_error_sha256=(
+            "sha256:" + hashlib.sha256(b"INVALID_JSON\0{").hexdigest()
+            if outcome == "RESPONSE_INVALID"
+            else None
         ),
         comment_id=201 if outcome == "POSTED" else None,
         comment_created_at=REQUEST_CREATED_AT if outcome == "POSTED" else None,
     )
 
 
-def request_cli_args(outcome: str = "POSTED") -> list[str]:
+def request_cli_args(
+    outcome: str = "POSTED", *, launch_failed: bool = False
+) -> list[str]:
     args = [
         "--request-workflow-ref",
         WORKFLOW_REF,
@@ -158,8 +191,22 @@ def request_cli_args(outcome: str = "POSTED") -> list[str]:
         "1",
         "--request-outcome",
         outcome,
+        "--request-transport-command-json",
+        json.dumps(request_transport_command(), separators=(",", ":")),
+        "--request-transport-started-at",
+        TRANSPORT_STARTED_AT,
+        "--request-transport-completed-at",
+        TRANSPORT_COMPLETED_AT,
+        "--request-transport-timeout-seconds",
+        "30",
+        "--request-transport-timed-out",
+        "false",
         "--request-transport-exit-code",
-        "0" if outcome == "POSTED" else "1",
+        (
+            ""
+            if launch_failed
+            else ("0" if outcome in {"POSTED", "RESPONSE_INVALID"} else "1")
+        ),
     ]
     if outcome == "POSTED":
         args.extend(
@@ -170,11 +217,18 @@ def request_cli_args(outcome: str = "POSTED") -> list[str]:
                 REQUEST_CREATED_AT,
             ]
         )
-    else:
+    elif outcome == "TRANSPORT_UNAVAILABLE":
         args.extend(
             [
                 "--request-transport-error-sha256",
                 "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest(),
+            ]
+        )
+    else:
+        args.extend(
+            [
+                "--request-response-validation-error-sha256",
+                "sha256:" + hashlib.sha256(b"INVALID_JSON\0{").hexdigest(),
             ]
         )
     return args
@@ -643,6 +697,64 @@ class CodexReviewGateTests(unittest.TestCase):
         "governance_eval.codex_review_gate.run_codex_review_gate",
         return_value={"owner_status": "GREEN"},
     )
+    def test_cli_passes_invalid_response_request_receipt(self, run_gate: Mock) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = write_config(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--config-source-path",
+                        CONFIG_SOURCE_PATH,
+                        "--config-binding-digest",
+                        "sha256:" + "d" * 64,
+                        *cli_args(root / "out", include_request=False),
+                        *request_cli_args("RESPONSE_INVALID"),
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            run_gate.call_args.kwargs["workflow_request_receipt"],
+            workflow_request_receipt("RESPONSE_INVALID"),
+        )
+
+    @patch(
+        "governance_eval.codex_review_gate.run_codex_review_gate",
+        return_value={"owner_status": "GREEN"},
+    )
+    def test_cli_passes_launch_unavailable_request_receipt(
+        self, run_gate: Mock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = write_config(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--config-source-path",
+                        CONFIG_SOURCE_PATH,
+                        "--config-binding-digest",
+                        "sha256:" + "d" * 64,
+                        *cli_args(root / "out", include_request=False),
+                        *request_cli_args("TRANSPORT_UNAVAILABLE", launch_failed=True),
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            run_gate.call_args.kwargs["workflow_request_receipt"],
+            workflow_request_receipt("TRANSPORT_UNAVAILABLE", launch_failed=True),
+        )
+
+    @patch(
+        "governance_eval.codex_review_gate.run_codex_review_gate",
+        return_value={"owner_status": "GREEN"},
+    )
     def test_cli_rejects_partial_or_rerun_request_receipt(self, run_gate: Mock) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -658,10 +770,40 @@ class CodexReviewGateTests(unittest.TestCase):
             ]
             rerun_args = request_cli_args()
             rerun_args[rerun_args.index("--request-run-attempt") + 1] = "2"
+            malformed_command = request_cli_args()
+            malformed_command[
+                malformed_command.index("--request-transport-command-json") + 1
+            ] = "not-json"
+            reversed_timestamps = request_cli_args()
+            reversed_timestamps[
+                reversed_timestamps.index("--request-transport-completed-at") + 1
+            ] = "2026-07-13T00:00:29Z"
+            wrong_timeout = request_cli_args()
+            wrong_timeout[
+                wrong_timeout.index("--request-transport-timeout-seconds") + 1
+            ] = "31"
+            contradictory_timeout = request_cli_args()
+            contradictory_timeout[
+                contradictory_timeout.index("--request-transport-timed-out") + 1
+            ] = "true"
+            missing_posted_exit = request_cli_args()
+            missing_posted_exit[
+                missing_posted_exit.index("--request-transport-exit-code") + 1
+            ] = ""
+            malformed_exit_code = request_cli_args()
+            malformed_exit_code[
+                malformed_exit_code.index("--request-transport-exit-code") + 1
+            ] = "NONE"
             cases = (
                 [],
                 ["--request-workflow-ref", WORKFLOW_REF],
                 rerun_args,
+                malformed_command,
+                reversed_timestamps,
+                wrong_timeout,
+                contradictory_timeout,
+                missing_posted_exit,
+                malformed_exit_code,
             )
             for request_args in cases:
                 with self.subTest(request_args=request_args):

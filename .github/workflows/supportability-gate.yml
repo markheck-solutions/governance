@@ -30,10 +30,29 @@ on:
       request-outcome:
         required: true
         type: string
+      request-transport-command-json:
+        required: true
+        type: string
+      request-transport-started-at:
+        required: true
+        type: string
+      request-transport-completed-at:
+        required: true
+        type: string
+      request-transport-timeout-seconds:
+        required: true
+        type: string
+      request-transport-timed-out:
+        required: true
+        type: string
       request-transport-exit-code:
         required: true
         type: string
       request-transport-error-sha256:
+        required: false
+        type: string
+        default: ""
+      request-response-validation-error-sha256:
         required: false
         type: string
         default: ""
@@ -95,8 +114,14 @@ jobs:
       REQUEST_RUN_ATTEMPT: ${{ github.run_attempt }}
       REQUEST_REPOSITORY_ID: ${{ github.repository_id }}
       REQUEST_OUTCOME: ${{ inputs.request-outcome }}
+      REQUEST_TRANSPORT_COMMAND_JSON: ${{ inputs.request-transport-command-json }}
+      REQUEST_TRANSPORT_STARTED_AT: ${{ inputs.request-transport-started-at }}
+      REQUEST_TRANSPORT_COMPLETED_AT: ${{ inputs.request-transport-completed-at }}
+      REQUEST_TRANSPORT_TIMEOUT_SECONDS: ${{ inputs.request-transport-timeout-seconds }}
+      REQUEST_TRANSPORT_TIMED_OUT: ${{ inputs.request-transport-timed-out }}
       REQUEST_TRANSPORT_EXIT_CODE: ${{ inputs.request-transport-exit-code }}
       REQUEST_TRANSPORT_ERROR_SHA256: ${{ inputs.request-transport-error-sha256 }}
+      REQUEST_RESPONSE_VALIDATION_ERROR_SHA256: ${{ inputs.request-response-validation-error-sha256 }}
       REQUEST_COMMENT_ID: ${{ inputs.request-comment-id }}
       REQUEST_COMMENT_CREATED_AT: ${{ inputs.request-comment-created-at }}
       CONFIG_PATH: ${{ inputs.config-path }}
@@ -126,6 +151,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import json
           import os
           import re
           import sys
@@ -200,28 +226,84 @@ jobs:
               print("Invalid request repository ID", file=sys.stderr)
               raise SystemExit(64)
           outcome = os.environ["REQUEST_OUTCOME"]
+          command_json = os.environ["REQUEST_TRANSPORT_COMMAND_JSON"]
+          started_at = os.environ["REQUEST_TRANSPORT_STARTED_AT"]
+          completed_at = os.environ["REQUEST_TRANSPORT_COMPLETED_AT"]
+          timeout_seconds = os.environ["REQUEST_TRANSPORT_TIMEOUT_SECONDS"]
+          timed_out_text = os.environ["REQUEST_TRANSPORT_TIMED_OUT"]
           exit_code_text = os.environ["REQUEST_TRANSPORT_EXIT_CODE"]
           error_digest = os.environ["REQUEST_TRANSPORT_ERROR_SHA256"]
+          response_error_digest = os.environ[
+              "REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"
+          ]
           comment_id = os.environ["REQUEST_COMMENT_ID"]
           comment_created_at = os.environ["REQUEST_COMMENT_CREATED_AT"]
-          if not exit_code_re.fullmatch(exit_code_text):
+          if exit_code_text == "":
+              exit_code = None
+          elif not exit_code_re.fullmatch(exit_code_text):
               print("Invalid request transport exit code", file=sys.stderr)
               raise SystemExit(64)
-          exit_code = int(exit_code_text)
-          if exit_code > 255:
-              print("Invalid request transport exit code", file=sys.stderr)
-              raise SystemExit(64)
+          else:
+              exit_code = int(exit_code_text)
+              if exit_code > 255:
+                  print("Invalid request transport exit code", file=sys.stderr)
+                  raise SystemExit(64)
+          body = (
+              "@codex review\n\nGovernance review request for exact head "
+              f"`{os.environ['TARGET_HEAD_SHA']}`."
+          )
+          expected_command = [
+              "gh",
+              "api",
+              "--method",
+              "POST",
+              f"repos/{os.environ['TARGET_REPOSITORY']}/issues/"
+              f"{os.environ['TARGET_PR_NUMBER']}/comments",
+              "-f",
+              f"body={body}",
+          ]
+          try:
+              command = json.loads(command_json)
+          except json.JSONDecodeError:
+              command = None
+          canonical_command = json.dumps(expected_command, separators=(",", ":"))
+          transport_valid = (
+              command == expected_command
+              and command_json == canonical_command
+              and valid_timestamp(started_at)
+              and valid_timestamp(completed_at)
+              and datetime.strptime(completed_at, "%Y-%m-%dT%H:%M:%SZ")
+              >= datetime.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ")
+              and timeout_seconds == "30"
+              and timed_out_text in {"true", "false"}
+              and (timed_out_text != "true" or exit_code == 124)
+          )
           if outcome == "POSTED":
               valid = (
-                  exit_code == 0
+                  transport_valid
+                  and exit_code == 0
+                  and timed_out_text == "false"
                   and error_digest == ""
+                  and response_error_digest == ""
                   and positive_int_re.fullmatch(comment_id)
                   and valid_timestamp(comment_created_at)
               )
           elif outcome == "TRANSPORT_UNAVAILABLE":
               valid = (
-                  exit_code != 0
+                  transport_valid
+                  and (exit_code is None or exit_code != 0)
                   and digest_re.fullmatch(error_digest)
+                  and response_error_digest == ""
+                  and comment_id == ""
+                  and comment_created_at == ""
+              )
+          elif outcome == "RESPONSE_INVALID":
+              valid = (
+                  transport_valid
+                  and exit_code == 0
+                  and timed_out_text == "false"
+                  and error_digest == ""
+                  and digest_re.fullmatch(response_error_digest)
                   and comment_id == ""
                   and comment_created_at == ""
               )
@@ -342,6 +424,11 @@ jobs:
             --request-run-attempt "$REQUEST_RUN_ATTEMPT"
             --request-repository-id "$REQUEST_REPOSITORY_ID"
             --request-outcome "$REQUEST_OUTCOME"
+            --request-transport-command-json "$REQUEST_TRANSPORT_COMMAND_JSON"
+            --request-transport-started-at "$REQUEST_TRANSPORT_STARTED_AT"
+            --request-transport-completed-at "$REQUEST_TRANSPORT_COMPLETED_AT"
+            --request-transport-timeout-seconds "$REQUEST_TRANSPORT_TIMEOUT_SECONDS"
+            --request-transport-timed-out "$REQUEST_TRANSPORT_TIMED_OUT"
             --request-transport-exit-code "$REQUEST_TRANSPORT_EXIT_CODE"
           )
           if [[ "$REQUEST_OUTCOME" == "POSTED" ]]; then
@@ -349,9 +436,13 @@ jobs:
               --request-comment-id "$REQUEST_COMMENT_ID"
               --request-comment-created-at "$REQUEST_COMMENT_CREATED_AT"
             )
-          else
+          elif [[ "$REQUEST_OUTCOME" == "TRANSPORT_UNAVAILABLE" ]]; then
             receipt_args+=(
               --request-transport-error-sha256 "$REQUEST_TRANSPORT_ERROR_SHA256"
+            )
+          else
+            receipt_args+=(
+              --request-response-validation-error-sha256 "$REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"
             )
           fi
           python -m governance_eval.codex_review_gate \

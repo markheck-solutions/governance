@@ -686,7 +686,7 @@ class SupportabilityGateTests(unittest.TestCase):
     def test_gate_protects_active_codex_result_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
-            active_schema = "schemas/v3/codex_connector_evidence_result.schema.json"
+            active_schema = "schemas/v4/codex_connector_evidence_result.schema.json"
 
             result = run_supportability_gate(
                 repo / ".github/governance/supportability.yml",
@@ -719,15 +719,19 @@ class SupportabilityGateTests(unittest.TestCase):
             )
             changed_files = [
                 ".github/workflows/supportability-gate.yml",
+                "fixtures/supportability-enforcement-receipt-activated.yml",
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",
-                "schemas/v3/codex_connector_evidence_result.schema.json",
+                "governance_eval/schemas.py",
+                "governance_eval/supportability.py",
+                "schemas/v4/codex_connector_evidence_result.schema.json",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
                 "tests/test_codex_connector_collector.py",
                 "tests/test_codex_connector_evidence.py",
                 "tests/test_codex_review_gate.py",
+                "tests/test_self_update_policy.py",
                 "tests/test_supportability.py",
                 "tests/test_workflows.py",
             ]
@@ -855,6 +859,49 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertIn(
                 "protected enforcement workflow pins must equal trusted base SHA",
                 errors,
+            )
+
+    def test_protected_receipt_activation_accepts_only_reviewed_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow_dir = repo / ".github/workflows"
+            workflow_dir.mkdir(parents=True)
+            source = self.root / ".github/workflows/supportability-enforcement.yml"
+            base = source.read_text(encoding="utf-8")
+            fixture = (
+                self.root / "fixtures/supportability-enforcement-receipt-activated.yml"
+            ).read_text(encoding="utf-8")
+            trusted_sha = "2" * 40
+            activated = fixture
+            self.assertEqual(activated.count(trusted_sha), 6)
+            target = workflow_dir / "supportability-enforcement.yml"
+            target.write_text(activated, encoding="utf-8")
+
+            with mock.patch(
+                "governance_eval.supportability._git_show_text", return_value=base
+            ):
+                accepted = supportability_module._protected_enforcement_change_errors(
+                    repo,
+                    trusted_sha,
+                    ".github/workflows/supportability-enforcement.yml",
+                )
+                target.write_text(
+                    activated.replace("timeout=30", "timeout=31", 1),
+                    encoding="utf-8",
+                )
+                rejected = supportability_module._protected_enforcement_change_errors(
+                    repo,
+                    trusted_sha,
+                    ".github/workflows/supportability-enforcement.yml",
+                )
+
+            self.assertEqual(accepted, [])
+            self.assertEqual(
+                rejected,
+                [
+                    "protected enforcement workflow change is not an exact SHA "
+                    "pin rotation"
+                ],
             )
 
     def test_gate_blocks_existing_copilot_review_evidence_checker_change(self) -> None:

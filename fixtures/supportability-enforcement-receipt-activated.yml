@@ -1,0 +1,342 @@
+name: Supportability Enforcement
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  request-codex-review:
+    name: Request Codex Review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      request-outcome: ${{ steps.request.outputs.request-outcome }}
+      request-transport-command-json: ${{ steps.request.outputs.request-transport-command-json }}
+      request-transport-started-at: ${{ steps.request.outputs.request-transport-started-at }}
+      request-transport-completed-at: ${{ steps.request.outputs.request-transport-completed-at }}
+      request-transport-timeout-seconds: ${{ steps.request.outputs.request-transport-timeout-seconds }}
+      request-transport-timed-out: ${{ steps.request.outputs.request-transport-timed-out }}
+      request-transport-exit-code: ${{ steps.request.outputs.request-transport-exit-code }}
+      request-transport-error-sha256: ${{ steps.request.outputs.request-transport-error-sha256 }}
+      request-response-validation-error-sha256: ${{ steps.request.outputs.request-response-validation-error-sha256 }}
+      request-comment-id: ${{ steps.request.outputs.request-comment-id }}
+      request-comment-created-at: ${{ steps.request.outputs.request-comment-created-at }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      REPOSITORY: ${{ github.repository }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - name: Request exact-head Codex review
+        id: request
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import errno
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          from datetime import datetime, timezone
+          from hashlib import sha256
+          from pathlib import Path
+
+          head_sha = os.environ["HEAD_SHA"]
+          repository = os.environ["REPOSITORY"]
+          pr_number = os.environ["PR_NUMBER"]
+          if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+              raise SystemExit("Invalid pull-request head SHA")
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+              raise SystemExit("Invalid repository identity")
+          if not re.fullmatch(r"[1-9][0-9]*", pr_number):
+              raise SystemExit("Invalid pull-request number")
+          if os.environ["RUN_ATTEMPT"] != "1":
+              raise SystemExit("Automatic request must run only on attempt 1")
+
+          body = (
+              "@codex review\n\nGovernance review request for exact head "
+              f"`{head_sha}`."
+          )
+          command = [
+              "gh",
+              "api",
+              "--method",
+              "POST",
+              f"repos/{repository}/issues/{pr_number}/comments",
+              "-f",
+              f"body={body}",
+          ]
+          command_json = json.dumps(command, separators=(",", ":"))
+          transport_started_at = datetime.now(timezone.utc).replace(
+              microsecond=0
+          ).strftime("%Y-%m-%dT%H:%M:%SZ")
+          transport_timed_out = False
+          signal_description = ""
+          try:
+              completed = subprocess.run(
+                  command,
+                  check=False,
+                  capture_output=True,
+                  timeout=30,
+              )
+              stdout = completed.stdout
+              stderr = completed.stderr
+              exit_code = completed.returncode
+          except subprocess.TimeoutExpired as exc:
+              transport_timed_out = True
+              stdout = b""
+              stderr = exc.stderr or b""
+              if isinstance(stderr, str):
+                  stderr = stderr.encode("utf-8")
+              stderr += b"\nrequest timed out after 30 seconds"
+              exit_code = 124
+          except OSError as exc:
+              stdout = b""
+              error_number = exc.errno if type(exc.errno) is int else None
+              if isinstance(exc, FileNotFoundError) or error_number == errno.ENOENT:
+                  launch_category = "FILE_NOT_FOUND"
+              elif isinstance(exc, PermissionError) or error_number in {
+                  errno.EACCES,
+                  errno.EPERM,
+              }:
+                  launch_category = "PERMISSION_DENIED"
+              elif error_number == errno.ENOEXEC:
+                  launch_category = "EXEC_FORMAT_ERROR"
+              else:
+                  launch_category = "OTHER_OS_ERROR"
+              error_number_text = (
+                  str(error_number) if error_number is not None else "NONE"
+              )
+              stderr = (
+                  b"PROCESS_LAUNCH_OS_ERROR_V1\0"
+                  + launch_category.encode("ascii")
+                  + b"\0errno="
+                  + error_number_text.encode("ascii")
+              )
+              exit_code = None
+          if type(exit_code) is int and exit_code < 0:
+              signal_number = -exit_code
+              if not 1 <= signal_number <= 127:
+                  raise SystemExit("Invalid request transport signal")
+              if not isinstance(stderr, bytes):
+                  raise SystemExit("Invalid request transport stderr")
+              normalized_exit_code = 128 + signal_number
+              stderr += (
+                  f"\nrequest terminated by signal {signal_number}; "
+                  f"raw returncode {exit_code}; "
+                  f"normalized exit code {normalized_exit_code}"
+              ).encode("ascii")
+              signal_description = (
+                  f"; raw returncode {exit_code}; signal {signal_number}"
+              )
+              exit_code = normalized_exit_code
+          transport_completed_at = datetime.now(timezone.utc).replace(
+              microsecond=0
+          ).strftime("%Y-%m-%dT%H:%M:%SZ")
+          if exit_code is not None and (
+              type(exit_code) is not int or not 0 <= exit_code <= 255
+          ):
+              raise SystemExit("Invalid request transport exit code")
+          if not isinstance(stdout, bytes):
+              raise SystemExit("Invalid request transport stdout")
+          receipt_outputs = {
+              "request-transport-command-json": command_json,
+              "request-transport-started-at": transport_started_at,
+              "request-transport-completed-at": transport_completed_at,
+              "request-transport-timeout-seconds": "30",
+              "request-transport-timed-out": str(transport_timed_out).lower(),
+          }
+
+          if exit_code == 0:
+              response_failure = None
+              try:
+                  response_text = stdout.decode("utf-8")
+              except UnicodeError:
+                  response_failure = "INVALID_UTF8"
+              if response_failure is None:
+                  try:
+                      payload = json.loads(response_text)
+                  except json.JSONDecodeError:
+                      response_failure = "INVALID_JSON"
+              if response_failure is None and not isinstance(payload, dict):
+                  response_failure = "RESPONSE_NOT_OBJECT"
+              if response_failure is None:
+                  comment_id = payload.get("id")
+                  comment_created_at = payload.get("created_at")
+                  if type(comment_id) is not int or comment_id <= 0:
+                      response_failure = "INVALID_COMMENT_ID"
+              if response_failure is None:
+                  timestamp_valid = (
+                      isinstance(comment_created_at, str)
+                      and re.fullmatch(
+                          r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+                          r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+                          comment_created_at,
+                      )
+                  )
+                  try:
+                      if timestamp_valid:
+                          datetime.strptime(
+                              comment_created_at, "%Y-%m-%dT%H:%M:%SZ"
+                          )
+                  except ValueError:
+                      timestamp_valid = False
+                  if not timestamp_valid:
+                      response_failure = "INVALID_COMMENT_CREATED_AT"
+              if response_failure is None:
+                  outputs = {
+                      **receipt_outputs,
+                      "request-outcome": "POSTED",
+                      "request-transport-exit-code": "0",
+                      "request-transport-error-sha256": "",
+                      "request-response-validation-error-sha256": "",
+                      "request-comment-id": str(comment_id),
+                      "request-comment-created-at": comment_created_at,
+                  }
+              else:
+                  validation_digest = "sha256:" + sha256(
+                      response_failure.encode("ascii") + b"\0" + stdout
+                  ).hexdigest()
+                  outputs = {
+                      **receipt_outputs,
+                      "request-outcome": "RESPONSE_INVALID",
+                      "request-transport-exit-code": "0",
+                      "request-transport-error-sha256": "",
+                      "request-response-validation-error-sha256": (
+                          validation_digest
+                      ),
+                      "request-comment-id": "",
+                      "request-comment-created-at": "",
+                  }
+                  print(
+                      "::warning title=Codex review request response invalid::"
+                      f"{validation_digest}",
+                      file=sys.stderr,
+                  )
+          else:
+              outputs = {
+                  **receipt_outputs,
+                  "request-outcome": "TRANSPORT_UNAVAILABLE",
+                  "request-transport-exit-code": (
+                      "" if exit_code is None else str(exit_code)
+                  ),
+                  "request-transport-error-sha256": (
+                      "sha256:" + sha256(stderr).hexdigest()
+                  ),
+                  "request-response-validation-error-sha256": "",
+                  "request-comment-id": "",
+                  "request-comment-created-at": "",
+              }
+              exit_description = (
+                  "unavailable" if exit_code is None else str(exit_code)
+              )
+              print(
+                  "::warning title=Codex review request transport unavailable::"
+                  f"exit {exit_description}{signal_description}; "
+                  f"{outputs['request-transport-error-sha256']}",
+                  file=sys.stderr,
+              )
+              print(
+                  "Deterministic reconciliation will record AI_REVIEW_UNAVAILABLE "
+                  "if no exact-head Codex response arrives."
+              )
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a", encoding="utf-8", newline="\n") as handle:
+              for name, value in outputs.items():
+                  handle.write(f"{name}={value}\n")
+          PY
+
+  baseline-supportability:
+    name: Baseline Protected Supportability Gate
+    needs: request-codex-review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@2222222222222222222222222222222222222222
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      review-window-started-at: ${{ github.event.pull_request.updated_at }}
+      governance-ref: 2222222222222222222222222222222222222222
+      request-outcome: ${{ needs['request-codex-review'].outputs['request-outcome'] }}
+      request-transport-command-json: ${{ needs['request-codex-review'].outputs['request-transport-command-json'] }}
+      request-transport-started-at: ${{ needs['request-codex-review'].outputs['request-transport-started-at'] }}
+      request-transport-completed-at: ${{ needs['request-codex-review'].outputs['request-transport-completed-at'] }}
+      request-transport-timeout-seconds: ${{ needs['request-codex-review'].outputs['request-transport-timeout-seconds'] }}
+      request-transport-timed-out: ${{ needs['request-codex-review'].outputs['request-transport-timed-out'] }}
+      request-transport-exit-code: ${{ needs['request-codex-review'].outputs['request-transport-exit-code'] }}
+      request-transport-error-sha256: ${{ needs['request-codex-review'].outputs['request-transport-error-sha256'] }}
+      request-response-validation-error-sha256: ${{ needs['request-codex-review'].outputs['request-response-validation-error-sha256'] }}
+      request-comment-id: ${{ needs['request-codex-review'].outputs['request-comment-id'] }}
+      request-comment-created-at: ${{ needs['request-codex-review'].outputs['request-comment-created-at'] }}
+      artifact-name: baseline-supportability-gate-evidence
+
+  candidate-supportability:
+    name: Candidate Supportability Gate
+    needs: request-codex-review
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@2222222222222222222222222222222222222222
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      review-window-started-at: ${{ github.event.pull_request.updated_at }}
+      governance-ref: 2222222222222222222222222222222222222222
+      request-outcome: ${{ needs['request-codex-review'].outputs['request-outcome'] }}
+      request-transport-command-json: ${{ needs['request-codex-review'].outputs['request-transport-command-json'] }}
+      request-transport-started-at: ${{ needs['request-codex-review'].outputs['request-transport-started-at'] }}
+      request-transport-completed-at: ${{ needs['request-codex-review'].outputs['request-transport-completed-at'] }}
+      request-transport-timeout-seconds: ${{ needs['request-codex-review'].outputs['request-transport-timeout-seconds'] }}
+      request-transport-timed-out: ${{ needs['request-codex-review'].outputs['request-transport-timed-out'] }}
+      request-transport-exit-code: ${{ needs['request-codex-review'].outputs['request-transport-exit-code'] }}
+      request-transport-error-sha256: ${{ needs['request-codex-review'].outputs['request-transport-error-sha256'] }}
+      request-response-validation-error-sha256: ${{ needs['request-codex-review'].outputs['request-response-validation-error-sha256'] }}
+      request-comment-id: ${{ needs['request-codex-review'].outputs['request-comment-id'] }}
+      request-comment-created-at: ${{ needs['request-codex-review'].outputs['request-comment-created-at'] }}
+      artifact-name: candidate-supportability-gate-evidence
+
+  delivery-receipt:
+    name: Baseline Protected Delivery Receipt
+    needs:
+      - baseline-supportability
+      - candidate-supportability
+    if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@2222222222222222222222222222222222222222
+    with:
+      target-repository: ${{ github.repository }}
+      target-repository-url: https://github.com/${{ github.repository }}.git
+      target-base-sha: ${{ github.event.pull_request.base.sha }}
+      target-head-sha: ${{ github.event.pull_request.head.sha }}
+      target-pr-number: ${{ github.event.pull_request.number }}
+      target-pr-url: ${{ github.event.pull_request.html_url }}
+      governance-ref: 2222222222222222222222222222222222222222
+      supportability-artifact-name: baseline-supportability-gate-evidence
+      supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] || 'missing-baseline-supportability-artifact-id' }}
+      supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] || 'missing-baseline-supportability-artifact-digest' }}
+      candidate-supportability-artifact-name: candidate-supportability-gate-evidence
+      candidate-supportability-artifact-id: ${{ needs['candidate-supportability'].outputs['artifact-id'] || 'missing-candidate-supportability-artifact-id' }}
+      candidate-supportability-artifact-digest: ${{ needs['candidate-supportability'].outputs['artifact-digest'] || 'missing-candidate-supportability-artifact-digest' }}
