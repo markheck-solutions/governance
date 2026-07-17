@@ -594,6 +594,17 @@ class ReusableWorkflowTests(unittest.TestCase):
                 },
                 0,
             ),
+            "transport_launch_failure": (
+                {
+                    "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
+                    "REQUEST_TRANSPORT_TIMED_OUT": "false",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "",
+                    "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64,
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                0,
+            ),
             "response_invalid": (
                 {
                     "REQUEST_OUTCOME": "RESPONSE_INVALID",
@@ -608,6 +619,7 @@ class ReusableWorkflowTests(unittest.TestCase):
             "wrong_workflow": ({"REQUEST_WORKFLOW_REF": "main"}, 64),
             "unsupported_action": ({"REQUEST_EVENT_ACTION": "closed"}, 64),
             "partial_posted": ({"REQUEST_COMMENT_ID": ""}, 64),
+            "posted_missing_exit_code": ({"REQUEST_TRANSPORT_EXIT_CODE": ""}, 64),
             "contradictory_posted": (
                 {"REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64},
                 64,
@@ -633,8 +645,22 @@ class ReusableWorkflowTests(unittest.TestCase):
                 },
                 64,
             ),
+            "response_invalid_missing_exit_code": (
+                {
+                    "REQUEST_OUTCOME": "RESPONSE_INVALID",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "",
+                    "REQUEST_RESPONSE_VALIDATION_ERROR_SHA256": ("sha256:" + "f" * 64),
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                64,
+            ),
             "exit_code_out_of_range": (
                 {"REQUEST_TRANSPORT_EXIT_CODE": "256"},
+                64,
+            ),
+            "malformed_missing_exit_code": (
+                {"REQUEST_TRANSPORT_EXIT_CODE": "NONE"},
                 64,
             ),
             "metacharacter_comment_id": ({"REQUEST_COMMENT_ID": "1\n2"}, 64),
@@ -665,6 +691,17 @@ class ReusableWorkflowTests(unittest.TestCase):
                     "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
                     "REQUEST_TRANSPORT_TIMED_OUT": "true",
                     "REQUEST_TRANSPORT_EXIT_CODE": "1",
+                    "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64,
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                64,
+            ),
+            "launch_failure_claims_timeout": (
+                {
+                    "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
+                    "REQUEST_TRANSPORT_TIMED_OUT": "true",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "",
                     "REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64,
                     "REQUEST_COMMENT_ID": "",
                     "REQUEST_COMMENT_CREATED_AT": "",

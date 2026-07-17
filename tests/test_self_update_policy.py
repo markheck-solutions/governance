@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -280,6 +281,62 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                 self.assertEqual(outputs["request-comment-id"], "")
                 self.assertEqual(outputs["request-comment-created-at"], "")
 
+    def test_receipt_activation_records_process_launch_failures(self) -> None:
+        cases = (
+            (
+                FileNotFoundError(errno.ENOENT, "missing", "first-gh"),
+                "FILE_NOT_FOUND",
+                str(errno.ENOENT),
+            ),
+            (
+                PermissionError(errno.EACCES, "denied", "gh"),
+                "PERMISSION_DENIED",
+                str(errno.EACCES),
+            ),
+            (
+                OSError(errno.ENOEXEC, "bad executable", "gh"),
+                "EXEC_FORMAT_ERROR",
+                str(errno.ENOEXEC),
+            ),
+            (OSError("localized message"), "OTHER_OS_ERROR", "NONE"),
+        )
+        digests = set()
+        for failure, category, error_number in cases:
+            with self.subTest(category=category):
+                outputs, run = _execute_request_fixture(failure)
+                canonical_error = (
+                    f"PROCESS_LAUNCH_OS_ERROR_V1\0{category}\0errno={error_number}"
+                ).encode("ascii")
+                expected_digest = (
+                    "sha256:" + hashlib.sha256(canonical_error).hexdigest()
+                )
+
+                self.assertEqual(outputs["request-outcome"], "TRANSPORT_UNAVAILABLE")
+                self.assertEqual(outputs["request-transport-exit-code"], "")
+                self.assertEqual(outputs["request-transport-timed-out"], "false")
+                self.assertEqual(
+                    outputs["request-transport-error-sha256"], expected_digest
+                )
+                self.assertEqual(
+                    outputs["request-response-validation-error-sha256"], ""
+                )
+                self.assertEqual(outputs["request-comment-id"], "")
+                self.assertEqual(outputs["request-comment-created-at"], "")
+                run.assert_called_once()
+                digests.add(expected_digest)
+
+        same_failure, _ = _execute_request_fixture(
+            FileNotFoundError(errno.ENOENT, "different message", "other-gh")
+        )
+        canonical_file_not_found = (
+            f"PROCESS_LAUNCH_OS_ERROR_V1\0FILE_NOT_FOUND\0errno={errno.ENOENT}"
+        ).encode("ascii")
+        self.assertEqual(
+            same_failure["request-transport-error-sha256"],
+            "sha256:" + hashlib.sha256(canonical_file_not_found).hexdigest(),
+        )
+        self.assertEqual(len(digests), len(cases))
+
     def test_receipt_activation_normalizes_signal_termination(self) -> None:
         stderr = b"terminated"
         signaled = subprocess.CompletedProcess([], -15, stdout=b"", stderr=stderr)
@@ -510,7 +567,7 @@ def _activated_enforcement_workflow(sha: str) -> str:
 
 
 def _execute_request_fixture(
-    transport: subprocess.CompletedProcess[bytes] | subprocess.TimeoutExpired,
+    transport: subprocess.CompletedProcess[bytes] | BaseException,
 ) -> tuple[dict[str, str], mock.Mock]:
     fixture = _activated_enforcement_workflow("2" * 40)
     script = textwrap.dedent(
@@ -528,12 +585,8 @@ def _execute_request_fixture(
             "RUN_ATTEMPT": "1",
         }
         run = mock.Mock(
-            side_effect=transport
-            if isinstance(transport, subprocess.TimeoutExpired)
-            else None,
-            return_value=(
-                None if isinstance(transport, subprocess.TimeoutExpired) else transport
-            ),
+            side_effect=transport if isinstance(transport, BaseException) else None,
+            return_value=(None if isinstance(transport, BaseException) else transport),
         )
         with (
             mock.patch.dict(os.environ, environment, clear=False),

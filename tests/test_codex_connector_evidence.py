@@ -1154,6 +1154,15 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         )
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertFalse(result["workflow_request_receipt"]["transport_timed_out"])
+        launch_failure_receipt = workflow_request_receipt(
+            "TRANSPORT_UNAVAILABLE",
+            transport_exit_code=None,
+        )
+        result = evaluate_with_workflow_request(
+            unavailable_snapshot, launch_failure_receipt
+        )
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIsNone(result["workflow_request_receipt"]["transport_exit_code"])
 
         old_head = deepcopy(request_only)
         old_head["issue_comments"][0]["body"] = (
@@ -1272,6 +1281,7 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
             {"transport_timeout_seconds": True},
             {"transport_timed_out": "false"},
             {"transport_timed_out": True},
+            {"transport_exit_code": None},
             {"transport_exit_code": 1},
             {"response_validation_error_sha256": "sha256:" + "0" * 64},
             {"comment_id": 0},
@@ -1292,8 +1302,21 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
                 transport_exit_code=1,
                 transport_timed_out=True,
             )
+        with self.assertRaises(ValueError):
+            workflow_request_receipt(
+                "TRANSPORT_UNAVAILABLE",
+                transport_exit_code=None,
+                transport_timed_out=True,
+            )
+        with self.assertRaises(ValueError):
+            workflow_request_receipt(
+                "TRANSPORT_UNAVAILABLE",
+                transport_exit_code=None,
+                transport_error_sha256=None,
+            )
         for changes in (
             {"response_validation_error_sha256": None},
+            {"transport_exit_code": None},
             {"transport_exit_code": 1},
             {"comment_id": 201},
         ):

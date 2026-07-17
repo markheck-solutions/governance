@@ -125,6 +125,8 @@ def cli_args(output_dir: Path, *, include_request: bool = True) -> list[str]:
 
 def workflow_request_receipt(
     outcome: str = "POSTED",
+    *,
+    launch_failed: bool = False,
 ) -> TrustedWorkflowRequestReceipt:
     body = f"@codex review\n\nGovernance review request for exact head `{HEAD}`."
     return TrustedWorkflowRequestReceipt(
@@ -149,7 +151,11 @@ def workflow_request_receipt(
         transport_completed_at=TRANSPORT_COMPLETED_AT,
         transport_timeout_seconds=30,
         transport_timed_out=False,
-        transport_exit_code=(0 if outcome in {"POSTED", "RESPONSE_INVALID"} else 1),
+        transport_exit_code=(
+            None
+            if launch_failed
+            else (0 if outcome in {"POSTED", "RESPONSE_INVALID"} else 1)
+        ),
         transport_error_sha256=(
             "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest()
             if outcome == "TRANSPORT_UNAVAILABLE"
@@ -165,7 +171,9 @@ def workflow_request_receipt(
     )
 
 
-def request_cli_args(outcome: str = "POSTED") -> list[str]:
+def request_cli_args(
+    outcome: str = "POSTED", *, launch_failed: bool = False
+) -> list[str]:
     args = [
         "--request-workflow-ref",
         WORKFLOW_REF,
@@ -194,7 +202,11 @@ def request_cli_args(outcome: str = "POSTED") -> list[str]:
         "--request-transport-timed-out",
         "false",
         "--request-transport-exit-code",
-        "0" if outcome in {"POSTED", "RESPONSE_INVALID"} else "1",
+        (
+            ""
+            if launch_failed
+            else ("0" if outcome in {"POSTED", "RESPONSE_INVALID"} else "1")
+        ),
     ]
     if outcome == "POSTED":
         args.extend(
@@ -713,6 +725,36 @@ class CodexReviewGateTests(unittest.TestCase):
         "governance_eval.codex_review_gate.run_codex_review_gate",
         return_value={"owner_status": "GREEN"},
     )
+    def test_cli_passes_launch_unavailable_request_receipt(
+        self, run_gate: Mock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = write_config(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--config-source-path",
+                        CONFIG_SOURCE_PATH,
+                        "--config-binding-digest",
+                        "sha256:" + "d" * 64,
+                        *cli_args(root / "out", include_request=False),
+                        *request_cli_args("TRANSPORT_UNAVAILABLE", launch_failed=True),
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            run_gate.call_args.kwargs["workflow_request_receipt"],
+            workflow_request_receipt("TRANSPORT_UNAVAILABLE", launch_failed=True),
+        )
+
+    @patch(
+        "governance_eval.codex_review_gate.run_codex_review_gate",
+        return_value={"owner_status": "GREEN"},
+    )
     def test_cli_rejects_partial_or_rerun_request_receipt(self, run_gate: Mock) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -744,6 +786,14 @@ class CodexReviewGateTests(unittest.TestCase):
             contradictory_timeout[
                 contradictory_timeout.index("--request-transport-timed-out") + 1
             ] = "true"
+            missing_posted_exit = request_cli_args()
+            missing_posted_exit[
+                missing_posted_exit.index("--request-transport-exit-code") + 1
+            ] = ""
+            malformed_exit_code = request_cli_args()
+            malformed_exit_code[
+                malformed_exit_code.index("--request-transport-exit-code") + 1
+            ] = "NONE"
             cases = (
                 [],
                 ["--request-workflow-ref", WORKFLOW_REF],
@@ -752,6 +802,8 @@ class CodexReviewGateTests(unittest.TestCase):
                 reversed_timestamps,
                 wrong_timeout,
                 contradictory_timeout,
+                missing_posted_exit,
+                malformed_exit_code,
             )
             for request_args in cases:
                 with self.subTest(request_args=request_args):

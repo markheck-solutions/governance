@@ -67,7 +67,7 @@
         "transport_completed_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"},
         "transport_timeout_seconds": {"type": "integer", "enum": [30]},
         "transport_timed_out": {"type": "boolean"},
-        "transport_exit_code": {"type": "integer", "minimum": 0, "maximum": 255},
+        "transport_exit_code": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
         "transport_error_sha256": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
         "response_validation_error_sha256": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
         "comment_id": {"type": ["integer", "null"], "minimum": 1},
@@ -91,7 +91,7 @@
           "if": {"properties": {"outcome": {"const": "TRANSPORT_UNAVAILABLE"}}},
           "then": {
             "properties": {
-              "transport_exit_code": {"type": "integer", "minimum": 1},
+              "transport_exit_code": {"type": ["integer", "null"], "minimum": 1},
               "transport_error_sha256": {"type": "string"},
               "response_validation_error_sha256": {"type": "null"},
               "comment_id": {"type": "null"},

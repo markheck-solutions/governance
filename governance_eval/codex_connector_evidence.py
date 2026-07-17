@@ -128,7 +128,7 @@ class TrustedWorkflowRequestReceipt:
     transport_completed_at: str
     transport_timeout_seconds: int
     transport_timed_out: bool
-    transport_exit_code: int
+    transport_exit_code: int | None
     transport_error_sha256: str | None
     response_validation_error_sha256: str | None
     comment_id: int | None
@@ -193,7 +193,7 @@ class TrustedWorkflowRequestReceipt:
             raise ValueError("workflow request transport timeout is invalid")
         if type(self.transport_timed_out) is not bool:
             raise ValueError("workflow request transport timeout state is invalid")
-        valid_exit_code = (
+        valid_exit_code = self.transport_exit_code is None or (
             isinstance(self.transport_exit_code, int)
             and not isinstance(self.transport_exit_code, bool)
             and 0 <= self.transport_exit_code <= 255

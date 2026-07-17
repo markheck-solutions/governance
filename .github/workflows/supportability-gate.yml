@@ -238,13 +238,16 @@ jobs:
           ]
           comment_id = os.environ["REQUEST_COMMENT_ID"]
           comment_created_at = os.environ["REQUEST_COMMENT_CREATED_AT"]
-          if not exit_code_re.fullmatch(exit_code_text):
+          if exit_code_text == "":
+              exit_code = None
+          elif not exit_code_re.fullmatch(exit_code_text):
               print("Invalid request transport exit code", file=sys.stderr)
               raise SystemExit(64)
-          exit_code = int(exit_code_text)
-          if exit_code > 255:
-              print("Invalid request transport exit code", file=sys.stderr)
-              raise SystemExit(64)
+          else:
+              exit_code = int(exit_code_text)
+              if exit_code > 255:
+                  print("Invalid request transport exit code", file=sys.stderr)
+                  raise SystemExit(64)
           body = (
               "@codex review\n\nGovernance review request for exact head "
               f"`{os.environ['TARGET_HEAD_SHA']}`."
@@ -288,7 +291,7 @@ jobs:
           elif outcome == "TRANSPORT_UNAVAILABLE":
               valid = (
                   transport_valid
-                  and exit_code != 0
+                  and (exit_code is None or exit_code != 0)
                   and digest_re.fullmatch(error_digest)
                   and response_error_digest == ""
                   and comment_id == ""

@@ -34,6 +34,7 @@ Collector = Callable[[str, int, str], dict[str, Any]]
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+EXIT_CODE_RE = re.compile(r"^(0|[1-9][0-9]{0,2})$")
 
 
 def bind_supportability_config(
@@ -231,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request-transport-completed-at")
     parser.add_argument("--request-transport-timeout-seconds", type=int)
     parser.add_argument("--request-transport-timed-out")
-    parser.add_argument("--request-transport-exit-code", type=int)
+    parser.add_argument("--request-transport-exit-code")
     parser.add_argument("--request-transport-error-sha256")
     parser.add_argument("--request-response-validation-error-sha256")
     parser.add_argument("--request-comment-id", type=int)
@@ -289,6 +290,14 @@ def _workflow_request_receipt_from_args(
         raise ValueError("workflow request transport command is invalid") from exc
     if args.request_transport_timed_out not in {"true", "false"}:
         raise ValueError("workflow request transport timeout state is invalid")
+    if args.request_transport_exit_code == "":
+        transport_exit_code = None
+    elif not EXIT_CODE_RE.fullmatch(args.request_transport_exit_code):
+        raise ValueError("workflow request transport exit code is invalid")
+    else:
+        transport_exit_code = int(args.request_transport_exit_code)
+        if transport_exit_code > 255:
+            raise ValueError("workflow request transport exit code is invalid")
     request_body = (
         f"@codex review\n\nGovernance review request for exact head `{args.head_sha}`."
     )
@@ -314,7 +323,7 @@ def _workflow_request_receipt_from_args(
         transport_completed_at=args.request_transport_completed_at,
         transport_timeout_seconds=args.request_transport_timeout_seconds,
         transport_timed_out=args.request_transport_timed_out == "true",
-        transport_exit_code=args.request_transport_exit_code,
+        transport_exit_code=transport_exit_code,
         transport_error_sha256=args.request_transport_error_sha256,
         response_validation_error_sha256=(
             args.request_response_validation_error_sha256

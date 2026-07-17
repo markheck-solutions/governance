@@ -49,6 +49,7 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
+          import errno
           import json
           import os
           import re
@@ -107,6 +108,30 @@ jobs:
                   stderr = stderr.encode("utf-8")
               stderr += b"\nrequest timed out after 30 seconds"
               exit_code = 124
+          except OSError as exc:
+              stdout = b""
+              error_number = exc.errno if type(exc.errno) is int else None
+              if isinstance(exc, FileNotFoundError) or error_number == errno.ENOENT:
+                  launch_category = "FILE_NOT_FOUND"
+              elif isinstance(exc, PermissionError) or error_number in {
+                  errno.EACCES,
+                  errno.EPERM,
+              }:
+                  launch_category = "PERMISSION_DENIED"
+              elif error_number == errno.ENOEXEC:
+                  launch_category = "EXEC_FORMAT_ERROR"
+              else:
+                  launch_category = "OTHER_OS_ERROR"
+              error_number_text = (
+                  str(error_number) if error_number is not None else "NONE"
+              )
+              stderr = (
+                  b"PROCESS_LAUNCH_OS_ERROR_V1\0"
+                  + launch_category.encode("ascii")
+                  + b"\0errno="
+                  + error_number_text.encode("ascii")
+              )
+              exit_code = None
           if type(exit_code) is int and exit_code < 0:
               signal_number = -exit_code
               if not 1 <= signal_number <= 127:
@@ -126,7 +151,9 @@ jobs:
           transport_completed_at = datetime.now(timezone.utc).replace(
               microsecond=0
           ).strftime("%Y-%m-%dT%H:%M:%SZ")
-          if type(exit_code) is not int or not 0 <= exit_code <= 255:
+          if exit_code is not None and (
+              type(exit_code) is not int or not 0 <= exit_code <= 255
+          ):
               raise SystemExit("Invalid request transport exit code")
           if not isinstance(stdout, bytes):
               raise SystemExit("Invalid request transport stdout")
@@ -208,7 +235,9 @@ jobs:
               outputs = {
                   **receipt_outputs,
                   "request-outcome": "TRANSPORT_UNAVAILABLE",
-                  "request-transport-exit-code": str(exit_code),
+                  "request-transport-exit-code": (
+                      "" if exit_code is None else str(exit_code)
+                  ),
                   "request-transport-error-sha256": (
                       "sha256:" + sha256(stderr).hexdigest()
                   ),
@@ -216,9 +245,12 @@ jobs:
                   "request-comment-id": "",
                   "request-comment-created-at": "",
               }
+              exit_description = (
+                  "unavailable" if exit_code is None else str(exit_code)
+              )
               print(
                   "::warning title=Codex review request transport unavailable::"
-                  f"exit {exit_code}{signal_description}; "
+                  f"exit {exit_description}{signal_description}; "
                   f"{outputs['request-transport-error-sha256']}",
                   file=sys.stderr,
               )
