@@ -22,7 +22,60 @@ BOOTSTRAP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOTSTRAP)
 
 
-class ToolchainBootstrapTests(unittest.TestCase):
+class _ToolchainBootstrapTestCase(unittest.TestCase):
+    def _assert_lock_rejected(self, text: str, message: str) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "requirements-governance.lock"
+            lock.write_text(text, encoding="utf-8")
+            with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, message):
+                BOOTSTRAP.validate_lock(lock)
+
+    @staticmethod
+    def _bound_git_stdout(command: tuple[str, ...], governance: Path) -> str | None:
+        if command[-2:] == ("rev-parse", "--show-toplevel"):
+            return str(governance)
+        if command[-2:] == ("--verify", "HEAD^{commit}"):
+            return "a" * 40
+        if command[-2:] == ("--verify", f"{'b' * 40}^{{commit}}"):
+            return "b" * 40
+        if "merge-base" in command:
+            return "c" * 40
+        if "status" in command:
+            return ""
+        return None
+
+    @staticmethod
+    def _valid_lock() -> str:
+        return (ROOT / "requirements-governance.lock").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _provision_paths(root: Path) -> dict[str, Path]:
+        governance = root / "governance"
+        workspace = root / "workspace"
+        governance.mkdir()
+        workspace.mkdir()
+        (governance / "requirements-governance.lock").write_bytes(
+            (ROOT / "requirements-governance.lock").read_bytes()
+        )
+        (governance / "schemas/v1").mkdir(parents=True)
+        (
+            governance / "schemas/v1/governance_toolchain_receipt.schema.json"
+        ).write_bytes(
+            (ROOT / "schemas/v1/governance_toolchain_receipt.schema.json").read_bytes()
+        )
+        (governance / "governance_eval").mkdir()
+        (governance / "governance_eval/schema_validator.py").write_bytes(
+            (ROOT / "governance_eval/schema_validator.py").read_bytes()
+        )
+        return {
+            "governance": governance,
+            "workspace": workspace,
+            "runtime": root / "runtime",
+            "receipt": root / "receipt.json",
+        }
+
+
+class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
     def test_repository_lock_is_exact_and_cross_platform(self) -> None:
         digest = BOOTSTRAP.validate_lock(ROOT / "requirements-governance.lock")
         self.assertRegex(digest, r"^[0-9a-f]{64}$")
@@ -543,6 +596,8 @@ class ToolchainBootstrapTests(unittest.TestCase):
                         receipt_path=paths["receipt"],
                     )
 
+
+class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
     def test_bounded_runner_records_timeout_and_failed_exit(self) -> None:
         cases = (
             (
@@ -772,57 +827,6 @@ class ToolchainBootstrapTests(unittest.TestCase):
                     provision.assert_not_called()
                     self.assertFalse(workspace_unsafe.exists())
                     self.assertFalse(governance_unsafe.exists())
-
-    def _assert_lock_rejected(self, text: str, message: str) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            lock = Path(tmp) / "requirements-governance.lock"
-            lock.write_text(text, encoding="utf-8")
-            with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, message):
-                BOOTSTRAP.validate_lock(lock)
-
-    @staticmethod
-    def _bound_git_stdout(command: tuple[str, ...], governance: Path) -> str | None:
-        if command[-2:] == ("rev-parse", "--show-toplevel"):
-            return str(governance)
-        if command[-2:] == ("--verify", "HEAD^{commit}"):
-            return "a" * 40
-        if command[-2:] == ("--verify", f"{'b' * 40}^{{commit}}"):
-            return "b" * 40
-        if "merge-base" in command:
-            return "c" * 40
-        if "status" in command:
-            return ""
-        return None
-
-    @staticmethod
-    def _valid_lock() -> str:
-        return (ROOT / "requirements-governance.lock").read_text(encoding="utf-8")
-
-    @staticmethod
-    def _provision_paths(root: Path) -> dict[str, Path]:
-        governance = root / "governance"
-        workspace = root / "workspace"
-        governance.mkdir()
-        workspace.mkdir()
-        (governance / "requirements-governance.lock").write_bytes(
-            (ROOT / "requirements-governance.lock").read_bytes()
-        )
-        (governance / "schemas/v1").mkdir(parents=True)
-        (
-            governance / "schemas/v1/governance_toolchain_receipt.schema.json"
-        ).write_bytes(
-            (ROOT / "schemas/v1/governance_toolchain_receipt.schema.json").read_bytes()
-        )
-        (governance / "governance_eval").mkdir()
-        (governance / "governance_eval/schema_validator.py").write_bytes(
-            (ROOT / "governance_eval/schema_validator.py").read_bytes()
-        )
-        return {
-            "governance": governance,
-            "workspace": workspace,
-            "runtime": root / "runtime",
-            "receipt": root / "receipt.json",
-        }
 
 
 if __name__ == "__main__":
