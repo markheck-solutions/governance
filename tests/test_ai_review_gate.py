@@ -90,6 +90,22 @@ class AiReviewGateTests(unittest.TestCase):
         self.assertEqual(result["head_sha"], HEAD_SHA)
         self.assertEqual(result["unavailable_after_cutoff"], "non_blocking")
 
+    def test_manual_request_is_unavailable_not_approval(self) -> None:
+        result = self.gate(
+            {
+                "capability_status": "BLOCK_TECHNICAL",
+                "review_state": "AI_REVIEW_UNAVAILABLE",
+                "reviewed_head_sha": None,
+                "reconciled_head_sha": HEAD_SHA,
+                "reasons": ["MANUAL_REVIEW_REQUEST_PRESENT"],
+                "result_content_hash": "b" * 64,
+            },
+        )
+
+        self.assertEqual(result["owner_status"], "GREEN")
+        self.assertEqual(result["evidence_status"], "AI_REVIEW_UNAVAILABLE")
+        self.assertFalse(result["approval_provided"])
+
     def test_exact_head_codex_blocking_finding_is_red(self) -> None:
         result = self.gate(
             {

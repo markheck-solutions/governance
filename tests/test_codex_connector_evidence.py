@@ -108,10 +108,16 @@ def comment(
     }
 
 
-def human_comment(body: str, *, comment_id: int = 100) -> dict:
+def human_comment(
+    body: str,
+    *,
+    comment_id: int = 100,
+    created_at: str = "2026-07-13T18:01:00Z",
+) -> dict:
     result = comment(
         body,
         comment_id=comment_id,
+        created_at=created_at,
         user={
             "login": "markheck-solutions",
             "id": 12345,
@@ -631,7 +637,52 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         manual["issue_comments"] = [human_comment("@codex review")]
         result = evaluate(manual)
         self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        historical = reaction_snapshot()
+        historical["issue_comments"] = [
+            human_comment("@codex review", created_at="2026-07-13T17:59:59Z")
+        ]
+        result = evaluate(historical)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(result["reasons"], ["NO_IN_WINDOW_RESPONSE"])
+
+        for created_at, expected_manual in ((ANCHOR, True), (DEADLINE, True)):
+            with self.subTest(created_at=created_at):
+                boundary = reaction_snapshot()
+                boundary["issue_comments"] = [
+                    human_comment("@codex review", created_at=created_at)
+                ]
+                result = evaluate(boundary)
+                self.assertEqual(
+                    "MANUAL_REVIEW_REQUEST_PRESENT" in result["reasons"],
+                    expected_manual,
+                )
+
+    def test_manual_request_never_authorizes_clean_or_suppresses_blocking(self) -> None:
+        for created_at in (ANCHOR, "2026-07-13T18:01:00Z"):
+            with self.subTest(created_at=created_at):
+                clean = snapshot()
+                clean["issue_comments"].append(
+                    human_comment("@codex review", created_at=created_at)
+                )
+                result = evaluate(clean)
+                self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+                self.assertIsNone(result["reviewed_head_sha"])
+                self.assertIsNone(result["response"])
+
+        for severity in ("P0", "P1", "P2"):
+            with self.subTest(severity=severity):
+                blocking = snapshot()
+                blocking["issue_comments"].append(human_comment("@codex review"))
+                blocking["issue_comments"][0]["body"] = (
+                    f"{severity}: unsafe exact-head evidence"
+                )
+                result = evaluate(blocking)
+                self.assertEqual(result["review_state"], "BLOCKING_FINDINGS_PRESENT")
+                self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+                self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
 
     def test_exact_head_workflow_request_does_not_poison_reconciliation(self) -> None:
         value = reaction_snapshot()
@@ -662,6 +713,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
     def test_p0_p1_p2_findings_block_reaction_before_or_after_signal(self) -> None:
         for severity in ("P0", "P1", "P2"):
             for submitted_at in (
+                ANCHOR,
                 "2026-07-13T18:02:00Z",
                 "2026-07-13T18:04:30Z",
             ):
@@ -1060,25 +1112,30 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
             comment(clean_body(), comment_id=200)
         )
         cases.append(("duplicate_comment", duplicate_comment))
-        for index, created_at in enumerate((ANCHOR, "2026-07-13T17:59:59Z")):
-            manual = snapshot()
-            request = human_comment("@codex review", comment_id=100 + index)
-            request["created_at"] = created_at
-            manual["issue_comments"].insert(0, request)
-            cases.append((f"manual_request_{index}", manual))
-        stale = snapshot()
-        stale["issue_comments"][0]["created_at"] = ANCHOR
-        cases.append(("stale", stale))
-
         for name, value in cases:
             with self.subTest(name=name):
                 result = evaluate(value)
-                if name in {"missing", "stale"}:
+                if name == "missing":
                     self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                     self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
                 else:
                     self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertTrue(result["reasons"])
+
+        start_boundary = snapshot()
+        start_boundary["issue_comments"][0]["created_at"] = ANCHOR
+        result = evaluate(start_boundary)
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["reasons"], [])
+
+        historical_manual = snapshot()
+        historical_manual["issue_comments"].insert(
+            0,
+            human_comment("@codex review", created_at="2026-07-13T17:59:59Z"),
+        )
+        result = evaluate(historical_manual)
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["reasons"], [])
 
         raw = raw_bytes(snapshot())
         mismatch_contexts = (
@@ -1153,6 +1210,41 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         stale["review_comments"] = [connector_review_comment(review_id=999)]
         stale["review_comments"][0]["commit_id"] = "c" * 40
         self.assertEqual(evaluate(stale)["capability_status"], "PASS")
+
+        retargeted = reaction_snapshot()
+        retargeted["review_comments"] = [
+            connector_review_comment(review_id=999, severity="P1")
+        ]
+        retargeted["review_comments"][0]["original_commit_id"] = "c" * 40
+        result = evaluate(retargeted)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertNotIn("ORPHANED_REVIEW_COMMENT", result["reasons"])
+        self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+        mutated = deepcopy(retargeted)
+        mutated["review_comments"][0]["original_commit_id"] = HEAD_SHA
+        result = evaluate(mutated)
+        self.assertIn("ORPHANED_REVIEW_COMMENT", result["reasons"])
+        self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+        for name, mutate in (
+            (
+                "retargeted",
+                lambda comment: comment.update(original_commit_id="c" * 40),
+            ),
+            (
+                "post_cutoff",
+                lambda comment: comment.update(created_at="2026-07-13T18:05:30Z"),
+            ),
+        ):
+            with self.subTest(name=name):
+                linked = reaction_snapshot()
+                linked["captured_at"] = "2026-07-13T18:06:00Z"
+                linked["pull_request_reviews"] = [connector_review()]
+                linked["review_comments"] = [connector_review_comment()]
+                mutate(linked["review_comments"][0])
+                result = evaluate(linked)
+                self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
 
     def test_snapshot_commit_identities_require_semantic_full_match(self) -> None:
         cases = []

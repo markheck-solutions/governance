@@ -106,12 +106,20 @@ def _validated_codex_state(
     elif state == "AI_REVIEW_UNAVAILABLE":
         reason_set = set(reasons)
         response_unavailable = bool(reason_set) and reason_set.issubset(
-            {"NO_IN_WINDOW_RESPONSE", "ONLY_LATE_RESPONSE"}
+            {
+                "MANUAL_REVIEW_REQUEST_PRESENT",
+                "NO_IN_WINDOW_RESPONSE",
+                "ONLY_LATE_RESPONSE",
+            }
         )
         connector_unavailable = (
             "CONNECTOR_FAILURE_PRESENT" in reason_set
             and reason_set.issubset(
-                {"CONNECTOR_FAILURE_PRESENT", "RESPONSE_BODY_UNRECOGNIZED"}
+                {
+                    "CONNECTOR_FAILURE_PRESENT",
+                    "MANUAL_REVIEW_REQUEST_PRESENT",
+                    "RESPONSE_BODY_UNRECOGNIZED",
+                }
             )
         )
         valid = (

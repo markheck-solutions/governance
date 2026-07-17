@@ -250,13 +250,19 @@ def _classify_review_state(
     reason_set = set(reasons)
     if "BLOCKING_FINDINGS_PRESENT" in reason_set and reason_set <= {
         "BLOCKING_FINDINGS_PRESENT",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
         "RESPONSE_BODY_UNRECOGNIZED",
     }:
         return "BLOCKING_FINDINGS_PRESENT"
-    if reason_set and reason_set <= {"NO_IN_WINDOW_RESPONSE", "ONLY_LATE_RESPONSE"}:
+    if reason_set and reason_set <= {
+        "MANUAL_REVIEW_REQUEST_PRESENT",
+        "NO_IN_WINDOW_RESPONSE",
+        "ONLY_LATE_RESPONSE",
+    }:
         return "AI_REVIEW_UNAVAILABLE"
     if "CONNECTOR_FAILURE_PRESENT" in reason_set and reason_set <= {
         "CONNECTOR_FAILURE_PRESENT",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
         "RESPONSE_BODY_UNRECOGNIZED",
     }:
         return "AI_REVIEW_UNAVAILABLE"
@@ -310,7 +316,7 @@ def _evaluate_snapshot(
         item
         for item in valid_responses
         if _timestamp(trusted.review_window_started_at)
-        < _timestamp(_response_timestamp(item[0], item[1]))
+        <= _timestamp(_response_timestamp(item[0], item[1]))
         <= _timestamp(trusted.review_deadline_at)
     ]
     if not in_window_responses:
@@ -358,7 +364,13 @@ def _evaluate_snapshot(
     if response_type == "pull_request_review":
         if latest["commit_id"] != trusted.head_sha:
             reasons.append("REVIEWED_COMMIT_NOT_HEAD")
-        elif _review_has_blocking_finding(latest, review_comments):
+        elif _review_has_blocking_finding(
+            latest,
+            review_comments,
+            trusted.head_sha,
+            trusted.review_window_started_at,
+            trusted.review_deadline_at,
+        ):
             reasons.append("BLOCKING_FINDINGS_PRESENT")
         else:
             reasons.append("RESPONSE_BODY_UNRECOGNIZED")
@@ -436,13 +448,18 @@ def _collection_reasons(
         )
     ):
         reasons.append("SNAPSHOT_ITEM_AFTER_CAPTURE")
-    if _manual_request_present(comments, trusted.head_sha):
+    if _manual_request_present(
+        comments,
+        trusted.head_sha,
+        trusted.review_window_started_at,
+        trusted.review_deadline_at,
+    ):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
 
     def in_window(value: str) -> bool:
         return _valid_timestamp(value) and _timestamp(
             trusted.review_window_started_at
-        ) < _timestamp(value) <= _timestamp(trusted.review_deadline_at)
+        ) <= _timestamp(value) <= _timestamp(trusted.review_deadline_at)
 
     connector_failure = any(
         _exact_connector_issue_comment(comment)
@@ -489,11 +506,15 @@ def _collection_reasons(
     current_connector_review_ids = {
         review["id"]
         for review in reviews
-        if _exact_connector_user(review) and review["commit_id"] == trusted.head_sha
+        if _exact_connector_user(review)
+        and review["commit_id"] == trusted.head_sha
+        and in_window(review["submitted_at"])
     }
     if any(
         _exact_connector_user(comment)
         and comment["commit_id"] == trusted.head_sha
+        and comment["original_commit_id"] == trusted.head_sha
+        and in_window(comment["created_at"])
         and comment["pull_request_review_id"] not in current_connector_review_ids
         for comment in review_comments
     ):
@@ -517,7 +538,7 @@ def _blocking_finding_present(
     deadline_at: str,
 ) -> bool:
     def in_window(value: str) -> bool:
-        return _valid_timestamp(value) and _timestamp(window_started_at) < _timestamp(
+        return _valid_timestamp(value) and _timestamp(window_started_at) <= _timestamp(
             value
         ) <= _timestamp(deadline_at)
 
@@ -536,6 +557,7 @@ def _blocking_finding_present(
     inline_blocking = any(
         _exact_connector_user(comment)
         and comment["commit_id"] == head_sha
+        and comment["original_commit_id"] == head_sha
         and in_window(comment["created_at"])
         and _BLOCKING_SEVERITY_RE.search(comment["body"])
         for comment in comments
@@ -544,14 +566,29 @@ def _blocking_finding_present(
 
 
 def _review_has_blocking_finding(
-    review: dict[str, Any], comments: list[dict[str, Any]]
+    review: dict[str, Any],
+    comments: list[dict[str, Any]],
+    head_sha: str,
+    window_started_at: str,
+    deadline_at: str,
 ) -> bool:
+    def current_comment(comment: dict[str, Any]) -> bool:
+        return bool(
+            comment["commit_id"] == head_sha
+            and comment["original_commit_id"] == head_sha
+            and _valid_timestamp(comment["created_at"])
+            and _timestamp(window_started_at)
+            <= _timestamp(comment["created_at"])
+            <= _timestamp(deadline_at)
+        )
+
     return bool(
         review["state"] == "CHANGES_REQUESTED"
         or _BLOCKING_SEVERITY_RE.search(review["body"])
         or any(
             comment["pull_request_review_id"] == review["id"]
             and _exact_connector_user(comment)
+            and current_comment(comment)
             and _BLOCKING_SEVERITY_RE.search(comment["body"])
             for comment in comments
         )
@@ -695,11 +732,20 @@ def _safe_product_trailer(trailer: str) -> bool:
     return normalized == _PRODUCT_TRAILER
 
 
-def _manual_request_present(comments: list[dict[str, Any]], head_sha: str) -> bool:
+def _manual_request_present(
+    comments: list[dict[str, Any]],
+    head_sha: str,
+    window_started_at: str,
+    deadline_at: str,
+) -> bool:
     return any(
         not _exact_connector_issue_comment(comment)
         and not _authorized_workflow_request(comment, head_sha)
         and _MANUAL_REQUEST_RE.search(comment["body"])
+        and _valid_timestamp(comment["created_at"])
+        and _timestamp(window_started_at)
+        <= _timestamp(comment["created_at"])
+        <= _timestamp(deadline_at)
         for comment in comments
     )
 
