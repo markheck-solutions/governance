@@ -171,6 +171,12 @@ jobs:
 
           from governance_eval.subprocess_evidence import run_recorded_subprocess
 
+          caller_evidence_path = (
+              Path(os.environ["RUNNER_TEMP"])
+              / "legacy-request-caller-subprocess-evidence.json"
+          )
+          caller_evidence_path.unlink(missing_ok=True)
+
           sha_re = re.compile(r"^[0-9a-f]{40}$")
           ref_re = re.compile(r"^[0-9a-f]{40}$")
           artifact_re = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
@@ -288,14 +294,14 @@ jobs:
                   head_sha=os.environ["TARGET_HEAD_SHA"],
                   evaluator_sha=os.environ["GOVERNANCE_REF"],
                   caller_workflow_sha=os.environ["REQUEST_WORKFLOW_SHA"],
-                  output_path=Path(
-                      "target/artifacts/supportability/"
-                      "legacy-request-caller-subprocess-evidence.json"
-                  ),
+                  output_path=caller_evidence_path,
                   timeout_seconds=10,
               )
               if caller_evidence["decision"] != "PASS":
                   print("Legacy request caller cannot be read", file=sys.stderr)
+                  raise SystemExit(64)
+              if caller_evidence["stdout"]["truncated"]:
+                  print("Legacy request caller evidence is truncated", file=sys.stderr)
                   raise SystemExit(64)
               try:
                   base_workflow = base_workflow_bytes.decode("utf-8").replace(
@@ -413,12 +419,53 @@ jobs:
           else
             echo "legacy-request-receipt=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Validate legacy caller subprocess evidence for upload
+        id: validate_legacy_caller_evidence
+        if: always()
+        shell: bash
+        working-directory: governance
+        env:
+          LEGACY_CALLER_EVIDENCE_PATH: ${{ runner.temp }}/legacy-request-caller-subprocess-evidence.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from governance_eval.subprocess_evidence import (
+              validate_subprocess_evidence_integrity,
+          )
+
+          path = Path(os.environ["LEGACY_CALLER_EVIDENCE_PATH"])
+
+          def emit(value: str) -> None:
+              with Path(os.environ["GITHUB_OUTPUT"]).open(
+                  "a", encoding="utf-8", newline="\n"
+              ) as output:
+                  output.write(f"upload={value}\n")
+
+          if not path.exists():
+              emit("false")
+              raise SystemExit(0)
+          if path.is_symlink() or not path.is_file():
+              emit("false")
+              raise SystemExit("Legacy caller subprocess evidence is not a regular file")
+          try:
+              evidence = json.loads(path.read_text(encoding="utf-8"))
+              validate_subprocess_evidence_integrity(evidence)
+          except (KeyError, OSError, TypeError, ValueError):
+              emit("false")
+              path.unlink(missing_ok=True)
+              raise SystemExit("Legacy caller subprocess evidence is invalid")
+          emit("true")
+          PY
       - name: Upload legacy caller subprocess evidence
-        if: always() && hashFiles('target/artifacts/supportability/legacy-request-caller-subprocess-evidence.json') != ''
+        if: always() && steps.validate_legacy_caller_evidence.outputs.upload == 'true'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: ${{ inputs.artifact-name }}-legacy-caller-subprocess-evidence
-          path: target/artifacts/supportability/legacy-request-caller-subprocess-evidence.json
+          path: ${{ runner.temp }}/legacy-request-caller-subprocess-evidence.json
+          if-no-files-found: error
           retention-days: 90
       - name: Bind validated AI-review supportability config
         id: bind_ai_config

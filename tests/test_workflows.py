@@ -528,16 +528,14 @@ class ReusableWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         script = _workflow_input_validation_script(workflow)
+        self.assertIn("Validate legacy caller subprocess evidence for upload", workflow)
         self.assertIn("Upload legacy caller subprocess evidence", workflow)
         self.assertIn(
-            "${{ inputs.artifact-name }}-legacy-caller-subprocess-evidence",
+            "${{ runner.temp }}/legacy-request-caller-subprocess-evidence.json",
             workflow,
         )
-        self.assertIn(
-            "target/artifacts/supportability/"
-            "legacy-request-caller-subprocess-evidence.json",
-            workflow,
-        )
+        self.assertIn("steps.validate_legacy_caller_evidence.outputs.upload", workflow)
+        self.assertNotIn("hashFiles('target/artifacts/supportability/", workflow)
         body = (
             f"@codex review\n\nGovernance review request for exact head `{'b' * 40}`."
         )
@@ -558,6 +556,7 @@ class ReusableWorkflowTests(unittest.TestCase):
             "TARGET_PR_NUMBER": "57",
             "ARTIFACT_NAME": "candidate-supportability-gate-evidence",
             "CONFIG_PATH": ".github/governance/supportability.yml",
+            "RUNNER_TEMP": str(Path(tempfile.gettempdir()) / str(os.getpid())),
             "REQUEST_WORKFLOW_REF": (
                 "markheck-solutions/governance/.github/workflows/"
                 "supportability-enforcement.yml@refs/heads/main"
@@ -834,6 +833,7 @@ class ReusableWorkflowTests(unittest.TestCase):
                 "TARGET_PR_NUMBER": "57",
                 "ARTIFACT_NAME": "candidate-supportability-gate-evidence",
                 "CONFIG_PATH": ".github/governance/supportability.yml",
+                "RUNNER_TEMP": str(root / "runner-temp"),
                 "REQUEST_WORKFLOW_REF": (
                     "markheck-solutions/governance/.github/workflows/"
                     "supportability-enforcement.yml@refs/heads/main"
@@ -866,8 +866,7 @@ class ReusableWorkflowTests(unittest.TestCase):
 
             legacy_result = run({})
             self.assertEqual(legacy_result.returncode, 0, legacy_result.stderr)
-            evidence_path = (
-                target / "artifacts/supportability/"
+            evidence_path = Path(base["RUNNER_TEMP"]) / (
                 "legacy-request-caller-subprocess-evidence.json"
             )
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))

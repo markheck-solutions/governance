@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
+import copy
 import json
 import sys
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
 
 from governance_eval.hashing import sha256_json
@@ -43,6 +46,11 @@ class SubprocessEvidenceTests(unittest.TestCase):
             self.assertFalse(evidence["timed_out"])
             self.assertEqual(evidence["command"], command)
             self.assertEqual(stdout.rstrip(b"\r\n"), b"caller")
+            self.assertEqual(evidence["stdout"]["total_bytes"], len(stdout))
+            self.assertEqual(
+                evidence["stdout"]["full_sha256"], sha256(stdout).hexdigest()
+            )
+            self.assertFalse(evidence["stdout"]["truncated"])
             self.assertEqual(
                 evidence["artifact_content_hash"],
                 sha256_json({**evidence, "artifact_content_hash": ""}),
@@ -87,9 +95,75 @@ class SubprocessEvidenceTests(unittest.TestCase):
                 self.assertEqual(evidence["timed_out"], timed_out)
                 self.assertTrue(evidence["errors"])
                 self.assertTrue(output_path.is_file())
-                validate_named("subprocess_evidence", evidence)
+                validate_subprocess_evidence_integrity(evidence)
 
-    def test_integrity_rejects_command_or_timeout_state_tampering(self) -> None:
+    def test_spawn_failure_replaces_preexisting_file_with_blocking_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "evidence.json"
+            output_path.write_text('{"forged":true}\n', encoding="utf-8")
+            command = [str(Path(tmp) / "missing-executable")]
+
+            evidence, stdout = run_recorded_subprocess(
+                command,
+                output_path=output_path,
+                timeout_seconds=5,
+                **IDENTITY,
+            )
+
+            self.assertEqual(evidence["decision"], "BLOCK_TECHNICAL")
+            self.assertEqual(evidence["termination"], "SPAWN_FAILED")
+            self.assertIsNone(evidence["exit_code"])
+            self.assertFalse(evidence["timed_out"])
+            self.assertEqual(stdout, b"")
+            self.assertEqual(
+                json.loads(output_path.read_text(encoding="utf-8")), evidence
+            )
+            validate_subprocess_evidence_integrity(evidence)
+
+    def test_combined_output_is_streamed_hashed_bounded_and_fail_closed(self) -> None:
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "sys.stdout.buffer.write(b'o' * 12); "
+                "sys.stderr.buffer.write(b'e' * 12)"
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence, stdout = run_recorded_subprocess(
+                command,
+                output_path=Path(tmp) / "evidence.json",
+                timeout_seconds=5,
+                output_limit_bytes=16,
+                **IDENTITY,
+            )
+
+        self.assertEqual(evidence["decision"], "BLOCK_TECHNICAL")
+        self.assertEqual(stdout, b"o" * 12)
+        self.assertEqual(evidence["stdout"]["total_bytes"], 12)
+        self.assertEqual(evidence["stderr"]["total_bytes"], 12)
+        self.assertEqual(evidence["stdout"]["captured_bytes"], 12)
+        self.assertEqual(evidence["stderr"]["captured_bytes"], 4)
+        self.assertEqual(
+            evidence["stdout"]["full_sha256"], sha256(b"o" * 12).hexdigest()
+        )
+        self.assertEqual(
+            evidence["stderr"]["full_sha256"], sha256(b"e" * 12).hexdigest()
+        )
+        self.assertEqual(
+            base64.b64decode(evidence["stderr"]["captured_base64"]), b"e" * 4
+        )
+        self.assertFalse(evidence["stdout"]["truncated"])
+        self.assertTrue(evidence["stderr"]["truncated"])
+        self.assertIn(
+            "subprocess output exceeded 16 byte capture limit", evidence["errors"]
+        )
+        validate_subprocess_evidence_integrity(evidence)
+
+    def test_integrity_rejects_semantic_and_output_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             evidence, _ = run_recorded_subprocess(
                 [sys.executable, "-c", "print('caller')"],
@@ -98,15 +172,30 @@ class SubprocessEvidenceTests(unittest.TestCase):
                 **IDENTITY,
             )
 
-        invalid = dict(evidence)
+        invalid_cases = []
+        invalid = copy.deepcopy(evidence)
         invalid["command"] = []
-        with self.assertRaises(ValueError):
-            validate_subprocess_evidence_integrity(invalid)
-
-        invalid = dict(evidence)
+        invalid_cases.append(invalid)
+        invalid = copy.deepcopy(evidence)
         invalid["timed_out"] = True
-        with self.assertRaises(ValueError):
-            validate_subprocess_evidence_integrity(invalid)
+        invalid_cases.append(invalid)
+        invalid = copy.deepcopy(evidence)
+        invalid["stdout"]["captured_base64"] = base64.b64encode(b"forged").decode()
+        invalid_cases.append(invalid)
+        invalid = copy.deepcopy(evidence)
+        invalid["stdout"]["total_bytes"] = 0
+        invalid_cases.append(invalid)
+        invalid = copy.deepcopy(evidence)
+        invalid["stdout"]["full_sha256"] = "0" * 64
+        invalid_cases.append(invalid)
+
+        for invalid in invalid_cases:
+            with self.subTest(field=next(iter(invalid))):
+                invalid["artifact_content_hash"] = sha256_json(
+                    {**invalid, "artifact_content_hash": ""}
+                )
+                with self.assertRaises(ValueError):
+                    validate_subprocess_evidence_integrity(invalid)
 
 
 if __name__ == "__main__":

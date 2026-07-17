@@ -89,9 +89,21 @@
     "captured_output": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sha256", "captured_bytes", "captured_base64", "truncated"],
+      "required": [
+        "full_sha256",
+        "total_bytes",
+        "captured_sha256",
+        "captured_bytes",
+        "captured_base64",
+        "truncated"
+      ],
       "properties": {
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "full_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "captured_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
         "captured_bytes": {"type": "integer", "minimum": 0, "maximum": 65536},
         "captured_base64": {"type": "string", "maxLength": 87384},
         "truncated": {"type": "boolean"}
