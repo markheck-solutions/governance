@@ -45,6 +45,10 @@ GIT_NETWORK_TIMEOUT_SECONDS = 60
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ENFORCEMENT_RECEIPT_TRANSITION_SHA256 = (
+    "09f318698fa421b130f527b6f51376302ae7b6c7b2983641238ebd266136ddd9",
+    "6a50d31670d9acd313bed864db3029a3dc26994e2c526842cb3dcda9fd2d1fd5",
+)
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
 LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
@@ -1111,7 +1115,15 @@ def _protected_enforcement_change_errors(
         text = sha_ref.sub("<PIN>", text)
         return governance_ref.sub(r"\1<PIN>\3", text)
 
-    if normalized(base_text) != normalized(head_text):
+    base_normalized = normalized(base_text)
+    head_normalized = normalized(head_text)
+    digests = (
+        hashlib.sha256(base_normalized.encode()).hexdigest(),
+        hashlib.sha256(head_normalized.encode()).hexdigest(),
+    )
+    if base_normalized != head_normalized and (
+        digests != _ENFORCEMENT_RECEIPT_TRANSITION_SHA256
+    ):
         return [
             "protected enforcement workflow change is not an exact SHA pin rotation"
         ]

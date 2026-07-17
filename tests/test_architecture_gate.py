@@ -119,6 +119,7 @@ class ArchitectureGateTests(unittest.TestCase):
                 "governance_eval/supportability.py",
                 "tests/test_architecture_gate.py",
                 "tests/test_codex_review_gate.py",
+                "tests/test_self_update_policy.py",
                 "tests/test_supportability.py",
                 "tests/test_workflows.py",
             }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +10,9 @@ from typing import Any
 from unittest import mock
 
 from governance_eval import supportability
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class SelfUpdatePolicyTests(unittest.TestCase):
@@ -138,6 +143,112 @@ class SelfUpdatePolicyTests(unittest.TestCase):
         self.assertTrue(any("trusted base SHA" in error for error in rejected))
         self.assertEqual(accepted, [])
 
+    def test_receipt_activation_matches_reviewed_digest(self) -> None:
+        activated = _activated_enforcement_workflow("2" * 40)
+
+        self.assertEqual(activated.count("2" * 40), 6)
+        self.assertEqual(
+            hashlib.sha256(
+                _normalized_enforcement_workflow(activated).encode()
+            ).hexdigest(),
+            supportability._ENFORCEMENT_RECEIPT_TRANSITION_SHA256[1],
+        )
+
+    def test_exact_legacy_to_receipt_activation_is_accepted(self) -> None:
+        trusted_sha = "2" * 40
+
+        errors = _enforcement_change_errors(
+            _current_enforcement_workflow(),
+            _activated_enforcement_workflow(trusted_sha),
+            trusted_sha,
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_receipt_activation_rejects_any_unreviewed_byte_drift(self) -> None:
+        activated = _activated_enforcement_workflow("2" * 40)
+        mutations = {
+            "timeout": activated.replace("timeout=30", "timeout=31", 1),
+            "run-attempt guard": activated.replace(
+                'if os.environ["RUN_ATTEMPT"] != "1":', "if False:", 1
+            ),
+            "output mapping": activated.replace(
+                "outputs['request-outcome']",
+                "outputs['request-comment-id']",
+                1,
+            ),
+            "permission": activated.replace(
+                "  pull-requests: read\n\njobs:",
+                "  pull-requests: read\n  checks: write\n\njobs:",
+                1,
+            ),
+            "trigger": activated.replace(
+                "      - ready_for_review",
+                "      - ready_for_review\n      - converted_to_draft",
+                1,
+            ),
+            "second post": activated.replace(
+                "              completed = subprocess.run(\n",
+                "              subprocess.run(\n"
+                "                  command, check=False, capture_output=True, timeout=30\n"
+                "              )\n"
+                "              completed = subprocess.run(\n",
+                1,
+            ),
+            "extra step": activated.replace(
+                "    steps:\n      - name: Request exact-head Codex review",
+                "    steps:\n      - run: echo extra\n"
+                "      - name: Request exact-head Codex review",
+                1,
+            ),
+        }
+
+        for name, mutated in mutations.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(mutated, activated)
+                errors = _enforcement_change_errors(
+                    _current_enforcement_workflow(), mutated, "2" * 40
+                )
+                self.assertEqual(
+                    errors,
+                    [
+                        "protected enforcement workflow change is not an exact "
+                        "SHA pin rotation"
+                    ],
+                )
+
+    def test_receipt_activation_rejects_unreviewed_base(self) -> None:
+        errors = _enforcement_change_errors(
+            _current_enforcement_workflow() + "# unreviewed base\n",
+            _activated_enforcement_workflow("2" * 40),
+            "2" * 40,
+        )
+
+        self.assertEqual(
+            errors,
+            ["protected enforcement workflow change is not an exact SHA pin rotation"],
+        )
+
+    def test_receipt_activation_pins_must_target_trusted_base_sha(self) -> None:
+        errors = _enforcement_change_errors(
+            _current_enforcement_workflow(),
+            _activated_enforcement_workflow("2" * 40),
+            "3" * 40,
+        )
+
+        self.assertIn(
+            "protected enforcement workflow pins must equal trusted base SHA", errors
+        )
+
+    def test_post_activation_change_is_limited_to_pin_rotation(self) -> None:
+        errors = _enforcement_change_errors(
+            _activated_enforcement_workflow("2" * 40),
+            _activated_enforcement_workflow("3" * 40),
+            "3" * 40,
+        )
+
+        self.assertEqual(errors, [])
+
     def test_delivery_chain_rejects_disabled_or_wrong_reusable_workflows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -220,6 +331,46 @@ def _protected_enforcement_workflow(sha: str) -> str:
         "    with:\n"
         "      governance-ref: " + sha + "\n"
     )
+
+
+def _current_enforcement_workflow() -> str:
+    return (REPO_ROOT / ".github/workflows/supportability-enforcement.yml").read_text(
+        encoding="utf-8"
+    )
+
+
+def _activated_enforcement_workflow(sha: str) -> str:
+    text = (
+        REPO_ROOT / "fixtures/supportability-enforcement-receipt-activated.yml"
+    ).read_text(encoding="utf-8")
+    return text.replace("2" * 40, sha)
+
+
+def _normalized_enforcement_workflow(text: str) -> str:
+    text = re.sub(r"(?<=@)[0-9a-f]{40}", "<PIN>", text)
+    return re.sub(
+        r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)",
+        r"\1<PIN>\3",
+        text,
+    )
+
+
+def _enforcement_change_errors(
+    base_text: str, head_text: str, trusted_sha: str
+) -> list[str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        workflow = repo / ".github/workflows/supportability-enforcement.yml"
+        workflow.parent.mkdir(parents=True)
+        workflow.write_text(head_text, encoding="utf-8")
+        with mock.patch(
+            "governance_eval.supportability._git_show_text", return_value=base_text
+        ):
+            return supportability._protected_enforcement_change_errors(
+                repo,
+                trusted_sha,
+                ".github/workflows/supportability-enforcement.yml",
+            )
 
 
 def _semantic_gate_commands(suffix: str) -> dict[str, list[str]]:
