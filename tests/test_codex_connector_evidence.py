@@ -347,11 +347,16 @@ def workflow_request_receipt(
         "transport_completed_at": "2026-07-13T18:00:31Z",
         "transport_timeout_seconds": 30,
         "transport_timed_out": False,
-        "transport_exit_code": 0 if outcome == "POSTED" else 1,
+        "transport_exit_code": (0 if outcome in {"POSTED", "RESPONSE_INVALID"} else 1),
         "transport_error_sha256": (
-            None
-            if outcome == "POSTED"
-            else "sha256:" + sha256(b"transport unavailable").hexdigest()
+            "sha256:" + sha256(b"transport unavailable").hexdigest()
+            if outcome == "TRANSPORT_UNAVAILABLE"
+            else None
+        ),
+        "response_validation_error_sha256": (
+            "sha256:" + sha256(b"INVALID_JSON\0{").hexdigest()
+            if outcome == "RESPONSE_INVALID"
+            else None
         ),
         "comment_id": 201 if outcome == "POSTED" else None,
         "comment_created_at": ("2026-07-13T18:01:00Z" if outcome == "POSTED" else None),
@@ -1258,6 +1263,7 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
             {"transport_timed_out": "false"},
             {"transport_timed_out": True},
             {"transport_exit_code": 1},
+            {"response_validation_error_sha256": "sha256:" + "0" * 64},
             {"comment_id": 0},
             {"comment_created_at": "not-a-time"},
         )
@@ -1270,6 +1276,13 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
                 "TRANSPORT_UNAVAILABLE",
                 comment_id=201,
             )
+        for changes in (
+            {"response_validation_error_sha256": None},
+            {"transport_exit_code": 1},
+            {"comment_id": 201},
+        ):
+            with self.subTest(response_invalid=changes), self.assertRaises(ValueError):
+                workflow_request_receipt("RESPONSE_INVALID", **changes)
 
         raw = raw_bytes(snapshot())
         context_mismatches = (
@@ -2105,6 +2118,54 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
 
 
 class CodexConnectorResultValidationTests(unittest.TestCase):
+    def test_invalid_request_response_is_reconciled_unavailable(self) -> None:
+        value = reaction_snapshot()
+        value["issue_comments"] = []
+        raw = raw_bytes(value)
+        context = trusted(
+            raw,
+            resolved_clean_commit_sha=None,
+            workflow_request_receipt=workflow_request_receipt("RESPONSE_INVALID"),
+        )
+
+        result = evaluate_codex_connector_evidence(raw, context)
+        owner = evaluate_ai_review_gate(
+            HEAD_SHA,
+            codex_result=result,
+            raw_snapshot_bytes=raw,
+            trusted_context=context,
+        )
+
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(
+            result["reasons"],
+            ["NO_IN_WINDOW_RESPONSE", "WORKFLOW_REQUEST_RESPONSE_INVALID"],
+        )
+        self.assertEqual(
+            result["workflow_request_receipt"]["response_validation_error_sha256"],
+            workflow_request_receipt(
+                "RESPONSE_INVALID"
+            ).response_validation_error_sha256,
+        )
+        self.assertEqual(owner["owner_status"], "GREEN")
+        self.assertFalse(owner["approval_provided"])
+
+        blocking = reaction_snapshot()
+        blocking["issue_comments"] = []
+        blocking["pull_request_reviews"] = [connector_review()]
+        blocking["review_comments"] = [connector_review_comment(severity="P1")]
+        blocking_raw = raw_bytes(blocking)
+        blocking_result = evaluate_codex_connector_evidence(
+            blocking_raw,
+            trusted(
+                blocking_raw,
+                resolved_clean_commit_sha=None,
+                workflow_request_receipt=workflow_request_receipt("RESPONSE_INVALID"),
+            ),
+        )
+        self.assertEqual(blocking_result["review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertIn("WORKFLOW_REQUEST_RESPONSE_INVALID", blocking_result["reasons"])
+
     def test_result_validation_replays_source_and_rejects_coherent_mutation(
         self,
     ) -> None:

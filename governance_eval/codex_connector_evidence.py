@@ -130,6 +130,7 @@ class TrustedWorkflowRequestReceipt:
     transport_timed_out: bool
     transport_exit_code: int
     transport_error_sha256: str | None
+    response_validation_error_sha256: str | None
     comment_id: int | None
     comment_created_at: str | None
 
@@ -206,6 +207,7 @@ class TrustedWorkflowRequestReceipt:
                 self.transport_exit_code != 0
                 or self.transport_timed_out
                 or self.transport_error_sha256 is not None
+                or self.response_validation_error_sha256 is not None
                 or not _positive_int(self.comment_id)
                 or not isinstance(self.comment_created_at, str)
                 or not _valid_timestamp(self.comment_created_at)
@@ -216,10 +218,22 @@ class TrustedWorkflowRequestReceipt:
                 self.transport_exit_code == 0
                 or not isinstance(self.transport_error_sha256, str)
                 or not _DIGEST_RE.fullmatch(self.transport_error_sha256)
+                or self.response_validation_error_sha256 is not None
                 or self.comment_id is not None
                 or self.comment_created_at is not None
             ):
                 raise ValueError("unavailable workflow request receipt is invalid")
+        elif self.outcome == "RESPONSE_INVALID":
+            if (
+                self.transport_exit_code != 0
+                or self.transport_timed_out
+                or self.transport_error_sha256 is not None
+                or not isinstance(self.response_validation_error_sha256, str)
+                or not _DIGEST_RE.fullmatch(self.response_validation_error_sha256)
+                or self.comment_id is not None
+                or self.comment_created_at is not None
+            ):
+                raise ValueError("invalid-response workflow request receipt is invalid")
         else:
             raise ValueError("workflow request outcome is invalid")
 
@@ -427,6 +441,7 @@ def _classify_review_state(
         "COMMIT_RESOLUTION_MISMATCH",
         "REVIEWED_COMMIT_NOT_HEAD",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
+        "WORKFLOW_REQUEST_RESPONSE_INVALID",
     }:
         return "BLOCKING_FINDINGS_PRESENT"
     if reason_set and reason_set <= {
@@ -435,6 +450,7 @@ def _classify_review_state(
         "NO_IN_WINDOW_RESPONSE",
         "ONLY_LATE_RESPONSE",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
+        "WORKFLOW_REQUEST_RESPONSE_INVALID",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     if reason_set & {
@@ -447,6 +463,7 @@ def _classify_review_state(
         "ONLY_LATE_RESPONSE",
         "RESPONSE_BODY_UNRECOGNIZED",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
+        "WORKFLOW_REQUEST_RESPONSE_INVALID",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     if "CONNECTOR_FAILURE_PRESENT" in reason_set and reason_set <= {
@@ -455,6 +472,7 @@ def _classify_review_state(
         "MANUAL_REVIEW_REQUEST_PRESENT",
         "RESPONSE_BODY_UNRECOGNIZED",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
+        "WORKFLOW_REQUEST_RESPONSE_INVALID",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     return "INVALID_EVIDENCE"
@@ -670,6 +688,8 @@ def _collection_reasons(
         > _timestamp(trusted.review_deadline_at)
     ):
         reasons.append("WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE")
+    if request is not None and request.outcome == "RESPONSE_INVALID":
+        reasons.append("WORKFLOW_REQUEST_RESPONSE_INVALID")
     if _manual_request_present(comments, trusted):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
 
@@ -1039,6 +1059,7 @@ def _workflow_request_record(
         "transport_timed_out": receipt.transport_timed_out,
         "transport_exit_code": receipt.transport_exit_code,
         "transport_error_sha256": receipt.transport_error_sha256,
+        "response_validation_error_sha256": (receipt.response_validation_error_sha256),
         "comment_id": receipt.comment_id,
         "comment_created_at": receipt.comment_created_at,
     }

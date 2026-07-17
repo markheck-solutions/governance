@@ -149,11 +149,16 @@ def workflow_request_receipt(
         transport_completed_at=TRANSPORT_COMPLETED_AT,
         transport_timeout_seconds=30,
         transport_timed_out=False,
-        transport_exit_code=0 if outcome == "POSTED" else 1,
+        transport_exit_code=(0 if outcome in {"POSTED", "RESPONSE_INVALID"} else 1),
         transport_error_sha256=(
-            None
-            if outcome == "POSTED"
-            else "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest()
+            "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest()
+            if outcome == "TRANSPORT_UNAVAILABLE"
+            else None
+        ),
+        response_validation_error_sha256=(
+            "sha256:" + hashlib.sha256(b"INVALID_JSON\0{").hexdigest()
+            if outcome == "RESPONSE_INVALID"
+            else None
         ),
         comment_id=201 if outcome == "POSTED" else None,
         comment_created_at=REQUEST_CREATED_AT if outcome == "POSTED" else None,
@@ -189,7 +194,7 @@ def request_cli_args(outcome: str = "POSTED") -> list[str]:
         "--request-transport-timed-out",
         "false",
         "--request-transport-exit-code",
-        "0" if outcome == "POSTED" else "1",
+        "0" if outcome in {"POSTED", "RESPONSE_INVALID"} else "1",
     ]
     if outcome == "POSTED":
         args.extend(
@@ -200,11 +205,18 @@ def request_cli_args(outcome: str = "POSTED") -> list[str]:
                 REQUEST_CREATED_AT,
             ]
         )
-    else:
+    elif outcome == "TRANSPORT_UNAVAILABLE":
         args.extend(
             [
                 "--request-transport-error-sha256",
                 "sha256:" + hashlib.sha256(b"transport unavailable").hexdigest(),
+            ]
+        )
+    else:
+        args.extend(
+            [
+                "--request-response-validation-error-sha256",
+                "sha256:" + hashlib.sha256(b"INVALID_JSON\0{").hexdigest(),
             ]
         )
     return args
@@ -667,6 +679,34 @@ class CodexReviewGateTests(unittest.TestCase):
         self.assertEqual(
             run_gate.call_args.kwargs["workflow_request_receipt"],
             workflow_request_receipt("TRANSPORT_UNAVAILABLE"),
+        )
+
+    @patch(
+        "governance_eval.codex_review_gate.run_codex_review_gate",
+        return_value={"owner_status": "GREEN"},
+    )
+    def test_cli_passes_invalid_response_request_receipt(self, run_gate: Mock) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = write_config(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--config-source-path",
+                        CONFIG_SOURCE_PATH,
+                        "--config-binding-digest",
+                        "sha256:" + "d" * 64,
+                        *cli_args(root / "out", include_request=False),
+                        *request_cli_args("RESPONSE_INVALID"),
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            run_gate.call_args.kwargs["workflow_request_receipt"],
+            workflow_request_receipt("RESPONSE_INVALID"),
         )
 
     @patch(

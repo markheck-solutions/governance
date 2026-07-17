@@ -233,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request-transport-timed-out")
     parser.add_argument("--request-transport-exit-code", type=int)
     parser.add_argument("--request-transport-error-sha256")
+    parser.add_argument("--request-response-validation-error-sha256")
     parser.add_argument("--request-comment-id", type=int)
     parser.add_argument("--request-comment-created-at")
     args = parser.parse_args(argv)
@@ -315,6 +316,9 @@ def _workflow_request_receipt_from_args(
         transport_timed_out=args.request_transport_timed_out == "true",
         transport_exit_code=args.request_transport_exit_code,
         transport_error_sha256=args.request_transport_error_sha256,
+        response_validation_error_sha256=(
+            args.request_response_validation_error_sha256
+        ),
         comment_id=args.request_comment_id,
         comment_created_at=args.request_comment_created_at,
     )

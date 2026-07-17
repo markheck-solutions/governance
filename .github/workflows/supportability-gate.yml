@@ -52,6 +52,10 @@ on:
         required: false
         type: string
         default: ""
+      request-response-validation-error-sha256:
+        required: false
+        type: string
+        default: ""
       request-comment-id:
         required: false
         type: string
@@ -117,6 +121,7 @@ jobs:
       REQUEST_TRANSPORT_TIMED_OUT: ${{ inputs.request-transport-timed-out }}
       REQUEST_TRANSPORT_EXIT_CODE: ${{ inputs.request-transport-exit-code }}
       REQUEST_TRANSPORT_ERROR_SHA256: ${{ inputs.request-transport-error-sha256 }}
+      REQUEST_RESPONSE_VALIDATION_ERROR_SHA256: ${{ inputs.request-response-validation-error-sha256 }}
       REQUEST_COMMENT_ID: ${{ inputs.request-comment-id }}
       REQUEST_COMMENT_CREATED_AT: ${{ inputs.request-comment-created-at }}
       CONFIG_PATH: ${{ inputs.config-path }}
@@ -228,6 +233,9 @@ jobs:
           timed_out_text = os.environ["REQUEST_TRANSPORT_TIMED_OUT"]
           exit_code_text = os.environ["REQUEST_TRANSPORT_EXIT_CODE"]
           error_digest = os.environ["REQUEST_TRANSPORT_ERROR_SHA256"]
+          response_error_digest = os.environ[
+              "REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"
+          ]
           comment_id = os.environ["REQUEST_COMMENT_ID"]
           comment_created_at = os.environ["REQUEST_COMMENT_CREATED_AT"]
           if not exit_code_re.fullmatch(exit_code_text):
@@ -273,6 +281,7 @@ jobs:
                   and exit_code == 0
                   and timed_out_text == "false"
                   and error_digest == ""
+                  and response_error_digest == ""
                   and positive_int_re.fullmatch(comment_id)
                   and valid_timestamp(comment_created_at)
               )
@@ -281,6 +290,17 @@ jobs:
                   transport_valid
                   and exit_code != 0
                   and digest_re.fullmatch(error_digest)
+                  and response_error_digest == ""
+                  and comment_id == ""
+                  and comment_created_at == ""
+              )
+          elif outcome == "RESPONSE_INVALID":
+              valid = (
+                  transport_valid
+                  and exit_code == 0
+                  and timed_out_text == "false"
+                  and error_digest == ""
+                  and digest_re.fullmatch(response_error_digest)
                   and comment_id == ""
                   and comment_created_at == ""
               )
@@ -413,9 +433,13 @@ jobs:
               --request-comment-id "$REQUEST_COMMENT_ID"
               --request-comment-created-at "$REQUEST_COMMENT_CREATED_AT"
             )
-          else
+          elif [[ "$REQUEST_OUTCOME" == "TRANSPORT_UNAVAILABLE" ]]; then
             receipt_args+=(
               --request-transport-error-sha256 "$REQUEST_TRANSPORT_ERROR_SHA256"
+            )
+          else
+            receipt_args+=(
+              --request-response-validation-error-sha256 "$REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"
             )
           fi
           python -m governance_eval.codex_review_gate \

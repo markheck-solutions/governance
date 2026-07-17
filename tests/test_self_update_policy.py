@@ -207,6 +207,9 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                 self.assertEqual(outputs["request-transport-timed-out"], timed_out)
                 self.assertEqual(outputs["request-transport-exit-code"], exit_code)
                 self.assertEqual(outputs["request-outcome"], outcome)
+                self.assertEqual(
+                    outputs["request-response-validation-error-sha256"], ""
+                )
                 self.assertRegex(
                     outputs["request-transport-started-at"],
                     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
@@ -222,13 +225,42 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                     timeout=30,
                 )
 
-    def test_receipt_activation_rejects_malformed_success_response(self) -> None:
-        malformed = subprocess.CompletedProcess(
-            [], 0, stdout=b'{"created_at":"2026-07-17T13:32:58Z"}', stderr=b""
+    def test_receipt_activation_records_invalid_success_response(self) -> None:
+        cases = (
+            (b"\xff", "INVALID_UTF8"),
+            (b"{", "INVALID_JSON"),
+            (b"[]", "RESPONSE_NOT_OBJECT"),
+            (
+                b'{"created_at":"2026-07-17T13:32:58Z"}',
+                "INVALID_COMMENT_ID",
+            ),
+            (
+                b'{"id":201,"created_at":"not-a-time"}',
+                "INVALID_COMMENT_CREATED_AT",
+            ),
         )
+        for stdout, failure_code in cases:
+            with self.subTest(failure_code=failure_code):
+                malformed = subprocess.CompletedProcess(
+                    [], 0, stdout=stdout, stderr=b""
+                )
+                outputs, _ = _execute_request_fixture(malformed)
+                expected_digest = (
+                    "sha256:"
+                    + hashlib.sha256(
+                        failure_code.encode("ascii") + b"\0" + stdout
+                    ).hexdigest()
+                )
 
-        with self.assertRaises(SystemExit):
-            _execute_request_fixture(malformed)
+                self.assertEqual(outputs["request-outcome"], "RESPONSE_INVALID")
+                self.assertEqual(outputs["request-transport-exit-code"], "0")
+                self.assertEqual(outputs["request-transport-error-sha256"], "")
+                self.assertEqual(
+                    outputs["request-response-validation-error-sha256"],
+                    expected_digest,
+                )
+                self.assertEqual(outputs["request-comment-id"], "")
+                self.assertEqual(outputs["request-comment-created-at"], "")
 
     def test_exact_legacy_to_receipt_activation_is_accepted(self) -> None:
         trusted_sha = "2" * 40

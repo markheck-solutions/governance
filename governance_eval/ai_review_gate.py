@@ -112,6 +112,7 @@ def _validated_codex_state(
                 "NO_IN_WINDOW_RESPONSE",
                 "ONLY_LATE_RESPONSE",
                 "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
+                "WORKFLOW_REQUEST_RESPONSE_INVALID",
             }
         )
         tainted_unrecognized = bool(
@@ -128,6 +129,7 @@ def _validated_codex_state(
                 "ONLY_LATE_RESPONSE",
                 "RESPONSE_BODY_UNRECOGNIZED",
                 "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
+                "WORKFLOW_REQUEST_RESPONSE_INVALID",
             }
         )
         connector_unavailable = (
@@ -139,6 +141,7 @@ def _validated_codex_state(
                     "MANUAL_REVIEW_REQUEST_PRESENT",
                     "RESPONSE_BODY_UNRECOGNIZED",
                     "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
+                    "WORKFLOW_REQUEST_RESPONSE_INVALID",
                 }
             )
         )

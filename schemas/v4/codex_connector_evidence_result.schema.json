@@ -40,7 +40,7 @@
     "workflow_request_receipt": {
       "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["workflow_ref", "workflow_sha", "event_name", "event_action", "run_id", "run_attempt", "repository_id", "repository_full_name", "pull_request_number", "head_sha", "review_window_started_at", "job_id", "request_endpoint", "request_body_sha256", "outcome", "transport_command", "transport_started_at", "transport_completed_at", "transport_timeout_seconds", "transport_timed_out", "transport_exit_code", "transport_error_sha256", "comment_id", "comment_created_at"],
+      "required": ["workflow_ref", "workflow_sha", "event_name", "event_action", "run_id", "run_attempt", "repository_id", "repository_full_name", "pull_request_number", "head_sha", "review_window_started_at", "job_id", "request_endpoint", "request_body_sha256", "outcome", "transport_command", "transport_started_at", "transport_completed_at", "transport_timeout_seconds", "transport_timed_out", "transport_exit_code", "transport_error_sha256", "response_validation_error_sha256", "comment_id", "comment_created_at"],
       "properties": {
         "workflow_ref": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\\.github/workflows/supportability-enforcement\\.yml@refs/heads/main$"},
         "workflow_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
@@ -56,7 +56,7 @@
         "job_id": {"type": "string", "enum": ["request-codex-review"]},
         "request_endpoint": {"type": "string", "pattern": "^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/comments$"},
         "request_body_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-        "outcome": {"type": "string", "enum": ["POSTED", "TRANSPORT_UNAVAILABLE"]},
+        "outcome": {"type": "string", "enum": ["POSTED", "TRANSPORT_UNAVAILABLE", "RESPONSE_INVALID"]},
         "transport_command": {
           "type": "array",
           "minItems": 7,
@@ -69,6 +69,7 @@
         "transport_timed_out": {"type": "boolean"},
         "transport_exit_code": {"type": "integer", "minimum": 0, "maximum": 255},
         "transport_error_sha256": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+        "response_validation_error_sha256": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
         "comment_id": {"type": ["integer", "null"], "minimum": 1},
         "comment_created_at": {"type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"}
       },
@@ -80,6 +81,7 @@
               "transport_timed_out": {"const": false},
               "transport_exit_code": {"const": 0},
               "transport_error_sha256": {"type": "null"},
+              "response_validation_error_sha256": {"type": "null"},
               "comment_id": {"type": "integer", "minimum": 1},
               "comment_created_at": {"type": "string"}
             }
@@ -91,6 +93,20 @@
             "properties": {
               "transport_exit_code": {"type": "integer", "minimum": 1},
               "transport_error_sha256": {"type": "string"},
+              "response_validation_error_sha256": {"type": "null"},
+              "comment_id": {"type": "null"},
+              "comment_created_at": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"outcome": {"const": "RESPONSE_INVALID"}}},
+          "then": {
+            "properties": {
+              "transport_timed_out": {"const": false},
+              "transport_exit_code": {"const": 0},
+              "transport_error_sha256": {"type": "null"},
+              "response_validation_error_sha256": {"type": "string"},
               "comment_id": {"type": "null"},
               "comment_created_at": {"type": "null"}
             }

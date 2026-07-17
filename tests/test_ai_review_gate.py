@@ -126,6 +126,25 @@ class AiReviewGateTests(unittest.TestCase):
         self.assertFalse(result["approval_provided"])
         self.assertFalse(result["blocking_findings_present"])
 
+    def test_invalid_automatic_request_response_is_unavailable(self) -> None:
+        result = self.gate(
+            {
+                "capability_status": "BLOCK_TECHNICAL",
+                "review_state": "AI_REVIEW_UNAVAILABLE",
+                "reviewed_head_sha": None,
+                "reconciled_head_sha": HEAD_SHA,
+                "reasons": [
+                    "NO_IN_WINDOW_RESPONSE",
+                    "WORKFLOW_REQUEST_RESPONSE_INVALID",
+                ],
+                "result_content_hash": "b" * 64,
+            },
+        )
+
+        self.assertEqual(result["owner_status"], "GREEN")
+        self.assertEqual(result["evidence_status"], "AI_REVIEW_UNAVAILABLE")
+        self.assertFalse(result["approval_provided"])
+
     def test_ambiguous_boundary_or_manual_unrecognized_is_unavailable(self) -> None:
         for reasons in (
             ["HEAD_ATTRIBUTION_AMBIGUOUS", "NO_IN_WINDOW_RESPONSE"],

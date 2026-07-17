@@ -358,6 +358,11 @@ class WorkflowTests(unittest.TestCase):
             architecture_block,
         )
 
+
+class ReusableWorkflowTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = repo_root(Path(__file__).resolve())
+
     def test_reusable_gate_binds_automatic_request_receipt(self) -> None:
         workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
             encoding="utf-8"
@@ -383,6 +388,7 @@ class WorkflowTests(unittest.TestCase):
                 )
         for name in (
             "request-transport-error-sha256",
+            "request-response-validation-error-sha256",
             "request-comment-id",
             "request-comment-created-at",
         ):
@@ -425,6 +431,9 @@ class WorkflowTests(unittest.TestCase):
             "REQUEST_TRANSPORT_ERROR_SHA256": (
                 "${{ inputs.request-transport-error-sha256 }}"
             ),
+            "REQUEST_RESPONSE_VALIDATION_ERROR_SHA256": (
+                "${{ inputs.request-response-validation-error-sha256 }}"
+            ),
             "REQUEST_COMMENT_ID": "${{ inputs.request-comment-id }}",
             "REQUEST_COMMENT_CREATED_AT": ("${{ inputs.request-comment-created-at }}"),
         }
@@ -450,6 +459,7 @@ class WorkflowTests(unittest.TestCase):
             'os.environ["REQUEST_TRANSPORT_TIMED_OUT"]',
             'os.environ["REQUEST_TRANSPORT_EXIT_CODE"]',
             'os.environ["REQUEST_TRANSPORT_ERROR_SHA256"]',
+            '"REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"',
             'os.environ["REQUEST_COMMENT_ID"]',
             'os.environ["REQUEST_COMMENT_CREATED_AT"]',
         ):
@@ -488,6 +498,11 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertIn(
             '--request-transport-error-sha256 "$REQUEST_TRANSPORT_ERROR_SHA256"',
+            codex_block,
+        )
+        self.assertIn(
+            "--request-response-validation-error-sha256 "
+            '"$REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"',
             codex_block,
         )
         self.assertIn('"${receipt_args[@]}"', codex_block)
@@ -539,6 +554,7 @@ class WorkflowTests(unittest.TestCase):
             "REQUEST_TRANSPORT_TIMED_OUT": "false",
             "REQUEST_TRANSPORT_EXIT_CODE": "0",
             "REQUEST_TRANSPORT_ERROR_SHA256": "",
+            "REQUEST_RESPONSE_VALIDATION_ERROR_SHA256": "",
             "REQUEST_COMMENT_ID": "5003756722",
             "REQUEST_COMMENT_CREATED_AT": "2026-07-17T13:32:58Z",
         }
@@ -567,6 +583,16 @@ class WorkflowTests(unittest.TestCase):
                 },
                 0,
             ),
+            "response_invalid": (
+                {
+                    "REQUEST_OUTCOME": "RESPONSE_INVALID",
+                    "REQUEST_TRANSPORT_EXIT_CODE": "0",
+                    "REQUEST_RESPONSE_VALIDATION_ERROR_SHA256": ("sha256:" + "f" * 64),
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                0,
+            ),
             "rerun": ({"REQUEST_RUN_ATTEMPT": "2"}, 64),
             "wrong_workflow": ({"REQUEST_WORKFLOW_REF": "main"}, 64),
             "unsupported_action": ({"REQUEST_EVENT_ACTION": "closed"}, 64),
@@ -575,10 +601,22 @@ class WorkflowTests(unittest.TestCase):
                 {"REQUEST_TRANSPORT_ERROR_SHA256": "sha256:" + "e" * 64},
                 64,
             ),
+            "posted_response_error": (
+                {"REQUEST_RESPONSE_VALIDATION_ERROR_SHA256": "sha256:" + "f" * 64},
+                64,
+            ),
             "partial_unavailable": (
                 {
                     "REQUEST_OUTCOME": "TRANSPORT_UNAVAILABLE",
                     "REQUEST_TRANSPORT_EXIT_CODE": "1",
+                    "REQUEST_COMMENT_ID": "",
+                    "REQUEST_COMMENT_CREATED_AT": "",
+                },
+                64,
+            ),
+            "partial_response_invalid": (
+                {
+                    "REQUEST_OUTCOME": "RESPONSE_INVALID",
                     "REQUEST_COMMENT_ID": "",
                     "REQUEST_COMMENT_CREATED_AT": "",
                 },
