@@ -40,7 +40,7 @@ The workflow attempts one `@codex review` request bound to the exact new head, t
 
 ## Required checks
 
-Protect `main` with the existing four check contexts produced by the enforcement workflow. Do not rename or delete required contexts during bootstrap. Apply protection changes only through the controlled procedure in `TASK.md`.
+Target repositories protect `main` with the three contexts produced by the enforcement caller: baseline supportability, candidate supportability, and delivery receipt. Governance self-enforcement additionally requires `Phase 1 shadow run`, for four Governance-only contexts total. Do not rename or delete required contexts during bootstrap. Apply protection changes only through the controlled procedure in `TASK.md`.
 
 ## Evidence artifacts
 
@@ -70,6 +70,13 @@ python -m governance_eval adoption-bundle `
 ```
 
 The command does not edit the target repository or GitHub settings. It emits the typed config, canonical supportability standard, exact-pinned protected caller, protection instructions, and a schema-valid manifest with file hashes and the three target-repository required contexts. Review and apply that bundle through a separate target-repository pull request.
+
+Validate any copied or transported bundle before use:
+
+```powershell
+python -m governance_eval validate-adoption `
+  --bundle-dir <bundle-path>
+```
 
 Prove generator behavior without touching a target repository:
 

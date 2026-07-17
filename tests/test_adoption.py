@@ -19,6 +19,7 @@ from governance_eval.adoption import (
 )
 from governance_eval.hashing import sha256_json
 from governance_eval.supportability import load_supportability_config
+from governance_eval.cli import main as cli_main
 
 
 class AdoptionBundleTests(unittest.TestCase):
@@ -227,6 +228,59 @@ class AdoptionBundleTests(unittest.TestCase):
             self.assertFalse(result["defective_valid"])
             self.assertTrue((artifacts / "adoption-proof.json").is_file())
 
+    def test_manifest_paths_and_recorded_pins_are_semantically_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            pins_bundle = parent / "pins"
+            self._generate(pins_bundle)
+            manifest_path = pins_bundle / MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["caller_pins"][0] = "0" * 40
+            self._rehash_manifest(manifest)
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            pins_result = validate_adoption_bundle(
+                governance_root=self.root, bundle_dir=pins_bundle
+            )
+            self.assertFalse(pins_result["valid"])
+            self.assertIn(
+                "caller_pins must equal the exact Governance SHA six times",
+                pins_result["errors"],
+            )
+
+            path_bundle = parent / "paths"
+            self._generate(path_bundle)
+            path_manifest = path_bundle / MANIFEST_PATH
+            manifest = json.loads(path_manifest.read_text(encoding="utf-8"))
+            manifest["files"]["../../outside.txt"] = "0" * 64
+            self._rehash_manifest(manifest)
+            path_manifest.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            path_result = validate_adoption_bundle(
+                governance_root=self.root, bundle_dir=path_bundle
+            )
+            self.assertFalse(path_result["valid"])
+            self.assertIn("manifest invalid", path_result["errors"][0])
+
+    def test_validate_adoption_cli_returns_pass_and_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            self._generate(bundle)
+            args = [
+                "validate-adoption",
+                "--root",
+                str(self.root),
+                "--bundle-dir",
+                str(bundle),
+            ]
+            self.assertEqual(cli_main(args), 0)
+            (bundle / CALLER_PATH).write_text("tampered\n", encoding="utf-8")
+            self.assertEqual(cli_main(args), 1)
+
     def _generate(self, output: Path) -> dict:
         return generate_adoption_bundle(
             governance_root=self.root,
@@ -235,6 +289,15 @@ class AdoptionBundleTests(unittest.TestCase):
             config_source=self.root / CONFIG_PATH,
             output_dir=output,
         )
+
+    @staticmethod
+    def _rehash_manifest(manifest: dict) -> None:
+        unhashed = {
+            key: value
+            for key, value in manifest.items()
+            if key != "artifact_content_hash"
+        }
+        manifest["artifact_content_hash"] = sha256_json(unhashed)
 
 
 if __name__ == "__main__":

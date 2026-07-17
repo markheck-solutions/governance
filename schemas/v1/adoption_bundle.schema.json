@@ -31,7 +31,19 @@
     },
     "files": {
       "type": "object",
-      "minProperties": 4
+      "required": [
+        ".github/governance/supportability.yml",
+        ".github/workflows/supportability-enforcement.yml",
+        "docs/reference/supportability-standard.md",
+        "docs/governance-protection-setup.md"
+      ],
+      "properties": {
+        ".github/governance/supportability.yml": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        ".github/workflows/supportability-enforcement.yml": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "docs/reference/supportability-standard.md": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "docs/governance-protection-setup.md": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
     },
     "artifact_content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
   },

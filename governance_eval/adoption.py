@@ -102,6 +102,8 @@ def validate_adoption_bundle(
     *, governance_root: Path, bundle_dir: Path
 ) -> dict[str, Any]:
     errors: list[str] = []
+    if bundle_dir.is_symlink() or _is_junction(bundle_dir):
+        return {"valid": False, "errors": ["bundle directory must not be a link"]}
     manifest_path = bundle_dir / MANIFEST_PATH
     if not manifest_path.is_file():
         return {"valid": False, "errors": [f"missing {MANIFEST_PATH}"]}
@@ -117,13 +119,15 @@ def validate_adoption_bundle(
     if manifest.get("artifact_content_hash") != sha256_json(unhashed):
         errors.append("manifest artifact_content_hash mismatch")
     files = manifest.get("files", {})
-    if set(files) != {CONFIG_PATH, CALLER_PATH, STANDARD_PATH, PROTECTION_PATH}:
+    allowed_files = {CONFIG_PATH, CALLER_PATH, STANDARD_PATH, PROTECTION_PATH}
+    if set(files) != allowed_files:
         errors.append("manifest file set mismatch")
-    for relative, expected in files.items():
+    for relative in sorted(allowed_files):
+        expected = files.get(relative)
         path = bundle_dir / relative
         if not path.is_file():
             errors.append(f"missing generated file: {relative}")
-        elif sha256_file(path) != expected:
+        elif not isinstance(expected, str) or sha256_file(path) != expected:
             errors.append(f"generated file hash mismatch: {relative}")
 
     config_path = bundle_dir / CONFIG_PATH
@@ -138,6 +142,8 @@ def validate_adoption_bundle(
             errors.append("config_sha256 mismatch")
 
     sha = manifest.get("governance_sha", "")
+    if manifest.get("caller_pins") != [sha] * 6:
+        errors.append("caller_pins must equal the exact Governance SHA six times")
     caller_path = bundle_dir / CALLER_PATH
     if SHA_RE.fullmatch(sha) and caller_path.is_file():
         try:
@@ -215,8 +221,8 @@ def _validate_inputs(repository: str, governance_sha: str, output_dir: Path) -> 
     if output_dir.exists():
         raise AdoptionError(f"output directory already exists: {output_dir}")
     for candidate in output_dir.parents:
-        if candidate.exists() and candidate.is_symlink():
-            raise AdoptionError(f"output parent must not be a symlink: {candidate}")
+        if candidate.exists() and (candidate.is_symlink() or _is_junction(candidate)):
+            raise AdoptionError(f"output parent must not be a link: {candidate}")
 
 
 def _validate_standard(config: dict[str, Any], standard_bytes: bytes) -> None:
@@ -304,3 +310,8 @@ def _manifest(
     }
     result["artifact_content_hash"] = sha256_json(result)
     return result
+
+
+def _is_junction(path: Path) -> bool:
+    checker = getattr(path, "is_junction", None)
+    return bool(checker and checker())

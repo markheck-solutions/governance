@@ -15,6 +15,7 @@ from governance_eval.architecture_gate import main as architecture_gate_main
 from governance_eval.adoption import AdoptionError
 from governance_eval.adoption import generate_adoption_bundle
 from governance_eval.adoption import prove_adoption
+from governance_eval.adoption import validate_adoption_bundle
 from governance_eval.delivery_readiness import main as delivery_readiness_main
 from governance_eval.delivery_readiness import validate_review_quorum_document
 from governance_eval.lock import write_spaghetti_lock
@@ -41,6 +42,12 @@ def _add_adoption_parsers(subparsers: argparse._SubParsersAction) -> None:
     proof_parser.add_argument("--governance-sha", required=True)
     proof_parser.add_argument("--artifacts-dir", type=Path, required=True)
     proof_parser.add_argument("--root", type=Path, default=None)
+
+    validate_parser = subparsers.add_parser(
+        "validate-adoption", help="validate a generated adoption bundle"
+    )
+    validate_parser.add_argument("--bundle-dir", type=Path, required=True)
+    validate_parser.add_argument("--root", type=Path, default=None)
 
 
 def _run_adoption_command(args: argparse.Namespace, root: Path) -> int | None:
@@ -78,6 +85,17 @@ def _run_adoption_command(args: argparse.Namespace, root: Path) -> int | None:
             )
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0 if result["decision"] == "ADOPTION_PROOF_PASS" else 1
+        if args.command == "validate-adoption":
+            bundle_dir = (
+                args.bundle_dir
+                if args.bundle_dir.is_absolute()
+                else root / args.bundle_dir
+            )
+            result = validate_adoption_bundle(
+                governance_root=root, bundle_dir=bundle_dir
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["valid"] else 1
     except (AdoptionError, OSError) as exc:
         print(json.dumps({"decision": "BLOCK_TECHNICAL", "error": str(exc)}))
         return 2
