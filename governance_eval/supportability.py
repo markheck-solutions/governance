@@ -973,6 +973,7 @@ def _architecture_governance_change_errors(
         "schemas/v1/delivery_receipt.schema.json",
         "schemas/v1/supportability_config.schema.json",
         "schemas/v2/codex_connector_evidence_result.schema.json",
+        "schemas/v3/codex_connector_evidence_result.schema.json",
     }
     future_checker_paths = {
         "governance_eval/copilot_review_evidence.py",

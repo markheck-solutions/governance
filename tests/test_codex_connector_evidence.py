@@ -8,6 +8,8 @@ from hashlib import sha256
 from governance_eval.ai_review_gate import evaluate_ai_review_gate
 from governance_eval.codex_connector_evidence import (
     TrustedCodexConnectorContext,
+    TrustedWorkflowRequestReceipt,
+    _classify_review_state,
     evaluate_codex_connector_evidence,
     serialize_codex_connector_evidence_result,
     validate_codex_connector_evidence_result,
@@ -25,6 +27,10 @@ HEAD_SHA = "b" * 40
 EVALUATOR_SHA = "e" * 40
 ANCHOR = "2026-07-13T18:00:00Z"
 DEADLINE = "2026-07-13T18:05:00Z"
+WORKFLOW_SHA = "f" * 40
+WORKFLOW_REF = (
+    f"{REPOSITORY}/.github/workflows/supportability-enforcement.yml@refs/heads/main"
+)
 CONNECTOR_USER = {
     "login": "chatgpt-codex-connector[bot]",
     "id": 199175422,
@@ -71,6 +77,15 @@ def clean_body(suffix: str = " Bravo.", prefix: str | None = None) -> str:
     )
 
 
+def codex_review_body(prefix: str | None = None) -> str:
+    reviewed = prefix or HEAD_SHA[:10]
+    return (
+        "\n### 💡 Codex Review\n\n"
+        "Here are some automated review suggestions for this pull request.\n\n"
+        f"**Reviewed commit:** `{reviewed}`\n    \n\n{PRODUCT_DETAILS}"
+    )
+
+
 def automatic_summary_body(head_sha: str = HEAD_SHA) -> str:
     return f"""### Summary
 
@@ -108,10 +123,16 @@ def comment(
     }
 
 
-def human_comment(body: str, *, comment_id: int = 100) -> dict:
+def human_comment(
+    body: str,
+    *,
+    comment_id: int = 100,
+    created_at: str = "2026-07-13T18:01:00Z",
+) -> dict:
     result = comment(
         body,
         comment_id=comment_id,
+        created_at=created_at,
         user={
             "login": "markheck-solutions",
             "id": 12345,
@@ -291,12 +312,61 @@ def trusted(raw: bytes, **changes: object) -> TrustedCodexConnectorContext:
     return TrustedCodexConnectorContext(**values)  # type: ignore[arg-type]
 
 
+def workflow_request_receipt(
+    outcome: str = "POSTED",
+    **changes: object,
+) -> TrustedWorkflowRequestReceipt:
+    body = f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`."
+    values = {
+        "workflow_ref": WORKFLOW_REF,
+        "workflow_sha": WORKFLOW_SHA,
+        "event_name": "pull_request_target",
+        "event_action": "opened",
+        "run_id": 123456,
+        "run_attempt": 1,
+        "repository_id": REPOSITORY_ID,
+        "repository_full_name": REPOSITORY,
+        "pull_request_number": PR_NUMBER,
+        "head_sha": HEAD_SHA,
+        "review_window_started_at": ANCHOR,
+        "job_id": "request-codex-review",
+        "request_endpoint": f"repos/{REPOSITORY}/issues/{PR_NUMBER}/comments",
+        "request_body_sha256": "sha256:" + sha256(body.encode("utf-8")).hexdigest(),
+        "outcome": outcome,
+        "transport_exit_code": 0 if outcome == "POSTED" else 1,
+        "transport_error_sha256": (
+            None
+            if outcome == "POSTED"
+            else "sha256:" + sha256(b"transport unavailable").hexdigest()
+        ),
+        "comment_id": 201 if outcome == "POSTED" else None,
+        "comment_created_at": ("2026-07-13T18:01:00Z" if outcome == "POSTED" else None),
+    }
+    values.update(changes)
+    return TrustedWorkflowRequestReceipt(**values)  # type: ignore[arg-type]
+
+
 def evaluate(value: dict) -> dict:
     raw = raw_bytes(value)
     resolved = None if value.get("issue_reactions") else HEAD_SHA
     return evaluate_codex_connector_evidence(
         raw,
         trusted(raw, resolved_clean_commit_sha=resolved),
+    )
+
+
+def evaluate_with_workflow_request(
+    value: dict, receipt: TrustedWorkflowRequestReceipt
+) -> dict:
+    raw = raw_bytes(value)
+    resolved = None if value.get("issue_reactions") else HEAD_SHA
+    return evaluate_codex_connector_evidence(
+        raw,
+        trusted(
+            raw,
+            resolved_clean_commit_sha=resolved,
+            workflow_request_receipt=receipt,
+        ),
     )
 
 
@@ -631,37 +701,511 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
         manual["issue_comments"] = [human_comment("@codex review")]
         result = evaluate(manual)
         self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
         self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
 
-    def test_exact_head_workflow_request_does_not_poison_reconciliation(self) -> None:
+        historical = reaction_snapshot()
+        historical["issue_comments"] = [
+            human_comment("@codex review", created_at="2026-07-13T17:59:59Z")
+        ]
+        result = evaluate(historical)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(result["reasons"], ["NO_IN_WINDOW_RESPONSE"])
+
+        for created_at, expected_manual in ((ANCHOR, True), (DEADLINE, True)):
+            with self.subTest(created_at=created_at):
+                boundary = reaction_snapshot()
+                boundary["issue_comments"] = [
+                    human_comment("@codex review", created_at=created_at)
+                ]
+                result = evaluate(boundary)
+                self.assertEqual(
+                    "MANUAL_REVIEW_REQUEST_PRESENT" in result["reasons"],
+                    expected_manual,
+                )
+
+
+class CodexConnectorReviewReconciliationTests(unittest.TestCase):
+    def test_manual_request_never_authorizes_clean_or_suppresses_blocking(self) -> None:
+        for created_at in (ANCHOR, "2026-07-13T18:01:00Z"):
+            with self.subTest(created_at=created_at):
+                clean = snapshot()
+                clean["issue_comments"].append(
+                    human_comment("@codex review", created_at=created_at)
+                )
+                result = evaluate(clean)
+                self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+                self.assertIsNone(result["reviewed_head_sha"])
+                self.assertIsNone(result["response"])
+
+        for severity in ("P0", "P1", "P2"):
+            with self.subTest(severity=severity):
+                blocking = snapshot()
+                blocking["issue_comments"].append(human_comment("@codex review"))
+                blocking["issue_comments"][0]["body"] = (
+                    f"{severity}: unsafe exact-head evidence\n\n"
+                    f"**Reviewed commit:** `{HEAD_SHA[:10]}`"
+                )
+                result = evaluate(blocking)
+                self.assertEqual(result["review_state"], "BLOCKING_FINDINGS_PRESENT")
+                self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+                self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+    def test_prior_activity_preserves_manual_taint_and_exact_head_findings(
+        self,
+    ) -> None:
+        pull_request_created_at = "2026-07-13T17:00:00Z"
+
+        manual = snapshot()
+        manual["pull_request"]["created_at"] = pull_request_created_at
+        manual["issue_comments"].append(
+            human_comment("@codex review", created_at="2026-07-13T17:59:59Z")
+        )
+        raw = raw_bytes(manual)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(
+                raw,
+                pull_request_created_at=pull_request_created_at,
+            ),
+        )
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        finding = snapshot()
+        finding["pull_request"]["created_at"] = pull_request_created_at
+        review = connector_review()
+        review["submitted_at"] = "2026-07-13T17:45:00Z"
+        inline = connector_review_comment(severity="P2")
+        inline["created_at"] = "2026-07-13T17:45:00Z"
+        finding["pull_request_reviews"] = [review]
+        finding["review_comments"] = [inline]
+        raw = raw_bytes(finding)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(
+                raw,
+                pull_request_created_at=pull_request_created_at,
+            ),
+        )
+        self.assertEqual(result["review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+        for severity in ("P0", "P1", "P2"):
+            with self.subTest(severity=severity):
+                issue_finding = snapshot()
+                issue_finding["pull_request"]["created_at"] = pull_request_created_at
+                issue_finding["issue_comments"].insert(
+                    0,
+                    comment(
+                        f"{severity}: persistent same-head finding",
+                        comment_id=199,
+                        created_at="2026-07-13T17:45:00Z",
+                    ),
+                )
+                raw = raw_bytes(issue_finding)
+                result = evaluate_codex_connector_evidence(
+                    raw,
+                    trusted(
+                        raw,
+                        pull_request_created_at=pull_request_created_at,
+                    ),
+                )
+                self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+                self.assertIn("HEAD_ATTRIBUTION_AMBIGUOUS", result["reasons"])
+                self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+    def test_prior_exact_head_finding_blocks_without_current_window_response(
+        self,
+    ) -> None:
+        pull_request_created_at = "2026-07-13T17:00:00Z"
         value = reaction_snapshot()
+        value["pull_request"]["created_at"] = pull_request_created_at
+        review = connector_review()
+        review["submitted_at"] = "2026-07-13T17:45:00Z"
+        inline = connector_review_comment(severity="P2")
+        inline["created_at"] = "2026-07-13T17:45:00Z"
+        value["pull_request_reviews"] = [review]
+        value["review_comments"] = [inline]
+
+        raw = raw_bytes(value)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(
+                raw,
+                pull_request_created_at=pull_request_created_at,
+                resolved_clean_commit_sha=None,
+            ),
+        )
+
+        self.assertEqual(result["review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
+        self.assertIsNone(result["response"])
+        self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+        self.assertIn("NO_IN_WINDOW_RESPONSE", result["reasons"])
+
         value["issue_comments"] = [
             comment(
-                "@codex review\n\nGovernance review request for exact head "
-                f"`{HEAD_SHA}`.",
-                user={
-                    "login": "github-actions[bot]",
-                    "id": 41898282,
-                    "node_id": "MDM6Qm90NDE4OTgyODI=",
-                    "type": "Bot",
-                },
-                app={
-                    "id": 15368,
-                    "node_id": "MDM6QXBwMTUzNjg=",
-                    "slug": "github-actions",
-                },
+                "You have reached your Codex usage limits for code reviews.",
+                created_at="2026-07-13T18:01:00Z",
             )
         ]
+        raw = raw_bytes(value)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(
+                raw,
+                pull_request_created_at=pull_request_created_at,
+                resolved_clean_commit_sha=None,
+            ),
+        )
+
+        self.assertEqual(result["review_state"], "BLOCKING_FINDINGS_PRESENT")
+        self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
+        self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+        self.assertIn("CONNECTOR_FAILURE_PRESENT", result["reasons"])
+        self.assertIn("RESPONSE_BODY_UNRECOGNIZED", result["reasons"])
+
+    def test_exact_head_blocker_precedence_is_exhaustive_and_fail_closed(
+        self,
+    ) -> None:
+        compatible_reasons = (
+            "HEAD_ATTRIBUTION_AMBIGUOUS",
+            "MANUAL_REVIEW_REQUEST_PRESENT",
+            "NO_IN_WINDOW_RESPONSE",
+            "ONLY_LATE_RESPONSE",
+            "RESPONSE_BODY_UNRECOGNIZED",
+            "CONNECTOR_FAILURE_PRESENT",
+            "CONNECTOR_IDENTITY_MISMATCH",
+            "CONNECTOR_REACTION_AMBIGUOUS",
+            "CONNECTOR_REACTION_UNRECOGNIZED",
+            "ORPHANED_REVIEW_COMMENT",
+            "COMMIT_RESOLUTION_MISMATCH",
+            "REVIEWED_COMMIT_NOT_HEAD",
+        )
+        source_or_binding_failures = (
+            "SNAPSHOT_BYTES_INVALID",
+            "SNAPSHOT_JSON_INVALID",
+            "SNAPSHOT_BYTES_NONCANONICAL",
+            "SNAPSHOT_FILE_DIGEST_MISMATCH",
+            "SNAPSHOT_SCHEMA_INVALID",
+            "REPOSITORY_MISMATCH",
+            "PULL_REQUEST_MISMATCH",
+            "PULL_REQUEST_NOT_REVIEWABLE",
+            "COLLECTION_INCOMPLETE",
+            "COLLECTOR_IDENTITY_MISMATCH",
+            "COLLECTION_RECEIPT_INVALID",
+            "SNAPSHOT_COMMIT_IDENTITY_INVALID",
+            "SNAPSHOT_LIMIT_EXCEEDED",
+            "DUPLICATE_RESPONSE_ID",
+            "DUPLICATE_RESPONSE_NODE_ID",
+            "SNAPSHOT_TIMESTAMP_INVALID",
+            "EVIDENCE_CUTOFF_BEFORE_DEADLINE",
+            "SNAPSHOT_ITEM_AFTER_CAPTURE",
+        )
+
+        for reason in compatible_reasons:
+            with self.subTest(compatible_reason=reason):
+                self.assertEqual(
+                    _classify_review_state(
+                        ["BLOCKING_FINDINGS_PRESENT", reason],
+                        HEAD_SHA,
+                        None,
+                        HEAD_SHA,
+                    ),
+                    "BLOCKING_FINDINGS_PRESENT",
+                )
+        for reason in source_or_binding_failures:
+            with self.subTest(source_or_binding_failure=reason):
+                self.assertEqual(
+                    _classify_review_state(
+                        ["BLOCKING_FINDINGS_PRESENT", reason],
+                        HEAD_SHA,
+                        None,
+                        HEAD_SHA,
+                    ),
+                    "INVALID_EVIDENCE",
+                )
+
+    def test_unattributed_prior_activity_is_unavailable_not_blocking(self) -> None:
+        value = snapshot()
+        value["pull_request"]["created_at"] = "2026-07-13T17:00:00Z"
+        value["issue_comments"].append(
+            human_comment("@codex review", created_at="2026-07-13T17:29:59Z")
+        )
+        value["issue_comments"].insert(
+            0,
+            comment(
+                "P1: prior-head issue finding",
+                comment_id=199,
+                created_at="2026-07-13T17:29:59Z",
+            ),
+        )
+        raw = raw_bytes(value)
+
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(
+                raw,
+                pull_request_created_at="2026-07-13T17:00:00Z",
+            ),
+        )
+
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+        self.assertIn("HEAD_ATTRIBUTION_AMBIGUOUS", result["reasons"])
+        self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+    def test_human_claimed_sha_cannot_exempt_manual_request(self) -> None:
+        value = snapshot()
+        value["issue_comments"].append(
+            human_comment(
+                "@codex review\n\nGovernance review request for exact head "
+                f"`{'c' * 40}`."
+            )
+        )
 
         result = evaluate(value)
 
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+    def test_unbound_start_boundary_never_blocks_or_authorizes_clean(self) -> None:
+        for body in (
+            "P2: finding with ambiguous head attribution",
+            "Codex couldn't complete this request. Try again later.",
+        ):
+            with self.subTest(body=body):
+                value = snapshot()
+                value["issue_comments"].insert(
+                    0,
+                    comment(body, comment_id=199, created_at=ANCHOR),
+                )
+
+                result = evaluate(value)
+
+                self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+                self.assertIn("HEAD_ATTRIBUTION_AMBIGUOUS", result["reasons"])
+                self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+                self.assertIsNone(result["response"])
+
+        lifecycle_boundary = snapshot()
+        lifecycle_boundary["pull_request"]["created_at"] = "2026-07-13T17:00:00Z"
+        lifecycle_boundary["issue_comments"].insert(
+            0,
+            comment(
+                "P1: lifecycle-boundary finding",
+                comment_id=199,
+                created_at="2026-07-13T17:30:00Z",
+            ),
+        )
+        raw = raw_bytes(lifecycle_boundary)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(
+                raw,
+                pull_request_created_at="2026-07-13T17:00:00Z",
+            ),
+        )
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("HEAD_ATTRIBUTION_AMBIGUOUS", result["reasons"])
+        self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+    def test_manual_taint_reconciles_unrecognized_review_as_unavailable(self) -> None:
+        value = reaction_snapshot()
+        value["issue_comments"] = [human_comment("@codex review")]
+        value["pull_request_reviews"] = [connector_review()]
+
+        result = evaluate(value)
+
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(
+            result["reasons"],
+            ["MANUAL_REVIEW_REQUEST_PRESENT", "RESPONSE_BODY_UNRECOGNIZED"],
+        )
+
+    def test_canonical_exact_head_review_can_be_clean(self) -> None:
+        value = reaction_snapshot()
+        review = connector_review()
+        review["body"] = codex_review_body()
+        value["pull_request_reviews"] = [review]
+
+        result = evaluate(value)
+
+        self.assertEqual(result["review_state"], "CLEAN")
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
+        self.assertEqual(result["response"]["response_type"], "pull_request_review")
+
+        wrong_prefix = deepcopy(value)
+        wrong_prefix["pull_request_reviews"][0]["body"] = codex_review_body("c" * 10)
+        result = evaluate(wrong_prefix)
+        self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
+
+    def test_stale_review_cannot_override_current_head_clean_response(self) -> None:
+        value = snapshot()
+        stale = connector_review(commit_id="c" * 40)
+        stale["submitted_at"] = "2026-07-13T18:02:00Z"
+        stale["body"] = codex_review_body("c" * 10)
+        value["pull_request_reviews"] = [stale]
+
+        result = evaluate(value)
+
+        self.assertEqual(result["review_state"], "CLEAN")
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["response"]["response_type"], "issue_comment")
+        self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
+
+    def test_actions_request_requires_exact_first_attempt_receipt(self) -> None:
+        request = comment(
+            f"@codex review\n\nGovernance review request for exact head `{HEAD_SHA}`.",
+            comment_id=201,
+            user={
+                "login": "github-actions[bot]",
+                "id": 41898282,
+                "node_id": "MDM6Qm90NDE4OTgyODI=",
+                "type": "Bot",
+            },
+            app={
+                "id": 15368,
+                "node_id": "MDM6QXBwMTUzNjg=",
+                "slug": "github-actions",
+            },
+        )
+        request_only = reaction_snapshot()
+        request_only["issue_comments"] = [request]
+
+        result = evaluate(request_only)
+
         self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
-        self.assertNotIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+        self.assertEqual(
+            result["reasons"],
+            ["MANUAL_REVIEW_REQUEST_PRESENT", "NO_IN_WINDOW_RESPONSE"],
+        )
+        self.assertIsNone(result["response"])
+        self.assertIsNone(result["workflow_request_receipt"])
+
+        clean = snapshot()
+        clean["issue_comments"].append(deepcopy(request))
+        result = evaluate(clean)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        receipt = workflow_request_receipt()
+        result = evaluate_with_workflow_request(request_only, receipt)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(result["reasons"], ["NO_IN_WINDOW_RESPONSE"])
+        self.assertEqual(
+            result["workflow_request_receipt"]["comment_id"],
+            request["id"],
+        )
+
+        result = evaluate_with_workflow_request(clean, receipt)
+        self.assertEqual(result["review_state"], "CLEAN")
+        self.assertEqual(result["capability_status"], "PASS")
+
+        unavailable_snapshot = reaction_snapshot()
+        unavailable_snapshot["issue_comments"] = []
+        unavailable_receipt = workflow_request_receipt("TRANSPORT_UNAVAILABLE")
+        result = evaluate_with_workflow_request(
+            unavailable_snapshot, unavailable_receipt
+        )
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(result["reasons"], ["NO_IN_WINDOW_RESPONSE"])
+        self.assertEqual(
+            result["workflow_request_receipt"]["outcome"],
+            "TRANSPORT_UNAVAILABLE",
+        )
+
+        old_head = deepcopy(request_only)
+        old_head["issue_comments"][0]["body"] = (
+            f"@codex review\n\nGovernance review request for exact head `{'c' * 40}`."
+        )
+        result = evaluate(old_head)
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        for container, field, replacement in (
+            ("user", "login", "github-actions-lookalike[bot]"),
+            ("user", "id", 1),
+            ("user", "node_id", "BOT_lookalike"),
+            ("user", "type", "User"),
+            ("performed_via_github_app", "id", 1),
+            ("performed_via_github_app", "node_id", "APP_lookalike"),
+            ("performed_via_github_app", "slug", "github-actions-lookalike"),
+        ):
+            with self.subTest(container=container, field=field):
+                spoofed = deepcopy(request_only)
+                spoofed["issue_comments"][0][container][field] = replacement
+                result = evaluate(spoofed)
+                self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        owner_copy = deepcopy(request_only)
+        owner_copy["issue_comments"] = [human_comment(request["body"])]
+        result = evaluate(owner_copy)
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        duplicate = deepcopy(clean)
+        duplicate["issue_comments"].append(
+            {**deepcopy(request), "id": request["id"] + 1}
+        )
+        result = evaluate_with_workflow_request(duplicate, receipt)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("MANUAL_REVIEW_REQUEST_PRESENT", result["reasons"])
+
+        mismatched_comment = workflow_request_receipt(comment_id=999)
+        result = evaluate_with_workflow_request(clean, mismatched_comment)
+        self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
+        self.assertIn("WORKFLOW_REQUEST_RECEIPT_MISMATCH", result["reasons"])
+
+    def test_workflow_request_receipt_rejects_rerun_and_identity_evasions(
+        self,
+    ) -> None:
+        invalid_receipts = (
+            {"workflow_ref": WORKFLOW_REF.replace("supportability", "lookalike")},
+            {"workflow_sha": "not-a-sha"},
+            {"event_name": "workflow_dispatch"},
+            {"event_action": "edited"},
+            {"run_id": 0},
+            {"run_attempt": 2},
+            {"run_attempt": True},
+            {"job_id": "other-job"},
+            {"request_endpoint": "repos/other/repo/issues/31/comments"},
+            {"request_body_sha256": "sha256:" + "0" * 64},
+            {"outcome": "UNKNOWN"},
+            {"transport_exit_code": 1},
+            {"comment_id": 0},
+            {"comment_created_at": "not-a-time"},
+        )
+        for changes in invalid_receipts:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                workflow_request_receipt(**changes)
+
+        with self.assertRaises(ValueError):
+            workflow_request_receipt(
+                "TRANSPORT_UNAVAILABLE",
+                comment_id=201,
+            )
+
+        raw = raw_bytes(snapshot())
+        context_mismatches = (
+            {"repository_id": REPOSITORY_ID + 1},
+            {"pull_request_number": PR_NUMBER + 1},
+            {"head_sha": "c" * 40},
+            {"review_window_started_at": "2026-07-13T18:00:01Z"},
+            {"comment_created_at": "2026-07-13T18:05:01Z"},
+        )
+        for changes in context_mismatches:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                trusted(
+                    raw,
+                    workflow_request_receipt=workflow_request_receipt(**changes),
+                )
 
     def test_p0_p1_p2_findings_block_reaction_before_or_after_signal(self) -> None:
         for severity in ("P0", "P1", "P2"):
             for submitted_at in (
+                ANCHOR,
                 "2026-07-13T18:02:00Z",
                 "2026-07-13T18:04:30Z",
             ):
@@ -682,7 +1226,8 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
                     issue_comment = reaction_snapshot()
                     issue_comment["issue_comments"] = [
                         comment(
-                            f"{severity}: unsafe exact-head evidence",
+                            f"{severity}: unsafe exact-head evidence\n\n"
+                            f"**Reviewed commit:** `{HEAD_SHA[:10]}`",
                             created_at=submitted_at,
                         )
                     ]
@@ -690,7 +1235,111 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
                     self.assertEqual(
                         issue_result["capability_status"], "BLOCK_TECHNICAL"
                     )
+                    self.assertEqual(
+                        issue_result["review_state"], "BLOCKING_FINDINGS_PRESENT"
+                    )
                     self.assertIn("BLOCKING_FINDINGS_PRESENT", issue_result["reasons"])
+
+    def test_stale_issue_comment_finding_cannot_poison_current_clean_head(
+        self,
+    ) -> None:
+        value = snapshot()
+        value["issue_comments"][0]["created_at"] = "2026-07-13T18:03:00Z"
+        value["issue_comments"].append(
+            comment(
+                f"P1: stale previous-head finding\n\n**Reviewed commit:** `{'c' * 10}`",
+                comment_id=201,
+                created_at="2026-07-13T18:04:00Z",
+            )
+        )
+
+        result = evaluate(value)
+
+        self.assertEqual(result["review_state"], "CLEAN")
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+        unbound = deepcopy(value)
+        unbound["issue_comments"][1]["body"] = "P1: unbound issue finding"
+        result = evaluate(unbound)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("HEAD_ATTRIBUTION_AMBIGUOUS", result["reasons"])
+        self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+    def test_exact_head_p3_feedback_is_nonblocking_without_supplying_approval(
+        self,
+    ) -> None:
+        for marker, finding in (
+            (HEAD_SHA[:10], "P3: simplify the local helper"),
+            (
+                HEAD_SHA,
+                "**<sub><sub>![P3 Badge](https://img.shields.io/badge/"
+                "P3-yellow?style=flat)</sub></sub> Simplify the local helper",
+            ),
+        ):
+            with self.subTest(marker=marker):
+                issue_feedback = snapshot()
+                issue_feedback["issue_comments"][0]["body"] = (
+                    f"{finding}\n\n**Reviewed commit:** `{marker}`"
+                )
+                raw = raw_bytes(issue_feedback)
+                context = trusted(raw)
+
+                result = evaluate_codex_connector_evidence(raw, context)
+
+                self.assertEqual(result["review_state"], "CLEAN")
+                self.assertEqual(result["capability_status"], "PASS")
+                self.assertEqual(result["reviewed_head_sha"], HEAD_SHA)
+                self.assertEqual(result["reasons"], [])
+                owner = evaluate_ai_review_gate(
+                    HEAD_SHA,
+                    codex_result=result,
+                    raw_snapshot_bytes=raw,
+                    trusted_context=context,
+                )
+                self.assertEqual(owner["owner_status"], "GREEN")
+                self.assertFalse(owner["approval_provided"])
+
+        review_feedback = snapshot()
+        review = connector_review()
+        review["body"] = codex_review_body()
+        review_feedback["issue_comments"] = []
+        review_feedback["pull_request_reviews"] = [review]
+        review_feedback["review_comments"] = [connector_review_comment(severity="P3")]
+        result = evaluate(review_feedback)
+        self.assertEqual(result["review_state"], "CLEAN")
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["reasons"], [])
+
+    def test_p3_issue_feedback_still_requires_exact_head_attribution(self) -> None:
+        cases = {
+            "unbound": "P3: simplify the local helper",
+            "multiple_markers": (
+                "P3: simplify the local helper\n\n"
+                f"**Reviewed commit:** `{HEAD_SHA[:10]}`\n"
+                f"**Reviewed commit:** `{'c' * 10}`"
+            ),
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                value = snapshot()
+                value["issue_comments"][0]["body"] = body
+                result = evaluate(value)
+                self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertIn("RESPONSE_BODY_UNRECOGNIZED", result["reasons"])
+
+        unresolved = snapshot()
+        unresolved["issue_comments"][0]["body"] = (
+            f"P3: simplify the local helper\n\n**Reviewed commit:** `{HEAD_SHA[:10]}`"
+        )
+        raw = raw_bytes(unresolved)
+        result = evaluate_codex_connector_evidence(
+            raw,
+            trusted(raw, resolved_clean_commit_sha=None),
+        )
+        self.assertEqual(result["review_state"], "INVALID_EVIDENCE")
+        self.assertIn("COMMIT_RESOLUTION_MISMATCH", result["reasons"])
 
     def test_exact_pr35_reaction_fixture_is_unavailable_without_head_attestation(
         self,
@@ -780,7 +1429,7 @@ class CodexConnectorEvidenceTests(unittest.TestCase):
 
 
 class CodexConnectorCommentEvidenceTests(unittest.TestCase):
-    def test_live_automatic_summary_and_semantic_paraphrase_pass(self) -> None:
+    def test_free_form_summary_never_authorizes_clean(self) -> None:
         bodies = (
             automatic_summary_body(),
             f"""### Summary
@@ -793,6 +1442,15 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
 
 - ✅ Focused positive and negative controls passed.
 """,
+            automatic_summary_body().replace(
+                "matching the supplied `head_ref`",
+                "does not match the supplied `head_ref`",
+            ),
+            automatic_summary_body().replace(
+                "* No code changes were needed",
+                "* Found a critical authentication bypass requiring remediation.\n"
+                "* No code changes were needed",
+            ),
         )
         for body in bodies:
             with self.subTest(body=body[:80]):
@@ -805,9 +1463,10 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
                 second = evaluate_codex_connector_evidence(raw, context)
 
                 self.assertEqual(first, second)
-                self.assertEqual(first["capability_status"], "PASS")
-                self.assertEqual(first["reviewed_head_sha"], HEAD_SHA)
-                self.assertEqual(first["reasons"], [])
+                self.assertEqual(first["capability_status"], "BLOCK_TECHNICAL")
+                self.assertEqual(first["review_state"], "INVALID_EVIDENCE")
+                self.assertIsNone(first["reviewed_head_sha"])
+                self.assertIn("RESPONSE_BODY_UNRECOGNIZED", first["reasons"])
 
     def test_automatic_summary_fail_closed_controls(self) -> None:
         valid = automatic_summary_body()
@@ -957,6 +1616,7 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
             " Can't wait for the next one!",
             " Already looking forward to the next diff.",
             " Another round soon, please!",
+            " :tada:",
         ):
             with self.subTest(suffix=suffix):
                 value = snapshot()
@@ -1060,25 +1720,33 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
             comment(clean_body(), comment_id=200)
         )
         cases.append(("duplicate_comment", duplicate_comment))
-        for index, created_at in enumerate((ANCHOR, "2026-07-13T17:59:59Z")):
-            manual = snapshot()
-            request = human_comment("@codex review", comment_id=100 + index)
-            request["created_at"] = created_at
-            manual["issue_comments"].insert(0, request)
-            cases.append((f"manual_request_{index}", manual))
-        stale = snapshot()
-        stale["issue_comments"][0]["created_at"] = ANCHOR
-        cases.append(("stale", stale))
-
         for name, value in cases:
             with self.subTest(name=name):
                 result = evaluate(value)
-                if name in {"missing", "stale"}:
+                if name == "missing":
                     self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                     self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
                 else:
                     self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertTrue(result["reasons"])
+
+        start_boundary = snapshot()
+        start_boundary["issue_comments"][0]["created_at"] = ANCHOR
+        result = evaluate(start_boundary)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertEqual(
+            result["reasons"],
+            ["HEAD_ATTRIBUTION_AMBIGUOUS", "NO_IN_WINDOW_RESPONSE"],
+        )
+
+        historical_manual = snapshot()
+        historical_manual["issue_comments"].insert(
+            0,
+            human_comment("@codex review", created_at="2026-07-13T17:59:59Z"),
+        )
+        result = evaluate(historical_manual)
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertEqual(result["reasons"], [])
 
         raw = raw_bytes(snapshot())
         mismatch_contexts = (
@@ -1147,12 +1815,50 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
                 self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertIn("ORPHANED_REVIEW_COMMENT", result["reasons"])
                 if severity in ("P0", "P1", "P2"):
+                    self.assertEqual(
+                        result["review_state"], "BLOCKING_FINDINGS_PRESENT"
+                    )
                     self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
 
         stale = snapshot()
         stale["review_comments"] = [connector_review_comment(review_id=999)]
         stale["review_comments"][0]["commit_id"] = "c" * 40
         self.assertEqual(evaluate(stale)["capability_status"], "PASS")
+
+        retargeted = reaction_snapshot()
+        retargeted["review_comments"] = [
+            connector_review_comment(review_id=999, severity="P1")
+        ]
+        retargeted["review_comments"][0]["original_commit_id"] = "c" * 40
+        result = evaluate(retargeted)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertNotIn("ORPHANED_REVIEW_COMMENT", result["reasons"])
+        self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+        mutated = deepcopy(retargeted)
+        mutated["review_comments"][0]["original_commit_id"] = HEAD_SHA
+        result = evaluate(mutated)
+        self.assertIn("ORPHANED_REVIEW_COMMENT", result["reasons"])
+        self.assertIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+        for name, mutate in (
+            (
+                "retargeted",
+                lambda comment: comment.update(original_commit_id="c" * 40),
+            ),
+            (
+                "post_cutoff",
+                lambda comment: comment.update(created_at="2026-07-13T18:05:30Z"),
+            ),
+        ):
+            with self.subTest(name=name):
+                linked = reaction_snapshot()
+                linked["captured_at"] = "2026-07-13T18:06:00Z"
+                linked["pull_request_reviews"] = [connector_review()]
+                linked["review_comments"] = [connector_review_comment()]
+                mutate(linked["review_comments"][0])
+                result = evaluate(linked)
+                self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
 
     def test_snapshot_commit_identities_require_semantic_full_match(self) -> None:
         cases = []
@@ -1320,7 +2026,33 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         raw = raw_bytes(value)
         context = trusted(raw)
         result = evaluate_codex_connector_evidence(raw, context)
-        validate_named("codex_connector_evidence_result_v2", result)
+        validate_named("codex_connector_evidence_result_v3", result)
+        prior_v2 = deepcopy(result)
+        prior_v2["schema_version"] = "2.0"
+        prior_v2.pop("workflow_request_receipt")
+        prior_v2["result_content_hash"] = sha256_json(
+            {**prior_v2, "result_content_hash": ""}
+        )
+        validate_named("codex_connector_evidence_result_v2", prior_v2)
+        with self.assertRaises(ValueError):
+            validate_named("codex_connector_evidence_result_v3", prior_v2)
+
+        impossible_reaction = deepcopy(result)
+        impossible_reaction["response"].update(
+            response_type="pull_request_reaction",
+            response_node_id="REA_current",
+            user_type="User",
+            app_provenance="NOT_EXPOSED_BY_GITHUB_API",
+            app_id=None,
+            app_node_id=None,
+            app_slug=None,
+        )
+        impossible_reaction["resolved_clean_commit_sha"] = None
+        impossible_reaction["result_content_hash"] = sha256_json(
+            {**impossible_reaction, "result_content_hash": ""}
+        )
+        with self.assertRaises(ValueError):
+            serialize_codex_connector_evidence_result(impossible_reaction)
 
         mutations = (
             lambda item: item["response"].update(response_id=999),
@@ -1337,6 +2069,49 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
                 )
                 with self.assertRaises(ValueError):
                     validate_codex_connector_evidence_result(candidate, raw, context)
+
+        requested = snapshot()
+        requested["issue_comments"].append(
+            comment(
+                "@codex review\n\nGovernance review request for exact head "
+                f"`{HEAD_SHA}`.",
+                comment_id=201,
+                user={
+                    "login": "github-actions[bot]",
+                    "id": 41898282,
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "type": "Bot",
+                },
+                app={
+                    "id": 15368,
+                    "node_id": "MDM6QXBwMTUzNjg=",
+                    "slug": "github-actions",
+                },
+            )
+        )
+        requested_raw = raw_bytes(requested)
+        requested_context = trusted(
+            requested_raw,
+            workflow_request_receipt=workflow_request_receipt(),
+        )
+        requested_result = evaluate_codex_connector_evidence(
+            requested_raw, requested_context
+        )
+        substituted = deepcopy(requested_result)
+        substituted["workflow_request_receipt"]["run_id"] += 1
+        substituted["result_content_hash"] = sha256_json(
+            {**substituted, "result_content_hash": ""}
+        )
+        with self.assertRaises(ValueError):
+            validate_codex_connector_evidence_result(
+                substituted, requested_raw, requested_context
+            )
+
+        rerun = deepcopy(requested_result)
+        rerun["workflow_request_receipt"]["run_attempt"] = 2
+        rerun["result_content_hash"] = sha256_json({**rerun, "result_content_hash": ""})
+        with self.assertRaises(ValueError):
+            serialize_codex_connector_evidence_result(rerun)
 
         quota = snapshot()
         quota["issue_comments"][0]["body"] = (
@@ -1372,6 +2147,10 @@ class CodexConnectorCommentEvidenceTests(unittest.TestCase):
         self.assertEqual(
             load_schema("codex_connector_evidence_result_v2")["title"],
             "Codex Connector Evidence Result v2",
+        )
+        self.assertEqual(
+            load_schema("codex_connector_evidence_result_v3")["title"],
+            "Codex Connector Evidence Result v3",
         )
         raw = raw_bytes(snapshot())
         with self.assertRaises(ValueError):

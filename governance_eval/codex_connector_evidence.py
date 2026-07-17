@@ -36,25 +36,25 @@ _CLEAN_RE = re.compile(
     r"\*\*Reviewed commit:\*\* `(?P<prefix>[0-9a-f]{10})`"
     r"(?P<trailer>\n\n<details>[\s\S]*</details>)?\Z"
 )
-_AUTOMATIC_SUMMARY_START_RE = re.compile(r"\A### Summary[ \t]*\n")
-_TESTING_HEADING_RE = re.compile(r"(?m)^(?:\*\*Testing\*\*|### Testing)[ \t]*$")
-_TOP_LEVEL_BULLET_RE = re.compile(r"(?m)^[*-][ \t]+(?P<text>[^\r\n]+)$")
-_INLINE_FULL_SHA_RE = re.compile(r"`([0-9a-f]{40})`")
-_TASK_LINK_RE = re.compile(r"\[View task →\]\(https://chatgpt\.com/s/[A-Za-z0-9_-]+\)")
-_REVIEW_COMPLETION = (
-    "No code changes were needed, so I did **not** create a commit or open a new PR."
-)
-_REVIEW_OUTCOME_SUBJECT_RE = re.compile(
-    r"(?:^|\b(?:the|this|code|pull request)\s+)review\b", re.IGNORECASE
+_CODEX_REVIEW_RE = re.compile(
+    r"\A\s*### 💡 Codex Review[ \t]*\n\n"
+    r"Here are some automated review suggestions for this pull request\.[ \t]*\n\n"
+    r"\*\*Reviewed commit:\*\* `(?P<prefix>[0-9a-f]{10})`"
+    r"(?P<trailer>[\s\S]*)\Z"
 )
 _MANUAL_REQUEST_RE = re.compile(r"@codex\b", re.IGNORECASE)
 _BLOCKING_SEVERITY_RE = re.compile(r"\bP[0-2]\b", re.IGNORECASE)
+_NONBLOCKING_SEVERITY_RE = re.compile(r"\bP3\b", re.IGNORECASE)
+_REVIEWED_COMMIT_MARKER_RE = re.compile(
+    r"(?m)^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$"
+)
 _APPROVED_CLEAN_SUFFIXES = {
     "",
     " Bravo.",
     " Can't wait for the next one!",
     " Already looking forward to the next diff.",
     " Another round soon, please!",
+    " :tada:",
 }
 _PRODUCT_TRAILER = """<details> <summary>ℹ️ About Codex in GitHub</summary>
 <br/>
@@ -83,11 +83,114 @@ _CONNECTOR_APP = {
     "node_id": "A_kwHOAOQ6Gs4AEXij",
     "slug": "chatgpt-codex-connector",
 }
+_GITHUB_ACTIONS_USER = {
+    "login": "github-actions[bot]",
+    "id": 41898282,
+    "node_id": "MDM6Qm90NDE4OTgyODI=",
+    "type": "Bot",
+}
+_GITHUB_ACTIONS_APP = {
+    "id": 15368,
+    "node_id": "MDM6QXBwMTUzNjg=",
+    "slug": "github-actions",
+}
+_PROTECTED_REQUEST_WORKFLOW_PATH = ".github/workflows/supportability-enforcement.yml"
+_AUTOMATIC_REQUEST_EVENT_ACTIONS = frozenset(
+    {"opened", "reopened", "synchronize", "ready_for_review"}
+)
 _CONNECTOR_RESULT_IDENTITY = {
     "login": _CONNECTOR_USER["login"],
     "user_id": _CONNECTOR_USER["id"],
     "user_node_id": _CONNECTOR_USER["node_id"],
 }
+
+
+@dataclass(frozen=True)
+class TrustedWorkflowRequestReceipt:
+    workflow_ref: str
+    workflow_sha: str
+    event_name: str
+    event_action: str
+    run_id: int
+    run_attempt: int
+    repository_id: int
+    repository_full_name: str
+    pull_request_number: int
+    head_sha: str
+    review_window_started_at: str
+    job_id: str
+    request_endpoint: str
+    request_body_sha256: str
+    outcome: str
+    transport_exit_code: int
+    transport_error_sha256: str | None
+    comment_id: int | None
+    comment_created_at: str | None
+
+    def __post_init__(self) -> None:
+        expected_workflow_ref = (
+            f"{self.repository_full_name}/{_PROTECTED_REQUEST_WORKFLOW_PATH}"
+            "@refs/heads/main"
+        )
+        if self.workflow_ref != expected_workflow_ref:
+            raise ValueError("workflow request ref is not the protected caller")
+        if not _SHA_RE.fullmatch(self.workflow_sha):
+            raise ValueError("workflow request commit identity is invalid")
+        if self.event_name != "pull_request_target":
+            raise ValueError("workflow request event is not automatic")
+        if self.event_action not in _AUTOMATIC_REQUEST_EVENT_ACTIONS:
+            raise ValueError("workflow request event action is invalid")
+        if not _positive_int(self.run_id):
+            raise ValueError("workflow request run ID is invalid")
+        if not _positive_int(self.run_attempt) or self.run_attempt != 1:
+            raise ValueError("workflow request must come from the first run attempt")
+        if not _positive_int(self.repository_id):
+            raise ValueError("workflow request repository ID is invalid")
+        if not _REPOSITORY_RE.fullmatch(self.repository_full_name):
+            raise ValueError("workflow request repository name is invalid")
+        if not _positive_int(self.pull_request_number):
+            raise ValueError("workflow request pull request number is invalid")
+        if not _SHA_RE.fullmatch(self.head_sha):
+            raise ValueError("workflow request head identity is invalid")
+        if not _valid_timestamp(self.review_window_started_at):
+            raise ValueError("workflow request review window is invalid")
+        if self.job_id != "request-codex-review":
+            raise ValueError("workflow request job identity is invalid")
+        expected_endpoint = (
+            f"repos/{self.repository_full_name}/issues/"
+            f"{self.pull_request_number}/comments"
+        )
+        if self.request_endpoint != expected_endpoint:
+            raise ValueError("workflow request endpoint is invalid")
+        if self.request_body_sha256 != _workflow_request_body_digest(self.head_sha):
+            raise ValueError("workflow request body digest is invalid")
+        valid_exit_code = (
+            isinstance(self.transport_exit_code, int)
+            and not isinstance(self.transport_exit_code, bool)
+            and 0 <= self.transport_exit_code <= 255
+        )
+        if not valid_exit_code:
+            raise ValueError("workflow request transport exit code is invalid")
+        if self.outcome == "POSTED":
+            if (
+                self.transport_exit_code != 0
+                or self.transport_error_sha256 is not None
+                or not _positive_int(self.comment_id)
+                or not isinstance(self.comment_created_at, str)
+                or not _valid_timestamp(self.comment_created_at)
+            ):
+                raise ValueError("posted workflow request receipt is invalid")
+        elif self.outcome == "TRANSPORT_UNAVAILABLE":
+            if (
+                self.transport_exit_code == 0
+                or not isinstance(self.transport_error_sha256, str)
+                or not _DIGEST_RE.fullmatch(self.transport_error_sha256)
+                or self.comment_id is not None
+                or self.comment_created_at is not None
+            ):
+                raise ValueError("unavailable workflow request receipt is invalid")
+        else:
+            raise ValueError("workflow request outcome is invalid")
 
 
 @dataclass(frozen=True)
@@ -104,6 +207,7 @@ class TrustedCodexConnectorContext:
     review_window_started_at: str
     review_deadline_at: str
     resolved_clean_commit_sha: str | None
+    workflow_request_receipt: TrustedWorkflowRequestReceipt | None = None
 
     def __post_init__(self) -> None:
         if not _DIGEST_RE.fullmatch(self.snapshot_file_sha256):
@@ -137,6 +241,35 @@ class TrustedCodexConnectorContext:
             self.resolved_clean_commit_sha
         ):
             raise ValueError("resolved clean commit identity is invalid")
+        request = self.workflow_request_receipt
+        if request is not None:
+            expected_identity = (
+                self.repository_id,
+                self.repository_full_name,
+                self.pull_request_number,
+                self.head_sha,
+            )
+            actual_identity = (
+                request.repository_id,
+                request.repository_full_name,
+                request.pull_request_number,
+                request.head_sha,
+            )
+            if actual_identity != expected_identity:
+                raise ValueError(
+                    "workflow request identity does not match trusted context"
+                )
+            if request.review_window_started_at != self.review_window_started_at:
+                raise ValueError(
+                    "workflow request review window does not match context"
+                )
+            if request.comment_created_at is not None and not _timestamp_in_window(
+                request.comment_created_at,
+                self.review_window_started_at,
+                self.review_deadline_at,
+                include_lower=True,
+            ):
+                raise ValueError("workflow request comment is outside review window")
 
 
 def evaluate_codex_connector_evidence(
@@ -204,7 +337,7 @@ def _evaluate(
         else None
     )
     result = {
-        "schema_version": "2.0",
+        "schema_version": "3.0",
         "capability": "CODEX_CONNECTOR_REVIEW_EVIDENCE",
         "adapter_id": ADAPTER_ID,
         "repository": {
@@ -225,6 +358,9 @@ def _evaluate(
         "snapshot_file_sha256": observed_digest,
         "normalized_snapshot_sha256": normalized_digest,
         "resolved_clean_commit_sha": trusted.resolved_clean_commit_sha,
+        "workflow_request_receipt": _workflow_request_record(
+            trusted.workflow_request_receipt
+        ),
         "connector_identity": deepcopy(_CONNECTOR_RESULT_IDENTITY),
         "review_state": review_state,
         "capability_status": "PASS" if passed else "BLOCK_TECHNICAL",
@@ -250,13 +386,42 @@ def _classify_review_state(
     reason_set = set(reasons)
     if "BLOCKING_FINDINGS_PRESENT" in reason_set and reason_set <= {
         "BLOCKING_FINDINGS_PRESENT",
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
+        "NO_IN_WINDOW_RESPONSE",
+        "ONLY_LATE_RESPONSE",
         "RESPONSE_BODY_UNRECOGNIZED",
+        "CONNECTOR_FAILURE_PRESENT",
+        "CONNECTOR_IDENTITY_MISMATCH",
+        "CONNECTOR_REACTION_AMBIGUOUS",
+        "CONNECTOR_REACTION_UNRECOGNIZED",
+        "ORPHANED_REVIEW_COMMENT",
+        "COMMIT_RESOLUTION_MISMATCH",
+        "REVIEWED_COMMIT_NOT_HEAD",
     }:
         return "BLOCKING_FINDINGS_PRESENT"
-    if reason_set and reason_set <= {"NO_IN_WINDOW_RESPONSE", "ONLY_LATE_RESPONSE"}:
+    if reason_set and reason_set <= {
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
+        "NO_IN_WINDOW_RESPONSE",
+        "ONLY_LATE_RESPONSE",
+    }:
+        return "AI_REVIEW_UNAVAILABLE"
+    if reason_set & {
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
+    } and reason_set <= {
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
+        "NO_IN_WINDOW_RESPONSE",
+        "ONLY_LATE_RESPONSE",
+        "RESPONSE_BODY_UNRECOGNIZED",
+    }:
         return "AI_REVIEW_UNAVAILABLE"
     if "CONNECTOR_FAILURE_PRESENT" in reason_set and reason_set <= {
         "CONNECTOR_FAILURE_PRESENT",
+        "HEAD_ATTRIBUTION_AMBIGUOUS",
+        "MANUAL_REVIEW_REQUEST_PRESENT",
         "RESPONSE_BODY_UNRECOGNIZED",
     }:
         return "AI_REVIEW_UNAVAILABLE"
@@ -298,8 +463,11 @@ def _evaluate_snapshot(
         ("issue_comment", item)
         for item in comments
         if _exact_connector_issue_comment(item)
+        and _issue_comment_head_state(item, trusted.head_sha) != "STALE"
     ] + [
-        ("pull_request_review", item) for item in reviews if _exact_connector_user(item)
+        ("pull_request_review", item)
+        for item in reviews
+        if _exact_connector_user(item) and item["commit_id"] == trusted.head_sha
     ]
     valid_responses = [
         item
@@ -309,9 +477,12 @@ def _evaluate_snapshot(
     in_window_responses = [
         item
         for item in valid_responses
-        if _timestamp(trusted.review_window_started_at)
-        < _timestamp(_response_timestamp(item[0], item[1]))
-        <= _timestamp(trusted.review_deadline_at)
+        if _timestamp_in_window(
+            _response_timestamp(item[0], item[1]),
+            trusted.review_window_started_at,
+            trusted.review_deadline_at,
+            include_lower=item[0] == "pull_request_review",
+        )
     ]
     if not in_window_responses:
         reasons.append(
@@ -358,12 +529,26 @@ def _evaluate_snapshot(
     if response_type == "pull_request_review":
         if latest["commit_id"] != trusted.head_sha:
             reasons.append("REVIEWED_COMMIT_NOT_HEAD")
-        elif _review_has_blocking_finding(latest, review_comments):
+        elif _review_has_blocking_finding(
+            latest,
+            review_comments,
+            trusted.head_sha,
+            trusted.pull_request_created_at,
+            trusted.review_deadline_at,
+        ):
             reasons.append("BLOCKING_FINDINGS_PRESENT")
         else:
-            reasons.append("RESPONSE_BODY_UNRECOGNIZED")
+            reviewed_prefix = _clean_review_commit_identity(latest)
+            if reviewed_prefix is None or not trusted.head_sha.startswith(
+                reviewed_prefix
+            ):
+                reasons.append("RESPONSE_BODY_UNRECOGNIZED")
+            else:
+                return response, reasons, trusted.head_sha
         return response, reasons, None
     commit_identity = _clean_commit_identity(latest["body"])
+    if commit_identity is None:
+        commit_identity = _nonblocking_issue_comment_identity(latest, trusted.head_sha)
     if commit_identity is None:
         reasons.append("RESPONSE_BODY_UNRECOGNIZED")
         return response, reasons, None
@@ -436,23 +621,83 @@ def _collection_reasons(
         )
     ):
         reasons.append("SNAPSHOT_ITEM_AFTER_CAPTURE")
-    if _manual_request_present(comments, trusted.head_sha):
+    request = trusted.workflow_request_receipt
+    if (
+        request is not None
+        and request.outcome == "POSTED"
+        and not any(
+            _authorized_workflow_request(comment, request) for comment in comments
+        )
+    ):
+        reasons.append("WORKFLOW_REQUEST_RECEIPT_MISMATCH")
+    if _manual_request_present(comments, trusted):
         reasons.append("MANUAL_REVIEW_REQUEST_PRESENT")
 
-    def in_window(value: str) -> bool:
-        return _valid_timestamp(value) and _timestamp(
-            trusted.review_window_started_at
-        ) < _timestamp(value) <= _timestamp(trusted.review_deadline_at)
+    def issue_in_window(value: str) -> bool:
+        return _timestamp_in_window(
+            value,
+            trusted.review_window_started_at,
+            trusted.review_deadline_at,
+            include_lower=False,
+        )
+
+    def review_in_window(value: str) -> bool:
+        return _timestamp_in_window(
+            value,
+            trusted.review_window_started_at,
+            trusted.review_deadline_at,
+            include_lower=True,
+        )
+
+    def review_for_current_head(value: str) -> bool:
+        return _timestamp_in_window(
+            value,
+            trusted.pull_request_created_at,
+            trusted.review_deadline_at,
+            include_lower=True,
+        )
+
+    def unbound_boundary(value: str) -> bool:
+        return _timestamp_at_boundary(value, trusted.review_window_started_at)
+
+    if (
+        any(
+            _exact_connector_issue_comment(comment)
+            and _issue_comment_head_state(comment, trusted.head_sha) != "STALE"
+            and unbound_boundary(comment["created_at"])
+            for comment in comments
+        )
+        or any(
+            _exact_connector_issue_comment(comment)
+            and _BLOCKING_SEVERITY_RE.search(comment["body"])
+            and _issue_comment_head_state(comment, trusted.head_sha) == "UNBOUND"
+            and _timestamp_in_window(
+                comment["created_at"],
+                trusted.pull_request_created_at,
+                trusted.review_deadline_at,
+                include_lower=True,
+            )
+            for comment in comments
+        )
+        or any(
+            _exact_connector_reaction_user(reaction)
+            and unbound_boundary(reaction["created_at"])
+            for reaction in reactions
+        )
+    ):
+        reasons.append("HEAD_ATTRIBUTION_AMBIGUOUS")
 
     connector_failure = any(
         _exact_connector_issue_comment(comment)
+        and _issue_comment_head_state(comment, trusted.head_sha) != "STALE"
         and is_ai_review_service_failure(comment["body"])
-        and in_window(comment["created_at"])
+        and issue_in_window(comment["created_at"])
         for comment in comments
     ) or any(
         _exact_connector_user(review)
+        and review["commit_id"] == trusted.head_sha
         and is_ai_review_service_failure(review["body"])
-        and in_window(review["submitted_at"])
+        and review_in_window(review["submitted_at"])
         for review in reviews
     )
     if connector_failure:
@@ -460,7 +705,13 @@ def _collection_reasons(
     if any(
         _exact_connector_issue_comment(comment)
         and _BLOCKING_SEVERITY_RE.search(comment["body"])
-        and in_window(comment["created_at"])
+        and _issue_comment_head_state(comment, trusted.head_sha) == "CURRENT"
+        and _timestamp_in_window(
+            comment["created_at"],
+            trusted.pull_request_created_at,
+            trusted.review_deadline_at,
+            include_lower=True,
+        )
         for comment in comments
     ):
         reasons.append("BLOCKING_FINDINGS_PRESENT")
@@ -468,7 +719,7 @@ def _collection_reasons(
         reaction
         for reaction in reactions
         if _exact_connector_reaction_user(reaction)
-        and in_window(reaction["created_at"])
+        and issue_in_window(reaction["created_at"])
     ]
     if any(
         reaction["user"] != _CONNECTOR_REACTION_USER
@@ -489,11 +740,15 @@ def _collection_reasons(
     current_connector_review_ids = {
         review["id"]
         for review in reviews
-        if _exact_connector_user(review) and review["commit_id"] == trusted.head_sha
+        if _exact_connector_user(review)
+        and review["commit_id"] == trusted.head_sha
+        and review_for_current_head(review["submitted_at"])
     }
     if any(
         _exact_connector_user(comment)
         and comment["commit_id"] == trusted.head_sha
+        and comment["original_commit_id"] == trusted.head_sha
+        and review_for_current_head(comment["created_at"])
         and comment["pull_request_review_id"] not in current_connector_review_ids
         for comment in review_comments
     ):
@@ -502,7 +757,7 @@ def _collection_reasons(
         reviews,
         review_comments,
         trusted.head_sha,
-        trusted.review_window_started_at,
+        trusted.pull_request_created_at,
         trusted.review_deadline_at,
     ):
         reasons.append("BLOCKING_FINDINGS_PRESENT")
@@ -517,7 +772,7 @@ def _blocking_finding_present(
     deadline_at: str,
 ) -> bool:
     def in_window(value: str) -> bool:
-        return _valid_timestamp(value) and _timestamp(window_started_at) < _timestamp(
+        return _valid_timestamp(value) and _timestamp(window_started_at) <= _timestamp(
             value
         ) <= _timestamp(deadline_at)
 
@@ -536,6 +791,7 @@ def _blocking_finding_present(
     inline_blocking = any(
         _exact_connector_user(comment)
         and comment["commit_id"] == head_sha
+        and comment["original_commit_id"] == head_sha
         and in_window(comment["created_at"])
         and _BLOCKING_SEVERITY_RE.search(comment["body"])
         for comment in comments
@@ -544,14 +800,29 @@ def _blocking_finding_present(
 
 
 def _review_has_blocking_finding(
-    review: dict[str, Any], comments: list[dict[str, Any]]
+    review: dict[str, Any],
+    comments: list[dict[str, Any]],
+    head_sha: str,
+    window_started_at: str,
+    deadline_at: str,
 ) -> bool:
+    def current_comment(comment: dict[str, Any]) -> bool:
+        return bool(
+            comment["commit_id"] == head_sha
+            and comment["original_commit_id"] == head_sha
+            and _valid_timestamp(comment["created_at"])
+            and _timestamp(window_started_at)
+            <= _timestamp(comment["created_at"])
+            <= _timestamp(deadline_at)
+        )
+
     return bool(
         review["state"] == "CHANGES_REQUESTED"
         or _BLOCKING_SEVERITY_RE.search(review["body"])
         or any(
             comment["pull_request_review_id"] == review["id"]
             and _exact_connector_user(comment)
+            and current_comment(comment)
             and _BLOCKING_SEVERITY_RE.search(comment["body"])
             for comment in comments
         )
@@ -587,9 +858,6 @@ def _snapshot_identity_reasons(
 
 
 def _clean_commit_identity(body: str) -> str | None:
-    automatic_head = _automatic_summary_head(body)
-    if automatic_head is not None:
-        return automatic_head
     match = _CLEAN_RE.fullmatch(body)
     if match is None:
         return None
@@ -602,90 +870,39 @@ def _clean_commit_identity(body: str) -> str | None:
     return str(match.group("prefix"))
 
 
-def _automatic_summary_head(body: str) -> str | None:
-    if (
-        _AUTOMATIC_SUMMARY_START_RE.match(body) is None
-        or _BLOCKING_SEVERITY_RE.search(body)
-        or is_ai_review_service_failure(body)
-        or "```" in body
-        or "<details" in body.lower()
-    ):
-        return None
-    testing_heading = _TESTING_HEADING_RE.search(body)
-    if testing_heading is None:
-        return None
-    summary = body[: testing_heading.start()]
-    testing = body[testing_heading.end() :]
-    summary_items: list[str] = []
-    for line in summary.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped == "### Summary":
-            continue
-        bullet = re.fullmatch(r"[*-][ \t]+(?P<text>.+)", line)
-        if bullet is None:
-            return None
-        summary_items.append(bullet.group("text"))
-    if summary_items.count(_REVIEW_COMPLETION) != 1:
-        return None
-    for item in summary_items:
-        without_inline_code = re.sub(r"`[^`]*`", "", item)
-        if item != _REVIEW_COMPLETION and _REVIEW_OUTCOME_SUBJECT_RE.search(
-            without_inline_code
-        ):
-            return None
-    attestations: list[str] = []
-    for match in _TOP_LEVEL_BULLET_RE.finditer(summary):
-        text = match.group("text")
-        lowered = text.lower()
-        if (
-            re.search(r"\b(?:pr|pull request)?\s*head\b", lowered)
-            and "`head_ref`" in lowered
-            and re.search(r"\b(?:match(?:es|ed|ing)?|equal(?:s|ed|ing)?)\b", lowered)
-        ):
-            shas = _INLINE_FULL_SHA_RE.findall(text)
-            if len(shas) != 1:
-                return None
-            attestations.append(shas[0])
-    if len(attestations) != 1:
-        return None
-    visible_inline_shas = _INLINE_FULL_SHA_RE.findall(summary + testing)
-    if any(sha != attestations[0] for sha in visible_inline_shas):
-        return None
-    test_items: list[str] = []
-    for line in testing.splitlines():
-        stripped = line.strip()
-        if not stripped or _TASK_LINK_RE.fullmatch(stripped):
-            continue
-        bullet = re.fullmatch(r"[*-][ \t]+(?P<text>.+)", line)
-        if bullet is None:
-            return None
-        test_items.append(bullet.group("text"))
-    if not test_items or any(
-        not _successful_test_item(item, attestations[0]) for item in test_items
-    ):
-        return None
-    return attestations[0]
-
-
-def _successful_test_item(item: str, head_sha: str) -> bool:
-    exact_items = {
-        f"✅ `git rev-parse HEAD` — returned `{head_sha}`.",
-        "✅ `git status --porcelain=v1` — clean working tree.",
-        "✅ Focused positive and negative controls passed.",
-    }
-    if item in exact_items:
-        return True
-    command = r"`[^`\r\n]+`"
-    positive_count = r"[1-9][0-9]*"
-    if re.fullmatch(rf"✅ {command} — {positive_count}(?: tests?)? passed\.", item):
-        return True
-    return bool(
-        re.fullmatch(
-            rf"✅ {command} — {positive_count} tests passed; "
-            r"`phase1_decision` was `BENCHMARK_PASS`; generated `[^`\r\n]+`\.",
-            item,
-        )
+def _issue_comment_head_state(comment: dict[str, Any], head_sha: str) -> str:
+    identities = _REVIEWED_COMMIT_MARKER_RE.findall(comment["body"])
+    if len(identities) != 1:
+        return "UNBOUND"
+    identity = identities[0]
+    current = (
+        identity == head_sha if len(identity) == 40 else head_sha.startswith(identity)
     )
+    return "CURRENT" if current else "STALE"
+
+
+def _nonblocking_issue_comment_identity(
+    comment: dict[str, Any], head_sha: str
+) -> str | None:
+    if (
+        _issue_comment_head_state(comment, head_sha) != "CURRENT"
+        or _BLOCKING_SEVERITY_RE.search(comment["body"])
+        or not _NONBLOCKING_SEVERITY_RE.search(comment["body"])
+    ):
+        return None
+    return _REVIEWED_COMMIT_MARKER_RE.findall(comment["body"])[0]
+
+
+def _clean_review_commit_identity(review: dict[str, Any]) -> str | None:
+    if review["state"] != "COMMENTED":
+        return None
+    match = _CODEX_REVIEW_RE.fullmatch(review["body"])
+    if match is None:
+        return None
+    trailer = match.group("trailer")
+    if not trailer.strip() or not _safe_product_trailer(trailer):
+        return None
+    return str(match.group("prefix"))
 
 
 def _safe_product_trailer(trailer: str) -> bool:
@@ -695,29 +912,77 @@ def _safe_product_trailer(trailer: str) -> bool:
     return normalized == _PRODUCT_TRAILER
 
 
-def _manual_request_present(comments: list[dict[str, Any]], head_sha: str) -> bool:
+def _manual_request_present(
+    comments: list[dict[str, Any]],
+    trusted: TrustedCodexConnectorContext,
+) -> bool:
     return any(
         not _exact_connector_issue_comment(comment)
-        and not _authorized_workflow_request(comment, head_sha)
+        and not _authorized_workflow_request(comment, trusted.workflow_request_receipt)
         and _MANUAL_REQUEST_RE.search(comment["body"])
+        and _timestamp_in_window(
+            comment["created_at"],
+            trusted.pull_request_created_at,
+            trusted.review_deadline_at,
+            include_lower=True,
+        )
         for comment in comments
     )
 
 
-def _authorized_workflow_request(comment: dict[str, Any], head_sha: str) -> bool:
-    raw_user = comment.get("user")
-    raw_app = comment.get("performed_via_github_app")
-    user: dict[str, Any] = raw_user if isinstance(raw_user, dict) else {}
-    app: dict[str, Any] = raw_app if isinstance(raw_app, dict) else {}
-    expected_body = (
-        f"@codex review\n\nGovernance review request for exact head `{head_sha}`."
-    )
+def _authorized_workflow_request(
+    comment: dict[str, Any], receipt: TrustedWorkflowRequestReceipt | None
+) -> bool:
+    if receipt is None:
+        return False
+    if receipt.outcome != "POSTED":
+        return False
+    expected_body = _workflow_request_body(receipt.head_sha)
     return bool(
-        user.get("login") == "github-actions[bot]"
-        and user.get("type") == "Bot"
-        and app.get("slug") == "github-actions"
+        comment.get("id") == receipt.comment_id
+        and comment.get("created_at") == receipt.comment_created_at
+        and comment.get("user") == _GITHUB_ACTIONS_USER
+        and comment.get("performed_via_github_app") == _GITHUB_ACTIONS_APP
         and comment.get("body") == expected_body
     )
+
+
+def _workflow_request_body(head_sha: str) -> str:
+    return f"@codex review\n\nGovernance review request for exact head `{head_sha}`."
+
+
+def _workflow_request_body_digest(head_sha: str) -> str:
+    return (
+        "sha256:" + sha256(_workflow_request_body(head_sha).encode("utf-8")).hexdigest()
+    )
+
+
+def _workflow_request_record(
+    receipt: TrustedWorkflowRequestReceipt | None,
+) -> dict[str, Any] | None:
+    if receipt is None:
+        return None
+    return {
+        "workflow_ref": receipt.workflow_ref,
+        "workflow_sha": receipt.workflow_sha,
+        "event_name": receipt.event_name,
+        "event_action": receipt.event_action,
+        "run_id": receipt.run_id,
+        "run_attempt": receipt.run_attempt,
+        "repository_id": receipt.repository_id,
+        "repository_full_name": receipt.repository_full_name,
+        "pull_request_number": receipt.pull_request_number,
+        "head_sha": receipt.head_sha,
+        "review_window_started_at": receipt.review_window_started_at,
+        "job_id": receipt.job_id,
+        "request_endpoint": receipt.request_endpoint,
+        "request_body_sha256": receipt.request_body_sha256,
+        "outcome": receipt.outcome,
+        "transport_exit_code": receipt.transport_exit_code,
+        "transport_error_sha256": receipt.transport_error_sha256,
+        "comment_id": receipt.comment_id,
+        "comment_created_at": receipt.comment_created_at,
+    }
 
 
 def _exact_connector_issue_comment(comment: dict[str, Any]) -> bool:
@@ -738,8 +1003,31 @@ def _exact_connector_reaction_user(item: dict[str, Any]) -> bool:
 def _response_timestamp(response_type: str, response: dict[str, Any]) -> str:
     return str(
         response["created_at"]
-        if response_type in {"issue_comment", "pull_request_reaction"}
+        if response_type == "issue_comment"
         else response["submitted_at"]
+    )
+
+
+def _timestamp_in_window(
+    value: str,
+    lower: str,
+    upper: str,
+    *,
+    include_lower: bool,
+) -> bool:
+    if not _valid_timestamp(value):
+        return False
+    observed = _timestamp(value)
+    lower_bound = _timestamp(lower)
+    lower_valid = observed >= lower_bound if include_lower else observed > lower_bound
+    return lower_valid and observed <= _timestamp(upper)
+
+
+def _timestamp_at_boundary(value: str, boundary: str) -> bool:
+    return bool(
+        _valid_timestamp(value)
+        and _valid_timestamp(boundary)
+        and _timestamp(value) == _timestamp(boundary)
     )
 
 
@@ -825,7 +1113,7 @@ def _snapshot_schema_valid(snapshot: dict[str, Any]) -> bool:
 
 
 def _validate_result_shape(result: dict[str, Any]) -> None:
-    validate_named("codex_connector_evidence_result_v2", result)
+    validate_named("codex_connector_evidence_result_v3", result)
     if not _valid_timestamp(result["review_window_started_at"]) or not _valid_timestamp(
         result["review_deadline_at"]
     ):
@@ -836,6 +1124,33 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
     ).total_seconds()
     if not 0 < review_window_seconds <= _MAX_REVIEW_WINDOW_SECONDS:
         raise ValueError("Codex connector evidence review window exceeds limit")
+    request_record = result["workflow_request_receipt"]
+    if request_record is not None:
+        request = TrustedWorkflowRequestReceipt(**request_record)
+        expected_identity = (
+            result["repository"]["id"],
+            result["repository"]["full_name"],
+            result["pull_request"]["number"],
+            result["pull_request"]["head_sha"],
+        )
+        actual_identity = (
+            request.repository_id,
+            request.repository_full_name,
+            request.pull_request_number,
+            request.head_sha,
+        )
+        comment_time_valid = request.comment_created_at is None or _timestamp_in_window(
+            request.comment_created_at,
+            result["review_window_started_at"],
+            result["review_deadline_at"],
+            include_lower=True,
+        )
+        if (
+            actual_identity != expected_identity
+            or request.review_window_started_at != result["review_window_started_at"]
+            or not comment_time_valid
+        ):
+            raise ValueError("Codex workflow request receipt binding is invalid")
     expected_hash = sha256_json({**result, "result_content_hash": ""})
     if result["result_content_hash"] != expected_hash:
         raise ValueError("Codex connector evidence result hash is invalid")
@@ -851,15 +1166,6 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
                 and response["app_node_id"] == _CONNECTOR_APP["node_id"]
                 and response["app_slug"] == _CONNECTOR_APP["slug"]
             )
-        elif response_type == "pull_request_reaction":
-            provenance_valid = (
-                response["user_type"] == "User"
-                and response["app_provenance"] == "NOT_EXPOSED_BY_GITHUB_API"
-                and response["response_node_id"] is not None
-                and response["app_id"] is None
-                and response["app_node_id"] is None
-                and response["app_slug"] is None
-            )
         else:
             provenance_valid = (
                 response["user_type"] == "Bot"
@@ -873,11 +1179,17 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
     response_type = (
         response.get("response_type") if isinstance(response, dict) else None
     )
-    resolution_valid = (
-        result["resolved_clean_commit_sha"] == result["pull_request"]["head_sha"]
-        if response_type == "issue_comment"
-        else result["resolved_clean_commit_sha"] is None
-    )
+    if response_type == "issue_comment":
+        resolution_valid = (
+            result["resolved_clean_commit_sha"] == result["pull_request"]["head_sha"]
+        )
+    elif response_type == "pull_request_review":
+        resolution_valid = result["resolved_clean_commit_sha"] in {
+            None,
+            result["pull_request"]["head_sha"],
+        }
+    else:
+        resolution_valid = result["resolved_clean_commit_sha"] is None
     final_collection = (
         result["normalized_snapshot_sha256"] is not None
         and isinstance(result["evidence_cutoff_at"], str)
@@ -891,7 +1203,7 @@ def _validate_result_shape(result: dict[str, Any]) -> None:
         and result["reviewed_head_sha"] == result["pull_request"]["head_sha"]
         and result["reconciled_head_sha"] == result["pull_request"]["head_sha"]
         and isinstance(response, dict)
-        and response.get("response_type") in {"issue_comment", "pull_request_reaction"}
+        and response.get("response_type") in {"issue_comment", "pull_request_review"}
         and resolution_valid
         and final_collection
     )

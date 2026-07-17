@@ -19,6 +19,7 @@ from governance_eval.codex_connector_collector import (
 )
 from governance_eval.codex_connector_evidence import (
     TrustedCodexConnectorContext,
+    TrustedWorkflowRequestReceipt,
     evaluate_codex_connector_evidence,
     serialize_codex_connector_evidence_result,
 )
@@ -141,9 +142,12 @@ def run_codex_review_gate(
     governance_sha: str,
     review_window_started_at: str,
     output_dir: Path,
+    workflow_request_receipt: TrustedWorkflowRequestReceipt | None = None,
     collector: Collector = collect_codex_connector_snapshot,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
+    if workflow_request_receipt is None:
+        raise ValueError("automatic workflow request receipt is required")
     unavailable_after_cutoff, config_binding = _load_bound_supportability_policy(
         config_path=config_path,
         repository=repository,
@@ -177,6 +181,7 @@ def run_codex_review_gate(
         review_window_started_at=_format_timestamp(started),
         review_deadline_at=_format_timestamp(deadline),
         resolved_clean_commit_sha=head_sha,
+        workflow_request_receipt=workflow_request_receipt,
     )
     codex_result = evaluate_codex_connector_evidence(raw, context)
     gate_result = dict(
@@ -213,8 +218,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--governance-sha", required=True)
     parser.add_argument("--review-window-started-at", required=True)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--request-workflow-ref")
+    parser.add_argument("--request-workflow-sha")
+    parser.add_argument("--request-event-name")
+    parser.add_argument("--request-event-action")
+    parser.add_argument("--request-run-id", type=int)
+    parser.add_argument("--request-run-attempt", type=int)
+    parser.add_argument("--request-repository-id", type=int)
+    parser.add_argument("--request-outcome")
+    parser.add_argument("--request-transport-exit-code", type=int)
+    parser.add_argument("--request-transport-error-sha256")
+    parser.add_argument("--request-comment-id", type=int)
+    parser.add_argument("--request-comment-created-at")
     args = parser.parse_args(argv)
     try:
+        workflow_request_receipt = _workflow_request_receipt_from_args(args)
+        if workflow_request_receipt is None:
+            raise ValueError("automatic workflow request receipt is required")
         result = run_codex_review_gate(
             config_path=args.config,
             config_source_path=args.config_source_path,
@@ -226,11 +246,57 @@ def main(argv: list[str] | None = None) -> int:
             governance_sha=args.governance_sha,
             review_window_started_at=args.review_window_started_at,
             output_dir=args.output_dir,
+            workflow_request_receipt=workflow_request_receipt,
         )
     except (OSError, TypeError, ValueError) as exc:
         parser.exit(2, f"Codex review gate failed: {exc}\n")
     print(json.dumps(result, sort_keys=True))
     return 0 if result["owner_status"] == "GREEN" else 1
+
+
+def _workflow_request_receipt_from_args(
+    args: argparse.Namespace,
+) -> TrustedWorkflowRequestReceipt | None:
+    core_values = (
+        args.request_workflow_ref,
+        args.request_workflow_sha,
+        args.request_event_name,
+        args.request_event_action,
+        args.request_run_id,
+        args.request_run_attempt,
+        args.request_repository_id,
+        args.request_outcome,
+        args.request_transport_exit_code,
+    )
+    if all(value is None for value in core_values):
+        return None
+    if any(value is None for value in core_values):
+        raise ValueError("workflow request receipt inputs must be supplied together")
+    request_body = (
+        f"@codex review\n\nGovernance review request for exact head `{args.head_sha}`."
+    )
+    return TrustedWorkflowRequestReceipt(
+        workflow_ref=args.request_workflow_ref,
+        workflow_sha=args.request_workflow_sha,
+        event_name=args.request_event_name,
+        event_action=args.request_event_action,
+        run_id=args.request_run_id,
+        run_attempt=args.request_run_attempt,
+        repository_id=args.request_repository_id,
+        repository_full_name=args.repo,
+        pull_request_number=args.pr,
+        head_sha=args.head_sha,
+        review_window_started_at=args.review_window_started_at,
+        job_id="request-codex-review",
+        request_endpoint=f"repos/{args.repo}/issues/{args.pr}/comments",
+        request_body_sha256="sha256:"
+        + sha256(request_body.encode("utf-8")).hexdigest(),
+        outcome=args.request_outcome,
+        transport_exit_code=args.request_transport_exit_code,
+        transport_error_sha256=args.request_transport_error_sha256,
+        comment_id=args.request_comment_id,
+        comment_created_at=args.request_comment_created_at,
+    )
 
 
 def _load_bound_supportability_policy(

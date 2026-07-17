@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 import governance_eval.supportability as supportability_module
+from governance_eval.codex_review_gate import run_codex_review_gate
 from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
 from governance_eval.supportability import (
@@ -243,6 +244,31 @@ class SupportabilityConfigTests(unittest.TestCase):
 class SupportabilityGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
+
+    def test_missing_automatic_request_receipt_fails_before_gate_execution(
+        self,
+    ) -> None:
+        collector = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(
+                ValueError, "automatic workflow request receipt is required"
+            ):
+                run_codex_review_gate(
+                    config_path=root / "missing.yml",
+                    config_source_path=".github/governance/supportability.yml",
+                    config_binding_digest="sha256:" + "0" * 64,
+                    repository="owner/repo",
+                    pull_request_number=1,
+                    base_sha="a" * 40,
+                    head_sha="b" * 40,
+                    governance_sha="c" * 40,
+                    review_window_started_at="2026-07-13T00:00:00Z",
+                    output_dir=root / "artifacts",
+                    collector=collector,
+                )
+
+        collector.assert_not_called()
 
     def test_synthetic_repo_with_passing_config_returns_green(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -657,6 +683,29 @@ class SupportabilityGateTests(unittest.TestCase):
                 all(command["status"] == "SKIPPED" for command in result["commands"])
             )
 
+    def test_gate_protects_active_codex_result_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _synthetic_repo(Path(tmp), self.root)
+            active_schema = "schemas/v3/codex_connector_evidence_result.schema.json"
+
+            result = run_supportability_gate(
+                repo / ".github/governance/supportability.yml",
+                repo,
+                "a" * 40,
+                "b" * 40,
+                changed_files=[active_schema],
+                command_runner=_passing_runner,
+            )
+
+            self.assertEqual(result["owner_status"], STATUS_RED)
+            self.assertTrue(
+                any(active_schema in error for error in result["errors"]),
+                result["errors"],
+            )
+            self.assertTrue(
+                all(command["status"] == "SKIPPED" for command in result["commands"])
+            )
+
     def test_gate_accepts_review_checker_change_with_independent_regressions(
         self,
     ) -> None:
@@ -673,6 +722,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",
+                "schemas/v3/codex_connector_evidence_result.schema.json",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
                 "tests/test_codex_connector_collector.py",
@@ -681,6 +731,26 @@ class SupportabilityGateTests(unittest.TestCase):
                 "tests/test_supportability.py",
                 "tests/test_workflows.py",
             ]
+
+            for required_test in (
+                "tests/test_architecture_gate.py",
+                "tests/test_supportability.py",
+            ):
+                with self.subTest(missing_independent_regression=required_test):
+                    blocked = run_supportability_gate(
+                        repo / ".github/governance/supportability.yml",
+                        repo,
+                        "a" * 40,
+                        "b" * 40,
+                        changed_files=[
+                            path for path in changed_files if path != required_test
+                        ],
+                        command_runner=_passing_runner,
+                    )
+                    self.assertEqual(blocked["owner_status"], STATUS_RED)
+                    self.assertTrue(
+                        any(required_test in error for error in blocked["errors"])
+                    )
 
             result = run_supportability_gate(
                 repo / ".github/governance/supportability.yml",
