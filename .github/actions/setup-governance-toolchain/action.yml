@@ -14,6 +14,36 @@ inputs:
   python-path:
     description: Absolute interpreter path produced by actions/setup-python.
     required: true
+  repository:
+    description: Authoritative owner/repository identity from the workflow context.
+    required: true
+  repository-id:
+    description: Authoritative repository database ID from the workflow context.
+    required: true
+  head-repository-id:
+    description: Authoritative head repository database ID from the workflow context.
+    required: true
+  event-name:
+    description: Authoritative workflow event name.
+    required: true
+  pull-request-number:
+    description: Authoritative pull request number.
+    required: true
+  workflow-ref:
+    description: Authoritative workflow ref from the workflow context.
+    required: true
+  workflow-sha:
+    description: Authoritative workflow commit from the workflow context.
+    required: true
+  run-id:
+    description: Authoritative workflow run ID.
+    required: true
+  run-attempt:
+    description: Authoritative workflow run attempt.
+    required: true
+  expected-artifact-name:
+    description: Exact artifact name reserved for this run and attempt.
+    required: true
 
 outputs:
   python-path:
@@ -42,11 +72,21 @@ runs:
         BASE_PYTHON: ${{ inputs.python-path }}
         BASE_SHA: ${{ inputs.base-sha }}
         EVALUATOR_SHA: ${{ inputs.evaluator-sha }}
+        EVENT_NAME: ${{ inputs.event-name }}
+        EXPECTED_ARTIFACT_NAME: ${{ inputs.expected-artifact-name }}
         GH_TOKEN: ""
         GITHUB_TOKEN: ""
         GOVERNANCE_ROOT: ${{ inputs.governance-root }}
+        HEAD_REPOSITORY_ID: ${{ inputs.head-repository-id }}
         PYTHONHOME: ""
         PYTHONPATH: ""
+        PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
+        REPOSITORY: ${{ inputs.repository }}
+        REPOSITORY_ID: ${{ inputs.repository-id }}
+        RUN_ATTEMPT: ${{ inputs.run-attempt }}
+        RUN_ID: ${{ inputs.run-id }}
+        WORKFLOW_REF: ${{ inputs.workflow-ref }}
+        WORKFLOW_SHA: ${{ inputs.workflow-sha }}
       run: |
         set -euo pipefail
         base_python="${BASE_PYTHON:?}"
@@ -58,6 +98,16 @@ runs:
           --runtime-root "$runtime_root" \
           --base-sha "${BASE_SHA:?}" \
           --evaluator-sha "${EVALUATOR_SHA:?}" \
+          --repository "${REPOSITORY:?}" \
+          --repository-id "${REPOSITORY_ID:?}" \
+          --head-repository-id "${HEAD_REPOSITORY_ID:?}" \
+          --event-name "${EVENT_NAME:?}" \
+          --pull-request-number "$PULL_REQUEST_NUMBER" \
+          --workflow-ref "${WORKFLOW_REF:?}" \
+          --workflow-sha "${WORKFLOW_SHA:?}" \
+          --run-id "${RUN_ID:?}" \
+          --run-attempt "${RUN_ATTEMPT:?}" \
+          --expected-artifact-name "${EXPECTED_ARTIFACT_NAME:?}" \
           --receipt "$receipt_path" \
           --failure-receipt "$receipt_path" \
           --github-output "${GITHUB_OUTPUT:?}"

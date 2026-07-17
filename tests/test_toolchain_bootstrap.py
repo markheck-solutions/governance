@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -23,6 +24,59 @@ SPEC.loader.exec_module(BOOTSTRAP)
 
 
 class _ToolchainBootstrapTestCase(unittest.TestCase):
+    @staticmethod
+    def _expected_context(**overrides: object) -> dict[str, object]:
+        context: dict[str, object] = {
+            "repository": "markheck-solutions/governance",
+            "repository_id": "1280677092",
+            "head_repository_id": "1280677092",
+            "event_name": "pull_request",
+            "pull_request_number": 52,
+            "base_sha": "b" * 40,
+            "head_sha": "a" * 40,
+            "workflow_ref": (
+                "markheck-solutions/governance/.github/workflows/"
+                "toolchain-publication.yml@refs/pull/52/merge"
+            ),
+            "workflow_sha": "d" * 40,
+            "run_id": "123456789",
+            "run_attempt": "1",
+            "expected_artifact_name": "governance-toolchain-publication-123456789-1",
+        }
+        context.update(overrides)
+        return context
+
+    @classmethod
+    def _context_argv(cls, **overrides: object) -> list[str]:
+        context = cls._expected_context(**overrides)
+        pull_request_number = context["pull_request_number"]
+        return [
+            "--repository",
+            str(context["repository"]),
+            "--repository-id",
+            str(context["repository_id"]),
+            "--head-repository-id",
+            str(context["head_repository_id"]),
+            "--event-name",
+            str(context["event_name"]),
+            "--pull-request-number",
+            "" if pull_request_number is None else str(pull_request_number),
+            "--workflow-ref",
+            str(context["workflow_ref"]),
+            "--workflow-sha",
+            str(context["workflow_sha"]),
+            "--run-id",
+            str(context["run_id"]),
+            "--run-attempt",
+            str(context["run_attempt"]),
+            "--expected-artifact-name",
+            str(context["expected_artifact_name"]),
+        ]
+
+    def _assert_expected_context(self, receipt: dict[str, object]) -> None:
+        for key, value in self._expected_context().items():
+            self.assertEqual(receipt[key], value)
+
     def _assert_lock_rejected(self, text: str, message: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "requirements-governance.lock"
@@ -63,6 +117,13 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
         ).write_bytes(
             (ROOT / "schemas/v1/governance_toolchain_receipt.schema.json").read_bytes()
         )
+        (
+            governance / "schemas/v1/governance_toolchain_artifact_binding.schema.json"
+        ).write_bytes(
+            (
+                ROOT / "schemas/v1/governance_toolchain_artifact_binding.schema.json"
+            ).read_bytes()
+        )
         (governance / "governance_eval").mkdir()
         (governance / "governance_eval/schema_validator.py").write_bytes(
             (ROOT / "governance_eval/schema_validator.py").read_bytes()
@@ -73,6 +134,36 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
             "runtime": root / "runtime",
             "receipt": root / "receipt.json",
         }
+
+    def _valid_failure_receipt(self, paths: dict[str, Path]) -> dict[str, object]:
+        receipt: dict[str, object] = {
+            **self._expected_context(),
+            "schema_version": "1.0",
+            "status": "FAIL",
+            "decision": "BLOCK_TECHNICAL",
+            "base_sha": "b" * 40,
+            "claimed_base_sha": "b" * 40,
+            "head_sha": "a" * 40,
+            "evaluator_sha": "a" * 40,
+            "claimed_evaluator_sha": "a" * 40,
+            "checkout_head_sha": None,
+            "merge_base_sha": None,
+            "lock_sha256": None,
+            "governance_root": str(paths["governance"]),
+            "workspace_root": str(paths["workspace"]),
+            "git_executable": None,
+            "python_version": "3.12.13",
+            "platform_system": "test",
+            "platform_machine": "test",
+            "runtime_root": str(paths["runtime"]),
+            "python_path": None,
+            "ruff_module_origin": None,
+            "ruff_executable": None,
+            "packages": [],
+            "commands": [],
+            "error": "reproduced failure",
+        }
+        return BOOTSTRAP._attach_payload_sha256(receipt)
 
 
 class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
@@ -168,16 +259,6 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                 evidence = kwargs["command_evidence"]
                 if not isinstance(evidence, list):
                     raise TypeError("command evidence must be a list")
-                evidence.append(
-                    {
-                        "command": list(command),
-                        "started_at": "2026-07-16T00:00:00Z",
-                        "completed_at": "2026-07-16T00:00:01Z",
-                        "timeout_seconds": kwargs["timeout_seconds"],
-                        "timed_out": False,
-                        "exit_code": 0,
-                    }
-                )
                 git_stdout = self._bound_git_stdout(command, paths["governance"])
                 if git_stdout is not None:
                     stdout = git_stdout
@@ -186,12 +267,25 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                         {
                             "origin": str(module_origin),
                             "version": BOOTSTRAP.RUFF_VERSION,
-                        }
+                        },
+                        sort_keys=True,
                     )
                 elif command[-2:] == ("ruff", "--version"):
                     stdout = f"ruff {BOOTSTRAP.RUFF_VERSION}\n"
                 else:
                     stdout = ""
+                evidence.append(
+                    {
+                        "command": list(command),
+                        "started_at": "2026-07-16T00:00:00Z",
+                        "completed_at": "2026-07-16T00:00:01Z",
+                        "timeout_seconds": kwargs["timeout_seconds"],
+                        "timed_out": False,
+                        "exit_code": 0,
+                        "stdout_sha256": BOOTSTRAP._stream_sha256(stdout),
+                        "stderr_sha256": BOOTSTRAP._stream_sha256(""),
+                    }
+                )
                 return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
             with (
@@ -211,6 +305,7 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                     base_sha="b" * 40,
                     evaluator_sha="a" * 40,
                     receipt_path=paths["receipt"],
+                    expected_context=self._expected_context(),
                 )
 
             self.assertEqual(receipt["status"], "PASS")
@@ -220,6 +315,7 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
             self.assertEqual(receipt["evaluator_sha"], "a" * 40)
             self.assertEqual(receipt["checkout_head_sha"], "a" * 40)
             self.assertEqual(receipt["merge_base_sha"], "c" * 40)
+            self._assert_expected_context(receipt)
             self.assertEqual(receipt["python_version"], "3.12.13")
             self.assertEqual(
                 receipt["packages"], [{"name": "ruff", "version": "0.15.21"}]
@@ -237,6 +333,10 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
             self.assertEqual(commands[5][1:4], ("-I", "-m", "ensurepip"))
             self.assertEqual(commands[6][1:4], ("-I", "-m", "pip"))
             self.assertEqual(commands[-1][-3:], ("-m", "ruff", "--version"))
+            self.assertEqual(
+                receipt["commands"][0]["stdout_sha256"],
+                BOOTSTRAP._stream_sha256(paths["governance"].as_posix()),
+            )
             for environment in environments:
                 self.assertNotIn("GH_TOKEN", environment)
                 self.assertNotIn("GITHUB_TOKEN", environment)
@@ -244,16 +344,34 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
 
             mutations = (
                 ("identity", lambda item: item.__setitem__("evaluator_sha", "c" * 40)),
-                (
-                    "base command binding",
-                    lambda item: (
-                        item.__setitem__("base_sha", "c" * 40),
-                        item.__setitem__("claimed_base_sha", "c" * 40),
-                    ),
-                ),
                 ("Python", lambda item: item.__setitem__("python_version", "0.0.0")),
                 ("package", lambda item: item.__setitem__("packages", [])),
                 ("commands", lambda item: item.__setitem__("commands", [])),
+                (
+                    "Git executable",
+                    lambda item: item["commands"][0]["command"].__setitem__(0, "evil"),
+                ),
+                (
+                    "pip hardening",
+                    lambda item: item["commands"][6]["command"].remove("--no-deps"),
+                ),
+                (
+                    "command observation",
+                    lambda item: item["commands"][0].__setitem__(
+                        "stdout_sha256", "0" * 64
+                    ),
+                ),
+                ("lock digest", lambda item: item.__setitem__("lock_sha256", "0" * 64)),
+                (
+                    "merge base",
+                    lambda item: item.__setitem__("merge_base_sha", "e" * 40),
+                ),
+                (
+                    "runtime path",
+                    lambda item: item.__setitem__(
+                        "python_path", str(Path(tmp) / "evil")
+                    ),
+                ),
                 (
                     "failed command",
                     lambda item: item["commands"][0].__setitem__("exit_code", 1),
@@ -268,7 +386,49 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                         BOOTSTRAP.BootstrapError,
                         "successful toolchain receipt",
                     ):
-                        BOOTSTRAP.validate_receipt(paths["governance"], invalid)
+                        BOOTSTRAP.validate_receipt(
+                            paths["governance"], invalid, self._expected_context()
+                        )
+
+            context_mutations = (
+                {"repository": "markheck-solutions/other"},
+                {"repository_id": "99"},
+                {"head_repository_id": "98"},
+                {"pull_request_number": 53},
+                {"base_sha": "e" * 40},
+                {"head_sha": "f" * 40},
+                {
+                    "workflow_ref": "markheck-solutions/governance/.github/workflows/other.yml@main"
+                },
+                {"workflow_sha": "1" * 40},
+                {
+                    "run_id": "987654321",
+                    "expected_artifact_name": "governance-toolchain-publication-987654321-1",
+                },
+                {
+                    "run_attempt": "2",
+                    "expected_artifact_name": "governance-toolchain-publication-123456789-2",
+                },
+            )
+            for mutation in context_mutations:
+                with self.subTest(authoritative_context=mutation):
+                    with self.assertRaisesRegex(
+                        BOOTSTRAP.BootstrapError, "context mismatch"
+                    ):
+                        BOOTSTRAP.validate_receipt(
+                            paths["governance"],
+                            receipt,
+                            self._expected_context(**mutation),
+                        )
+
+            shutil.rmtree(paths["runtime"])
+            BOOTSTRAP.validate_receipt(
+                paths["governance"], receipt, self._expected_context()
+            )
+            with self.assertRaises(OSError):
+                BOOTSTRAP.validate_live_receipt(
+                    paths["governance"], receipt, self._expected_context()
+                )
 
     def test_provision_rejects_invalid_identity_location_and_runtime_state(
         self,
@@ -330,6 +490,9 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                             base_sha="b" * 40,
                             evaluator_sha=str(options.get("evaluator_sha", "a" * 40)),
                             receipt_path=receipt,
+                            expected_context=self._expected_context(
+                                head_sha=str(options.get("evaluator_sha", "a" * 40))
+                            ),
                         )
 
     def test_provision_rejects_untrusted_or_wrong_ruff(self) -> None:
@@ -389,6 +552,7 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                             base_sha="b" * 40,
                             evaluator_sha="a" * 40,
                             receipt_path=paths["receipt"],
+                            expected_context=self._expected_context(),
                         )
 
     def test_checkout_binding_rejects_sha_drift_dirty_tree_and_workspace_git(
@@ -594,10 +758,221 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                         base_sha="b" * 40,
                         evaluator_sha="a" * 40,
                         receipt_path=paths["receipt"],
+                        expected_context=self._expected_context(),
                     )
 
 
 class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
+    def test_dispatch_context_cannot_authorize_publication(self) -> None:
+        context = self._expected_context(
+            event_name="workflow_dispatch", pull_request_number=None
+        )
+        with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "event name"):
+            BOOTSTRAP._validated_publication_context(context)
+
+    def test_portable_command_reconstruction_uses_receipt_path_flavor(self) -> None:
+        cases = (
+            (
+                "Linux evidence",
+                "Linux",
+                "/usr/bin/git",
+                "/home/runner/work/governance/governance",
+                "/tmp/governance-toolchain/bin/python",
+                "/home/runner/work/governance/governance/requirements-governance.lock",
+            ),
+            (
+                "Windows evidence",
+                "Windows",
+                r"C:\Program Files\Git\cmd\git.exe",
+                r"C:\repos\governance",
+                r"C:\temp\governance-toolchain\Scripts\python.exe",
+                r"C:\repos\governance\requirements-governance.lock",
+            ),
+        )
+        for name, system, git, governance, python_path, lock_path in cases:
+            with self.subTest(name=name):
+                receipt = {
+                    "platform_system": system,
+                    "git_executable": git,
+                    "governance_root": governance,
+                    "base_sha": "b" * 40,
+                    "evaluator_sha": "a" * 40,
+                    "python_path": python_path,
+                }
+                commands = BOOTSTRAP._expected_success_commands(receipt)
+                self.assertEqual(commands[0][0:3], (git, "-C", governance))
+                self.assertEqual(commands[5][0], python_path)
+                self.assertEqual(commands[6][-1], lock_path)
+
+    def test_artifact_binding_rejects_stale_or_mismatched_github_authority(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._provision_paths(Path(tmp))
+            receipt = self._valid_failure_receipt(paths)
+            paths["receipt"].write_text(
+                json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            artifact_name = str(self._expected_context()["expected_artifact_name"])
+            artifact_url = (
+                "https://github.com/markheck-solutions/governance/"
+                "actions/runs/123456789/artifacts/456"
+            )
+            binding = BOOTSTRAP.create_artifact_binding(
+                paths["governance"],
+                paths["receipt"],
+                receipt,
+                self._expected_context(),
+                artifact_id="456",
+                artifact_name=artifact_name,
+                artifact_url=artifact_url,
+                artifact_digest="a" * 64,
+            )
+            validate_named("governance_toolchain_artifact_binding", binding, ROOT)
+            authority: dict[str, object] = {
+                "artifact_id": "456",
+                "artifact_name": artifact_name,
+                "artifact_digest": f"sha256:{'a' * 64}",
+                "expired": False,
+                "workflow_run_id": "123456789",
+                "workflow_run_attempt": "1",
+                "repository": "markheck-solutions/governance",
+                "repository_id": "1280677092",
+                "head_repository_id": "1280677092",
+                "head_sha": "a" * 40,
+                "event_name": "pull_request",
+                "pull_request_number": 52,
+            }
+            BOOTSTRAP.validate_artifact_binding(
+                paths["governance"],
+                receipt,
+                paths["receipt"].read_bytes(),
+                binding,
+                self._expected_context(),
+                authority,
+            )
+
+            mutations = (
+                ("artifact_id", "457"),
+                ("artifact_name", "other-artifact"),
+                ("artifact_digest", f"sha256:{'b' * 64}"),
+                ("expired", True),
+                ("workflow_run_id", "987654321"),
+                ("workflow_run_attempt", "2"),
+                ("repository", "markheck-solutions/other"),
+                ("repository_id", "99"),
+                ("head_repository_id", "98"),
+                ("head_sha", "b" * 40),
+                ("pull_request_number", 53),
+            )
+            for key, value in mutations:
+                with self.subTest(authority_field=key):
+                    changed = dict(authority)
+                    changed[key] = value
+                    with self.assertRaises(BOOTSTRAP.BootstrapError):
+                        BOOTSTRAP.validate_artifact_binding(
+                            paths["governance"],
+                            receipt,
+                            paths["receipt"].read_bytes(),
+                            binding,
+                            self._expected_context(),
+                            changed,
+                        )
+
+            missing = dict(authority)
+            missing.pop("artifact_id")
+            with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "metadata fields"):
+                BOOTSTRAP.validate_artifact_binding(
+                    paths["governance"],
+                    receipt,
+                    paths["receipt"].read_bytes(),
+                    binding,
+                    self._expected_context(),
+                    missing,
+                )
+
+            tampered_receipt = (
+                paths["receipt"]
+                .read_bytes()
+                .replace(b"reproduced failure", b"different failure")
+            )
+            with self.assertRaisesRegex(
+                BOOTSTRAP.BootstrapError, "bound receipt bytes"
+            ):
+                BOOTSTRAP.validate_artifact_binding(
+                    paths["governance"],
+                    receipt,
+                    tampered_receipt,
+                    binding,
+                    self._expected_context(),
+                    authority,
+                )
+
+            binding_mutations = (
+                ("artifact_id", "457"),
+                (
+                    "artifact_url",
+                    (
+                        "https://github.com/markheck-solutions/governance/"
+                        "actions/runs/987654321/artifacts/456"
+                    ),
+                ),
+                ("receipt_file_sha256", "b" * 64),
+                ("receipt_payload_sha256", "c" * 64),
+            )
+            for key, value in binding_mutations:
+                with self.subTest(binding_field=key):
+                    changed_binding = dict(binding)
+                    changed_binding[key] = value
+                    changed_binding["payload_sha256"] = BOOTSTRAP._payload_sha256(
+                        changed_binding
+                    )
+                    with self.assertRaises(BOOTSTRAP.BootstrapError):
+                        BOOTSTRAP.validate_artifact_binding(
+                            paths["governance"],
+                            receipt,
+                            paths["receipt"].read_bytes(),
+                            changed_binding,
+                            self._expected_context(),
+                            authority,
+                        )
+
+    def test_artifact_binding_rejects_invalid_upload_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._provision_paths(Path(tmp))
+            receipt = self._valid_failure_receipt(paths)
+            paths["receipt"].write_text(
+                json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            valid = {
+                "artifact_id": "456",
+                "artifact_name": "governance-toolchain-publication-123456789-1",
+                "artifact_url": (
+                    "https://github.com/markheck-solutions/governance/"
+                    "actions/runs/123456789/artifacts/456"
+                ),
+                "artifact_digest": "a" * 64,
+            }
+            cases = (
+                {"artifact_id": "0"},
+                {"artifact_name": "other"},
+                {"artifact_url": "https://example.invalid/artifact/456"},
+                {"artifact_digest": "not-a-digest"},
+            )
+            for mutation in cases:
+                with self.subTest(upload_assignment=mutation):
+                    assigned = {**valid, **mutation}
+                    with self.assertRaises(BOOTSTRAP.BootstrapError):
+                        BOOTSTRAP.create_artifact_binding(
+                            paths["governance"],
+                            paths["receipt"],
+                            receipt,
+                            self._expected_context(),
+                            **assigned,
+                        )
+
     def test_bounded_runner_records_timeout_and_failed_exit(self) -> None:
         cases = (
             (
@@ -668,6 +1043,7 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._provision_paths(Path(tmp))
             invalid = {
+                **self._expected_context(),
                 "schema_version": "1.0",
                 "status": "FAIL",
                 "decision": "BLOCK_TECHNICAL",
@@ -679,6 +1055,9 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
                 "checkout_head_sha": None,
                 "merge_base_sha": None,
                 "lock_sha256": None,
+                "governance_root": str(paths["governance"]),
+                "workspace_root": str(paths["workspace"]),
+                "git_executable": None,
                 "python_version": "3.12.13",
                 "platform_system": "test",
                 "platform_machine": "test",
@@ -712,6 +1091,8 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
                         "timeout_seconds": 12,
                         "timed_out": True,
                         "exit_code": None,
+                        "stdout_sha256": None,
+                        "stderr_sha256": None,
                     }
                 )
                 raise BOOTSTRAP.BootstrapError("reproduced install timeout")
@@ -727,6 +1108,7 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
                 "b" * 40,
                 "--evaluator-sha",
                 "a" * 40,
+                *self._context_argv(),
                 "--receipt",
                 str(paths["receipt"]),
                 "--failure-receipt",
@@ -739,7 +1121,9 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
 
             receipt = json.loads(paths["receipt"].read_text(encoding="utf-8"))
             validate_named("governance_toolchain_receipt", receipt, ROOT)
-            BOOTSTRAP.validate_receipt(paths["governance"], receipt)
+            BOOTSTRAP.validate_receipt(
+                paths["governance"], receipt, self._expected_context()
+            )
             self.assertEqual(receipt["status"], "FAIL")
             self.assertEqual(receipt["decision"], "BLOCK_TECHNICAL")
             self.assertEqual(receipt["base_sha"], "b" * 40)
@@ -771,6 +1155,7 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
                 "b" * 40,
                 "--evaluator-sha",
                 "a" * 40,
+                *self._context_argv(),
                 "--receipt",
                 str(rejected_receipt),
                 "--failure-receipt",
@@ -783,7 +1168,9 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
 
             self.assertFalse(rejected_receipt.exists())
             receipt = json.loads(failure_receipt.read_text(encoding="utf-8"))
-            BOOTSTRAP.validate_receipt(paths["governance"], receipt)
+            BOOTSTRAP.validate_receipt(
+                paths["governance"], receipt, self._expected_context()
+            )
             self.assertEqual(receipt["decision"], "BLOCK_TECHNICAL")
             self.assertIn("receipt must be outside", receipt["error"])
 
@@ -815,6 +1202,7 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
                         "b" * 40,
                         "--evaluator-sha",
                         "a" * 40,
+                        *self._context_argv(),
                         "--receipt",
                         str(paths["receipt"]),
                         "--failure-receipt",

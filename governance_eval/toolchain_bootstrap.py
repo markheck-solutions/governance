@@ -15,12 +15,49 @@ import sys
 import venv
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 RUFF_VERSION = "0.15.21"
 LOCK_NAME = "requirements-governance.lock"
 _PYTHON_VERSION = (3, 12, 13)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_POSITIVE_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
+_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+_ARTIFACT_DIGEST_RE = re.compile(r"^(?:sha256:)?([0-9a-f]{64})$")
+_PUBLICATION_CONTEXT_FIELDS = (
+    "repository",
+    "repository_id",
+    "head_repository_id",
+    "event_name",
+    "pull_request_number",
+    "base_sha",
+    "head_sha",
+    "workflow_ref",
+    "workflow_sha",
+    "run_id",
+    "run_attempt",
+    "expected_artifact_name",
+)
+_ARTIFACT_AUTHORITY_FIELDS = (
+    "artifact_id",
+    "artifact_name",
+    "artifact_digest",
+    "expired",
+    "workflow_run_id",
+    "workflow_run_attempt",
+    "repository",
+    "repository_id",
+    "head_repository_id",
+    "head_sha",
+    "event_name",
+    "pull_request_number",
+)
+_RUFF_PROBE = (
+    "import importlib.metadata, json, pathlib, ruff; "
+    "print(json.dumps({'version': importlib.metadata.version('ruff'), "
+    "'origin': str(pathlib.Path(ruff.__file__).resolve())}, sort_keys=True))"
+)
 _RUFF_HASHES = frozenset(
     {
         "sha256:bab0905d2f29e0d9fbc3c373ed23db0095edaa3f71f1f4f519ec15134d9e85c8",
@@ -124,7 +161,10 @@ def sanitized_git_environment(source: Mapping[str, str]) -> dict[str, str]:
     return environment
 
 
-def pip_install_command(python_path: Path, lock_path: Path) -> tuple[str, ...]:
+def pip_install_command(
+    python_path: Path | PurePosixPath | PureWindowsPath,
+    lock_path: Path | PurePosixPath | PureWindowsPath,
+) -> tuple[str, ...]:
     return (
         str(python_path),
         "-I",
@@ -166,25 +206,49 @@ def _run(
         )
     except subprocess.TimeoutExpired as exc:
         command_evidence.append(
-            _command_record(command, started_at, timeout_seconds, None, True)
+            _command_record(
+                command,
+                started_at,
+                timeout_seconds,
+                None,
+                True,
+                exc.stdout,
+                exc.stderr,
+            )
         )
         raise BootstrapError(
             f"toolchain command timed out after {timeout_seconds}s: {command[0]}"
         ) from exc
     except subprocess.CalledProcessError as exc:
         command_evidence.append(
-            _command_record(command, started_at, timeout_seconds, exc.returncode, False)
+            _command_record(
+                command,
+                started_at,
+                timeout_seconds,
+                exc.returncode,
+                False,
+                exc.stdout,
+                exc.stderr,
+            )
         )
         detail = (exc.stderr or exc.stdout or "no output").strip()
         raise BootstrapError(f"toolchain command failed: {detail}") from exc
     except OSError as exc:
         command_evidence.append(
-            _command_record(command, started_at, timeout_seconds, None, False)
+            _command_record(
+                command, started_at, timeout_seconds, None, False, None, None
+            )
         )
         raise BootstrapError(f"toolchain command could not start: {exc}") from exc
     command_evidence.append(
         _command_record(
-            command, started_at, timeout_seconds, completed.returncode, False
+            command,
+            started_at,
+            timeout_seconds,
+            completed.returncode,
+            False,
+            completed.stdout,
+            completed.stderr,
         )
     )
     return completed
@@ -196,6 +260,8 @@ def _command_record(
     timeout_seconds: int,
     exit_code: int | None,
     timed_out: bool,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
 ) -> dict[str, object]:
     return {
         "command": list(command),
@@ -204,7 +270,17 @@ def _command_record(
         "timeout_seconds": timeout_seconds,
         "timed_out": timed_out,
         "exit_code": exit_code,
+        "stdout_sha256": _stream_sha256(stdout),
+        "stderr_sha256": _stream_sha256(stderr),
     }
+
+
+def _stream_sha256(value: str | bytes | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return hashlib.sha256(value.strip().encode("utf-8")).hexdigest()
 
 
 def _utc_now() -> str:
@@ -223,28 +299,107 @@ def _attach_payload_sha256(receipt: dict[str, object]) -> dict[str, object]:
     return receipt
 
 
-def validate_receipt(governance_root: Path, receipt: Mapping[str, object]) -> None:
-    schema_path = (
-        governance_root / "schemas/v1/governance_toolchain_receipt.schema.json"
+def validate_receipt(
+    governance_root: Path,
+    receipt: Mapping[str, object],
+    expected_context: Mapping[str, object],
+) -> None:
+    expected = _validated_publication_context(expected_context)
+    _validate_schema(
+        governance_root, "governance_toolchain_receipt.schema.json", receipt
     )
+    _validate_payload_digest(receipt, "toolchain receipt")
+    _validate_context_binding(receipt, expected)
+    _validate_receipt_semantics(governance_root, receipt)
+
+
+def _validate_schema(
+    governance_root: Path, schema_name: str, payload: Mapping[str, object]
+) -> None:
+    schema_path = governance_root / "schemas/v1" / schema_name
     validator_path = governance_root / "governance_eval/schema_validator.py"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     validator = runpy.run_path(str(validator_path)).get("validate")
     if not callable(validator):
-        raise BootstrapError("receipt schema validator unavailable")
-    validator(dict(receipt), schema)
-    claimed_payload_sha256 = receipt.get("payload_sha256")
-    actual_payload_sha256 = _payload_sha256(receipt)
+        raise BootstrapError("governance schema validator unavailable")
+    validator(dict(payload), schema)
+
+
+def _validate_payload_digest(payload: Mapping[str, object], label: str) -> None:
+    claimed_payload_sha256 = payload.get("payload_sha256")
+    actual_payload_sha256 = _payload_sha256(payload)
     if not isinstance(claimed_payload_sha256, str) or not hmac.compare_digest(
         claimed_payload_sha256, actual_payload_sha256
     ):
-        raise BootstrapError("toolchain receipt payload digest invalid")
-    _validate_receipt_semantics(receipt)
+        raise BootstrapError(f"{label} payload digest invalid")
 
 
-def _validate_receipt_semantics(receipt: Mapping[str, object]) -> None:
+def _validated_publication_context(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    context = dict(value)
+    if set(context) != set(_PUBLICATION_CONTEXT_FIELDS):
+        raise BootstrapError("authoritative publication context fields invalid")
+    strings = (
+        "repository",
+        "repository_id",
+        "head_repository_id",
+        "event_name",
+        "base_sha",
+        "head_sha",
+        "workflow_ref",
+        "workflow_sha",
+        "run_id",
+        "run_attempt",
+        "expected_artifact_name",
+    )
+    if any(not isinstance(context.get(key), str) for key in strings):
+        raise BootstrapError("authoritative publication context types invalid")
+    if not _REPOSITORY_RE.fullmatch(str(context["repository"])):
+        raise BootstrapError("authoritative repository invalid")
+    for key in ("repository_id", "head_repository_id", "run_id", "run_attempt"):
+        if not _POSITIVE_ID_RE.fullmatch(str(context[key])):
+            raise BootstrapError(f"authoritative {key} invalid")
+    _validate_sha("authoritative base SHA", str(context["base_sha"]))
+    _validate_sha("authoritative head SHA", str(context["head_sha"]))
+    _validate_sha("authoritative workflow SHA", str(context["workflow_sha"]))
+    workflow_ref = str(context["workflow_ref"])
+    if not workflow_ref or len(workflow_ref) > 500 or "\n" in workflow_ref:
+        raise BootstrapError("authoritative workflow ref invalid")
+    artifact_name = str(context["expected_artifact_name"])
+    if not _ARTIFACT_NAME_RE.fullmatch(artifact_name):
+        raise BootstrapError("authoritative artifact name invalid")
+    required_artifact_name = (
+        f"governance-toolchain-publication-{context['run_id']}-{context['run_attempt']}"
+    )
+    if artifact_name != required_artifact_name:
+        raise BootstrapError("authoritative artifact name is not run-attempt bound")
+    _validate_event_pr_binding(context)
+    return context
+
+
+def _validate_event_pr_binding(context: Mapping[str, object]) -> None:
+    event_name = context.get("event_name")
+    pull_request_number = context.get("pull_request_number")
+    if event_name != "pull_request":
+        raise BootstrapError("authoritative event name invalid")
+    if not isinstance(pull_request_number, int) or pull_request_number < 1:
+        raise BootstrapError("pull request publication requires a PR number")
+
+
+def _validate_context_binding(
+    receipt: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    for key in _PUBLICATION_CONTEXT_FIELDS:
+        if receipt.get(key) != expected[key]:
+            raise BootstrapError(f"toolchain receipt context mismatch: {key}")
+
+
+def _validate_receipt_semantics(
+    governance_root: Path, receipt: Mapping[str, object]
+) -> None:
     if receipt.get("status") == "PASS":
-        _validate_success_receipt(receipt)
+        _validate_success_receipt(governance_root, receipt)
     elif receipt.get("status") == "FAIL":
         if receipt.get("decision") != "BLOCK_TECHNICAL" or not isinstance(
             receipt.get("error"), str
@@ -252,11 +407,16 @@ def _validate_receipt_semantics(receipt: Mapping[str, object]) -> None:
             raise BootstrapError("failed toolchain receipt decision invalid")
 
 
-def _validate_success_receipt(receipt: Mapping[str, object]) -> None:
+def _validate_success_receipt(
+    governance_root: Path, receipt: Mapping[str, object]
+) -> None:
     required = (
         "checkout_head_sha",
         "merge_base_sha",
         "lock_sha256",
+        "governance_root",
+        "workspace_root",
+        "git_executable",
         "python_path",
         "ruff_module_origin",
         "ruff_executable",
@@ -279,47 +439,415 @@ def _validate_success_receipt(receipt: Mapping[str, object]) -> None:
         raise BootstrapError("successful toolchain receipt Python version invalid")
     if receipt.get("packages") != [{"name": "ruff", "version": RUFF_VERSION}]:
         raise BootstrapError("successful toolchain receipt package evidence invalid")
-    if not _valid_success_command_evidence(
-        receipt.get("commands"),
-        str(receipt.get("base_sha")),
-        str(receipt.get("evaluator_sha")),
-    ):
+    _validate_portable_success_environment(governance_root, receipt)
+    if not _valid_success_command_evidence(receipt):
         raise BootstrapError("successful toolchain receipt command evidence invalid")
 
 
-def _valid_success_command_evidence(
-    value: object, base_sha: str, evaluator_sha: str
+def _path_identity(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _validate_portable_success_environment(
+    governance_root: Path, receipt: Mapping[str, object]
+) -> None:
+    actual_governance = governance_root.resolve(strict=True)
+    if validate_lock(actual_governance / LOCK_NAME) != receipt.get("lock_sha256"):
+        raise BootstrapError("successful toolchain receipt lock digest invalid")
+    _validate_recorded_path_relationships(receipt)
+
+
+def _recorded_path(
+    value: object, platform_system: object
+) -> PurePosixPath | PureWindowsPath:
+    if platform_system == "Windows":
+        return PureWindowsPath(str(value))
+    if platform_system in {"Linux", "Darwin"}:
+        return PurePosixPath(str(value))
+    raise BootstrapError("successful toolchain receipt platform invalid")
+
+
+def _pure_is_within(
+    path: PurePosixPath | PureWindowsPath,
+    parent: PurePosixPath | PureWindowsPath,
 ) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_recorded_path_relationships(receipt: Mapping[str, object]) -> None:
+    system = receipt.get("platform_system")
+    governance = _recorded_path(receipt["governance_root"], system)
+    workspace = _recorded_path(receipt["workspace_root"], system)
+    runtime = _recorded_path(receipt["runtime_root"], system)
+    python_path = _recorded_path(receipt["python_path"], system)
+    module_origin = _recorded_path(receipt["ruff_module_origin"], system)
+    ruff_executable = _recorded_path(receipt["ruff_executable"], system)
+    git_executable = _recorded_path(receipt["git_executable"], system)
+    paths = (
+        governance,
+        workspace,
+        runtime,
+        python_path,
+        module_origin,
+        ruff_executable,
+        git_executable,
+    )
+    if any(not path.is_absolute() for path in paths):
+        raise BootstrapError("successful toolchain receipt path is not absolute")
+    if _pure_is_within(runtime, workspace) or _pure_is_within(runtime, governance):
+        raise BootstrapError("successful toolchain receipt runtime boundary invalid")
+    runtime_bin = runtime / ("Scripts" if system == "Windows" else "bin")
+    expected_python = runtime_bin / ("python.exe" if system == "Windows" else "python")
+    expected_ruff = runtime_bin / ("ruff.exe" if system == "Windows" else "ruff")
+    if python_path != expected_python or ruff_executable != expected_ruff:
+        raise BootstrapError("successful toolchain receipt runtime paths invalid")
+    if not _pure_is_within(module_origin, runtime):
+        raise BootstrapError("successful toolchain receipt Ruff module path invalid")
+    if _pure_is_within(git_executable, governance) or _pure_is_within(
+        git_executable, workspace
+    ):
+        raise BootstrapError("successful toolchain receipt Git boundary invalid")
+
+
+def validate_live_receipt(
+    governance_root: Path,
+    receipt: Mapping[str, object],
+    expected_context: Mapping[str, object],
+) -> None:
+    validate_receipt(governance_root, receipt, expected_context)
+    if receipt.get("status") == "PASS":
+        _validate_live_success_environment(governance_root, receipt)
+
+
+def _validate_live_success_environment(
+    governance_root: Path, receipt: Mapping[str, object]
+) -> None:
+    actual_governance = governance_root.resolve(strict=True)
+    recorded_governance = Path(str(receipt["governance_root"]))
+    workspace_root = Path(str(receipt["workspace_root"])).resolve(strict=True)
+    runtime_root = Path(str(receipt["runtime_root"])).resolve(strict=True)
+    if _path_identity(recorded_governance) != _path_identity(actual_governance):
+        raise BootstrapError("live toolchain receipt governance root invalid")
+    if not workspace_root.is_dir() or not runtime_root.is_dir():
+        raise BootstrapError("live toolchain receipt directory invalid")
+    if _is_within_any(runtime_root, (workspace_root, actual_governance)):
+        raise BootstrapError("live toolchain receipt runtime boundary invalid")
+    _validate_success_executables(
+        receipt, actual_governance, workspace_root, runtime_root
+    )
+    if (
+        receipt.get("platform_system") != platform.system()
+        or receipt.get("platform_machine") != platform.machine()
+    ):
+        raise BootstrapError("live toolchain receipt platform invalid")
+
+
+def create_artifact_binding(
+    governance_root: Path,
+    receipt_path: Path,
+    receipt: Mapping[str, object],
+    expected_context: Mapping[str, object],
+    *,
+    artifact_id: str,
+    artifact_name: str,
+    artifact_url: str,
+    artifact_digest: str,
+) -> dict[str, object]:
+    expected = _validated_publication_context(expected_context)
+    validate_receipt(governance_root, receipt, expected)
+    receipt_bytes = receipt_path.read_bytes()
+    try:
+        serialized_receipt = json.loads(receipt_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BootstrapError("serialized toolchain receipt invalid") from exc
+    if serialized_receipt != dict(receipt):
+        raise BootstrapError("serialized toolchain receipt differs from receipt")
+    normalized_digest = _validate_artifact_assignment(
+        expected,
+        artifact_id=artifact_id,
+        artifact_name=artifact_name,
+        artifact_url=artifact_url,
+        artifact_digest=artifact_digest,
+    )
+    binding: dict[str, object] = {
+        **expected,
+        "schema_version": "1.0",
+        "artifact_id": artifact_id,
+        "artifact_name": artifact_name,
+        "artifact_url": artifact_url,
+        "artifact_digest": normalized_digest,
+        "receipt_file_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+        "receipt_payload_sha256": receipt["payload_sha256"],
+    }
+    _attach_payload_sha256(binding)
+    _validate_schema(
+        governance_root,
+        "governance_toolchain_artifact_binding.schema.json",
+        binding,
+    )
+    _validate_payload_digest(binding, "artifact binding")
+    return binding
+
+
+def _validate_artifact_assignment(
+    expected: Mapping[str, object],
+    *,
+    artifact_id: str,
+    artifact_name: str,
+    artifact_url: str,
+    artifact_digest: str,
+) -> str:
+    if not _POSITIVE_ID_RE.fullmatch(artifact_id):
+        raise BootstrapError("assigned artifact ID invalid")
+    if artifact_name != expected["expected_artifact_name"]:
+        raise BootstrapError("assigned artifact name differs from expected name")
+    expected_url = (
+        f"https://github.com/{expected['repository']}/actions/runs/"
+        f"{expected['run_id']}/artifacts/{artifact_id}"
+    )
+    if artifact_url != expected_url:
+        raise BootstrapError("assigned artifact URL invalid")
+    return _normalized_artifact_digest(artifact_digest)
+
+
+def _normalized_artifact_digest(value: str) -> str:
+    match = _ARTIFACT_DIGEST_RE.fullmatch(value)
+    if match is None:
+        raise BootstrapError("assigned artifact digest invalid")
+    return f"sha256:{match.group(1)}"
+
+
+def validate_artifact_binding(
+    governance_root: Path,
+    receipt: Mapping[str, object],
+    receipt_bytes: bytes,
+    binding: Mapping[str, object],
+    expected_context: Mapping[str, object],
+    authoritative_artifact: Mapping[str, object],
+) -> None:
+    expected = _validated_publication_context(expected_context)
+    validate_receipt(governance_root, receipt, expected)
+    _validate_schema(
+        governance_root,
+        "governance_toolchain_artifact_binding.schema.json",
+        binding,
+    )
+    _validate_payload_digest(binding, "artifact binding")
+    _validate_context_binding(binding, expected)
+    if json.loads(receipt_bytes) != dict(receipt):
+        raise BootstrapError("bound receipt bytes differ from receipt")
+    if binding.get("receipt_file_sha256") != hashlib.sha256(receipt_bytes).hexdigest():
+        raise BootstrapError("artifact binding receipt file digest invalid")
+    if binding.get("receipt_payload_sha256") != receipt.get("payload_sha256"):
+        raise BootstrapError("artifact binding receipt payload digest invalid")
+    assigned_digest = _validate_artifact_assignment(
+        expected,
+        artifact_id=str(binding["artifact_id"]),
+        artifact_name=str(binding["artifact_name"]),
+        artifact_url=str(binding["artifact_url"]),
+        artifact_digest=str(binding["artifact_digest"]),
+    )
+    if assigned_digest != binding["artifact_digest"]:
+        raise BootstrapError("artifact binding assigned digest invalid")
+    authority = _validated_artifact_authority(authoritative_artifact)
+    _compare_artifact_authority(binding, expected, authority)
+
+
+def _validated_artifact_authority(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    authority = dict(value)
+    if set(authority) != set(_ARTIFACT_AUTHORITY_FIELDS):
+        raise BootstrapError("authoritative artifact metadata fields invalid")
+    identifiers = (
+        "artifact_id",
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "repository_id",
+        "head_repository_id",
+    )
+    if any(
+        not isinstance(authority.get(key), str)
+        or not _POSITIVE_ID_RE.fullmatch(str(authority[key]))
+        for key in identifiers
+    ):
+        raise BootstrapError("authoritative artifact identifier invalid")
+    if not isinstance(
+        authority.get("artifact_name"), str
+    ) or not _ARTIFACT_NAME_RE.fullmatch(str(authority["artifact_name"])):
+        raise BootstrapError("authoritative artifact name invalid")
+    authority["artifact_digest"] = _normalized_artifact_digest(
+        str(authority.get("artifact_digest", ""))
+    )
+    if not isinstance(authority.get("expired"), bool):
+        raise BootstrapError("authoritative artifact expiry invalid")
+    if not isinstance(authority.get("repository"), str) or not _REPOSITORY_RE.fullmatch(
+        str(authority["repository"])
+    ):
+        raise BootstrapError("authoritative artifact repository invalid")
+    _validate_sha("authoritative artifact head SHA", str(authority.get("head_sha", "")))
+    if authority.get("event_name") != "pull_request":
+        raise BootstrapError("authoritative artifact event invalid")
+    pr_number = authority.get("pull_request_number")
+    if not isinstance(pr_number, int) or pr_number < 1:
+        raise BootstrapError("authoritative artifact PR number invalid")
+    return authority
+
+
+def _compare_artifact_authority(
+    binding: Mapping[str, object],
+    expected: Mapping[str, object],
+    authority: Mapping[str, object],
+) -> None:
+    comparisons = {
+        "artifact_id": binding.get("artifact_id"),
+        "artifact_name": binding.get("artifact_name"),
+        "artifact_digest": binding.get("artifact_digest"),
+        "workflow_run_id": expected["run_id"],
+        "workflow_run_attempt": expected["run_attempt"],
+        "repository": expected["repository"],
+        "repository_id": expected["repository_id"],
+        "head_repository_id": expected["head_repository_id"],
+        "head_sha": expected["head_sha"],
+        "event_name": expected["event_name"],
+        "pull_request_number": expected["pull_request_number"],
+    }
+    for key, expected_value in comparisons.items():
+        if authority.get(key) != expected_value:
+            raise BootstrapError(f"authoritative artifact mismatch: {key}")
+    if authority["expired"]:
+        raise BootstrapError("authoritative artifact is expired")
+
+
+def _validate_success_executables(
+    receipt: Mapping[str, object],
+    governance_root: Path,
+    workspace_root: Path,
+    runtime_root: Path,
+) -> None:
+    python_path, runtime_bin = _runtime_paths(runtime_root)
+    recorded_python = Path(str(receipt["python_path"]))
+    if (
+        _path_identity(recorded_python) != _path_identity(python_path)
+        or not recorded_python.is_file()
+    ):
+        raise BootstrapError("successful toolchain receipt Python path invalid")
+    module_origin = Path(str(receipt["ruff_module_origin"])).resolve(strict=True)
+    if not module_origin.is_file() or not _is_within(
+        module_origin, runtime_root.resolve()
+    ):
+        raise BootstrapError("successful toolchain receipt Ruff module invalid")
+    expected_ruff = (runtime_bin / ("ruff.exe" if os.name == "nt" else "ruff")).resolve(
+        strict=True
+    )
+    recorded_ruff = Path(str(receipt["ruff_executable"])).resolve(strict=True)
+    if recorded_ruff != expected_ruff or not recorded_ruff.is_file():
+        raise BootstrapError("successful toolchain receipt Ruff executable invalid")
+    git_path = Path(str(receipt["git_executable"])).resolve(strict=True)
+    if not git_path.is_file() or _is_within_any(
+        git_path, (governance_root, workspace_root.resolve())
+    ):
+        raise BootstrapError("successful toolchain receipt Git executable invalid")
+
+
+def _valid_success_command_evidence(receipt: Mapping[str, object]) -> bool:
+    value = receipt.get("commands")
     if not isinstance(value, list) or len(value) != 10:
         return False
     if any(
         not isinstance(record, dict)
         or record.get("timed_out") is not False
         or record.get("exit_code") != 0
+        or not isinstance(record.get("stdout_sha256"), str)
+        or not isinstance(record.get("stderr_sha256"), str)
         for record in value
     ):
         return False
     commands = [tuple(record["command"]) for record in value]
-    return (
-        commands[0][-2:] == ("rev-parse", "--show-toplevel")
-        and commands[1][-2:] == ("--verify", "HEAD^{commit}")
-        and commands[2][-2:] == ("--verify", f"{base_sha}^{{commit}}")
-        and commands[3][-3:] == ("merge-base", base_sha, evaluator_sha)
-        and "status" in commands[4]
-        and commands[5][1:4] == ("-I", "-m", "ensurepip")
-        and commands[6][1:5] == ("-I", "-m", "pip", "install")
-        and "--require-hashes" in commands[6]
-        and commands[7][-3:] == ("-m", "pip", "check")
-        and commands[8][1:3] == ("-I", "-c")
-        and "importlib.metadata" in commands[8][-1]
-        and commands[9][-3:] == ("-m", "ruff", "--version")
+    if commands != _expected_success_commands(receipt):
+        return False
+    if [record.get("timeout_seconds") for record in value] != [
+        15,
+        15,
+        15,
+        15,
+        15,
+        60,
+        120,
+        30,
+        15,
+        15,
+    ]:
+        return False
+    expected_stdout = {
+        0: _recorded_path(
+            receipt["governance_root"], receipt["platform_system"]
+        ).as_posix(),
+        1: str(receipt["evaluator_sha"]),
+        2: str(receipt["base_sha"]),
+        3: str(receipt["merge_base_sha"]),
+        4: "",
+        8: json.dumps(
+            {
+                "origin": str(receipt["ruff_module_origin"]),
+                "version": RUFF_VERSION,
+            },
+            sort_keys=True,
+        ),
+        9: f"ruff {RUFF_VERSION}",
+    }
+    return all(
+        value[index].get("stdout_sha256") == _stream_sha256(stdout)
+        for index, stdout in expected_stdout.items()
     )
 
 
+def _expected_success_commands(
+    receipt: Mapping[str, object],
+) -> list[tuple[str, ...]]:
+    git = str(receipt["git_executable"])
+    system = receipt["platform_system"]
+    governance_path = _recorded_path(receipt["governance_root"], system)
+    governance_root = str(governance_path)
+    base_sha = str(receipt["base_sha"])
+    evaluator_sha = str(receipt["evaluator_sha"])
+    python_path = _recorded_path(receipt["python_path"], system)
+    lock_path = governance_path / LOCK_NAME
+    git_prefix = (git, "-C", governance_root)
+    return [
+        (*git_prefix, "rev-parse", "--show-toplevel"),
+        (*git_prefix, "rev-parse", "--verify", "HEAD^{commit}"),
+        (*git_prefix, "rev-parse", "--verify", f"{base_sha}^{{commit}}"),
+        (*git_prefix, "merge-base", base_sha, evaluator_sha),
+        (
+            *git_prefix,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ),
+        (str(python_path), "-I", "-m", "ensurepip", "--upgrade", "--default-pip"),
+        pip_install_command(python_path, lock_path),
+        (str(python_path), "-I", "-m", "pip", "check"),
+        (str(python_path), "-I", "-c", _RUFF_PROBE),
+        (str(python_path), "-I", "-m", "ruff", "--version"),
+    ]
+
+
 def _write_validated_receipt(
-    governance_root: Path, receipt_path: Path, receipt: Mapping[str, object]
+    governance_root: Path,
+    receipt_path: Path,
+    receipt: Mapping[str, object],
+    expected_context: Mapping[str, object],
 ) -> None:
-    validate_receipt(governance_root, receipt)
+    if receipt.get("status") == "PASS":
+        validate_live_receipt(governance_root, receipt, expected_context)
+    else:
+        validate_receipt(governance_root, receipt, expected_context)
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -378,7 +906,7 @@ def validate_checkout(
     evaluator_sha: str,
     source: Mapping[str, str],
     command_evidence: list[dict[str, object]],
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     git_command = shutil.which("git", path=source.get("PATH"))
     if git_command is None:
         raise BootstrapError("trusted Git executable unavailable")
@@ -388,14 +916,17 @@ def validate_checkout(
             "Git executable resolves inside target workspace or governance checkout"
         )
     environment = sanitized_git_environment(source)
-    repository_root = Path(
-        _run(
-            (str(git_path), "-C", str(governance_root), "rev-parse", "--show-toplevel"),
-            environment=environment,
-            timeout_seconds=15,
-            command_evidence=command_evidence,
-        ).stdout.strip()
-    ).resolve(strict=True)
+    root_result = _run(
+        (str(git_path), "-C", str(governance_root), "rev-parse", "--show-toplevel"),
+        environment=environment,
+        timeout_seconds=15,
+        command_evidence=command_evidence,
+    )
+    repository_root = Path(root_result.stdout.strip()).resolve(strict=True)
+    if command_evidence:
+        command_evidence[-1]["stdout_sha256"] = _stream_sha256(
+            repository_root.as_posix()
+        )
     if repository_root != governance_root:
         raise BootstrapError("governance root differs from Git checkout root")
     checkout_head = _run(
@@ -460,7 +991,7 @@ def validate_checkout(
         raise BootstrapError(
             "governance checkout contains uncommitted or ignored files"
         )
-    return checkout_head, merge_base
+    return checkout_head, merge_base, str(git_path)
 
 
 def provision(
@@ -471,11 +1002,15 @@ def provision(
     base_sha: str,
     evaluator_sha: str,
     receipt_path: Path,
+    expected_context: Mapping[str, object],
     command_evidence: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    expected = _validated_publication_context(expected_context)
     _validate_python_version()
     _validate_sha("base SHA", base_sha)
     _validate_sha("evaluator SHA", evaluator_sha)
+    if base_sha != expected["base_sha"] or evaluator_sha != expected["head_sha"]:
+        raise BootstrapError("toolchain inputs differ from authoritative context")
     command_evidence = _evidence_buffer(command_evidence)
     governance_root = governance_root.resolve(strict=True)
     workspace_root = workspace_root.resolve(strict=True)
@@ -495,7 +1030,7 @@ def provision(
         raise BootstrapError(
             "toolchain receipt must be outside target workspace and governance checkout"
         )
-    checkout_head, merge_base = validate_checkout(
+    checkout_head, merge_base, git_executable = validate_checkout(
         governance_root,
         workspace_root,
         base_sha,
@@ -539,11 +1074,7 @@ def provision(
             str(python_path),
             "-I",
             "-c",
-            (
-                "import importlib.metadata, json, pathlib, ruff; "
-                "print(json.dumps({'version': importlib.metadata.version('ruff'), "
-                "'origin': str(pathlib.Path(ruff.__file__).resolve())}, sort_keys=True))"
-            ),
+            _RUFF_PROBE,
         ),
         environment=environment,
         timeout_seconds=15,
@@ -567,6 +1098,7 @@ def provision(
     if version != f"ruff {RUFF_VERSION}":
         raise BootstrapError(f"unexpected Ruff version output: {version}")
     receipt: dict[str, object] = {
+        **expected,
         "schema_version": "1.0",
         "status": "PASS",
         "decision": "TOOLCHAIN_READY",
@@ -578,6 +1110,9 @@ def provision(
         "checkout_head_sha": checkout_head,
         "merge_base_sha": merge_base,
         "lock_sha256": lock_sha256,
+        "governance_root": str(governance_root),
+        "workspace_root": str(workspace_root),
+        "git_executable": git_executable,
         "python_version": platform.python_version(),
         "platform_system": platform.system(),
         "platform_machine": platform.machine(),
@@ -590,7 +1125,7 @@ def provision(
         "error": None,
     }
     _attach_payload_sha256(receipt)
-    _write_validated_receipt(governance_root, receipt_path, receipt)
+    _write_validated_receipt(governance_root, receipt_path, receipt, expected)
     return receipt
 
 
@@ -600,11 +1135,13 @@ def _normalized_sha(value: str) -> str:
 
 def failure_receipt(
     args: argparse.Namespace,
+    expected_context: Mapping[str, object],
     command_evidence: list[dict[str, object]],
     error: str,
 ) -> dict[str, object]:
     failure_detail = error[:4096] or "unknown toolchain bootstrap failure"
     receipt: dict[str, object] = {
+        **expected_context,
         "schema_version": "1.0",
         "status": "FAIL",
         "decision": "BLOCK_TECHNICAL",
@@ -616,6 +1153,9 @@ def failure_receipt(
         "checkout_head_sha": None,
         "merge_base_sha": None,
         "lock_sha256": None,
+        "governance_root": str(args.governance_root.resolve(strict=False)),
+        "workspace_root": str(args.workspace_root.resolve(strict=False)),
+        "git_executable": None,
         "python_version": platform.python_version(),
         "platform_system": platform.system(),
         "platform_machine": platform.machine(),
@@ -661,10 +1201,46 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--evaluator-sha", required=True)
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--repository-id", required=True)
+    parser.add_argument("--head-repository-id", required=True)
+    parser.add_argument("--event-name", required=True)
+    parser.add_argument("--pull-request-number", default="")
+    parser.add_argument("--workflow-ref", required=True)
+    parser.add_argument("--workflow-sha", required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-attempt", required=True)
+    parser.add_argument("--expected-artifact-name", required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--failure-receipt", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
     return parser.parse_args(argv)
+
+
+def _publication_context_from_args(args: argparse.Namespace) -> dict[str, object]:
+    raw_pr_number = str(args.pull_request_number)
+    if raw_pr_number:
+        if not re.fullmatch(r"[1-9][0-9]{0,9}", raw_pr_number):
+            raise BootstrapError("pull request number invalid")
+        pull_request_number: int | None = int(raw_pr_number)
+    else:
+        pull_request_number = None
+    return _validated_publication_context(
+        {
+            "repository": args.repository,
+            "repository_id": args.repository_id,
+            "head_repository_id": args.head_repository_id,
+            "event_name": args.event_name,
+            "pull_request_number": pull_request_number,
+            "base_sha": args.base_sha,
+            "head_sha": args.evaluator_sha,
+            "workflow_ref": args.workflow_ref,
+            "workflow_sha": args.workflow_sha,
+            "run_id": args.run_id,
+            "run_attempt": args.run_attempt,
+            "expected_artifact_name": args.expected_artifact_name,
+        }
+    )
 
 
 def _validated_external_path(
@@ -684,6 +1260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     command_evidence: list[dict[str, object]] = []
     try:
+        expected_context = _publication_context_from_args(args)
         failure_receipt_path = _validated_external_path(
             args.governance_root,
             args.workspace_root,
@@ -708,15 +1285,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             base_sha=args.base_sha,
             evaluator_sha=args.evaluator_sha,
             receipt_path=args.receipt,
+            expected_context=expected_context,
             command_evidence=command_evidence,
         )
         if args.github_output is not None:
             write_github_outputs(args.github_output, args.receipt, receipt)
     except (BootstrapError, OSError, ValueError, json.JSONDecodeError) as exc:
         try:
-            receipt = failure_receipt(args, command_evidence, str(exc))
+            receipt = failure_receipt(
+                args, expected_context, command_evidence, str(exc)
+            )
             governance_root = args.governance_root.resolve(strict=True)
-            _write_validated_receipt(governance_root, failure_receipt_path, receipt)
+            _write_validated_receipt(
+                governance_root,
+                failure_receipt_path,
+                receipt,
+                expected_context,
+            )
             if args.github_output is not None:
                 write_github_outputs(args.github_output, failure_receipt_path, receipt)
         except (

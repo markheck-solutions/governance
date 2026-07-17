@@ -53,6 +53,9 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertIn('python-version: "3.12.13"', workflow)
         self.assertIn("timeout-minutes: 10", workflow)
+        self.assertIn("pull_request: {}", workflow)
+        self.assertNotIn("paths:", workflow.split("permissions:", 1)[0])
+        self.assertNotIn("workflow_dispatch", workflow)
         self.assertNotIn("continue-on-error:", workflow)
         self.assertIn("uses: ./.github/actions/setup-governance-toolchain", workflow)
         self.assertLess(
@@ -65,17 +68,39 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('"${{ steps.toolchain.outputs.python-path }}"', workflow)
         self.assertIn("steps.toolchain.outputs.receipt-file-sha256", workflow)
         self.assertIn(
-            "base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}",
+            "base-sha: ${{ github.event.pull_request.base.sha }}",
             workflow,
         )
         self.assertIn("if: always()", workflow)
-        self.assertIn(
-            'bootstrap["validate_receipt"](governance_root, receipt)', workflow
-        )
+        self.assertIn('bootstrap["validate_live_receipt"](', workflow)
+        self.assertIn("governance_root, receipt, expected_context", workflow)
         self.assertIn("hmac.compare_digest(actual, expected)", workflow)
         self.assertEqual(workflow.count("persist-credentials: false"), 1)
         self.assertIn("fetch-depth: 0", workflow)
-        self.assertIn("governance-toolchain-publication-${{ github.run_id }}", workflow)
+        self.assertIn(
+            "governance-toolchain-publication-${{ github.run_id }}-${{ github.run_attempt }}",
+            workflow,
+        )
+        self.assertIn("id: upload", workflow)
+        self.assertIn("steps.upload.outputs.artifact-id", workflow)
+        self.assertIn("steps.upload.outputs.artifact-digest", workflow)
+        self.assertIn('bootstrap["create_artifact_binding"](', workflow)
+        self.assertIn("governance-toolchain-artifact-binding.json", workflow)
+        self.assertIn("id: binding_upload", workflow)
+        self.assertIn("steps.binding_upload.outputs.artifact-id", workflow)
+        self.assertIn("steps.binding_upload.outputs.artifact-digest", workflow)
+        for context_key in (
+            "repository-id:",
+            "head-repository-id:",
+            "event-name:",
+            "pull-request-number:",
+            "workflow-ref:",
+            "workflow-sha:",
+            "run-id:",
+            "run-attempt:",
+            "expected-artifact-name:",
+        ):
+            self.assertIn(context_key, workflow)
         for required in (
             "--require-hashes",
             "--only-binary=:all:",
@@ -93,6 +118,9 @@ class WorkflowTests(unittest.TestCase):
             "receipt-file-sha256",
             '--failure-receipt "$receipt_path"',
             '--github-output "${GITHUB_OUTPUT:?}"',
+            '--repository "${REPOSITORY:?}"',
+            '--run-attempt "${RUN_ATTEMPT:?}"',
+            '--expected-artifact-name "${EXPECTED_ARTIFACT_NAME:?}"',
         ):
             self.assertIn(required, action)
         run_script = action.split("      run: |", 1)[1]
