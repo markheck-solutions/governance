@@ -95,17 +95,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("GITHUB_PATH", action)
         self.assertIn("default: PUBLICATION", action)
         self.assertIn('--context-kind "${CONTEXT_KIND:?}"', action)
-        collect = workflow.index(
-            "      - name: Stage supportability evidence outside target checkout"
-        )
-        upload = workflow.index("      - name: Upload supportability evidence")
-        self.assertLess(collect, upload)
-        self.assertIn("toolchain receipt file digest mismatch", workflow)
-        self.assertIn("governance-toolchain-receipt.json", workflow)
-        self.assertIn("supportability staging must be outside workspace", workflow)
-        self.assertIn("supportability source must be a regular file", workflow)
-        self.assertIn("${{ runner.temp }}/supportability-evidence/*", workflow)
-        self.assertNotIn("target/artifacts/supportability/*", workflow)
+        self.assertNotIn("governance-toolchain-receipt.json", workflow)
+        self.assertNotIn("shutil.copyfile", workflow)
+        self.assertIn("path: target/artifacts/supportability/*", workflow)
 
     def test_toolchain_publication_is_bounded_pinned_and_inert(self) -> None:
         workflow = (
