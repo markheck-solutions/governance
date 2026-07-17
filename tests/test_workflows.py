@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -10,7 +11,9 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from governance_eval.hashing import sha256_json
 from governance_eval.paths import repo_root
+from governance_eval.schemas import validate_named
 
 
 def _legacy_startup_receipt_strings() -> tuple[str, ...]:
@@ -525,6 +528,16 @@ class ReusableWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         script = _workflow_input_validation_script(workflow)
+        self.assertIn("Upload legacy caller subprocess evidence", workflow)
+        self.assertIn(
+            "${{ inputs.artifact-name }}-legacy-caller-subprocess-evidence",
+            workflow,
+        )
+        self.assertIn(
+            "target/artifacts/supportability/"
+            "legacy-request-caller-subprocess-evidence.json",
+            workflow,
+        )
         body = (
             f"@codex review\n\nGovernance review request for exact head `{'b' * 40}`."
         )
@@ -838,6 +851,9 @@ class ReusableWorkflowTests(unittest.TestCase):
                 env = os.environ.copy()
                 env.update(base)
                 env.update(changes)
+                env["PYTHONPATH"] = str(self.root) + (
+                    os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
+                )
                 return subprocess.run(
                     [sys.executable, "-c", script],
                     cwd=root,
@@ -848,7 +864,56 @@ class ReusableWorkflowTests(unittest.TestCase):
                     timeout=5,
                 )
 
-            self.assertEqual(run({}).returncode, 0)
+            legacy_result = run({})
+            self.assertEqual(legacy_result.returncode, 0, legacy_result.stderr)
+            evidence_path = (
+                target / "artifacts/supportability/"
+                "legacy-request-caller-subprocess-evidence.json"
+            )
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            validate_named("subprocess_evidence", evidence, self.root)
+            self.assertEqual(evidence["decision"], "PASS")
+            self.assertEqual(evidence["termination"], "EXITED")
+            self.assertEqual(evidence["exit_code"], 0)
+            self.assertFalse(evidence["timed_out"])
+            self.assertEqual(evidence["timeout_seconds"], 10)
+            self.assertEqual(
+                evidence["command"],
+                [
+                    "git",
+                    "-C",
+                    "target",
+                    "show",
+                    legacy_sha + ":.github/workflows/supportability-enforcement.yml",
+                ],
+            )
+            captured_workflow = base64.b64decode(
+                evidence["stdout"]["captured_base64"]
+            ).decode("utf-8")
+            normalized_captured_workflow = captured_workflow.replace("\r\n", "\n")
+            self.assertEqual(normalized_captured_workflow, legacy)
+            self.assertEqual(
+                evidence["artifact_content_hash"],
+                sha256_json({**evidence, "artifact_content_hash": ""}),
+            )
+
+            missing_sha = "f" * 40
+            self.assertEqual(
+                run(
+                    {
+                        "TARGET_BASE_SHA": missing_sha,
+                        "REQUEST_WORKFLOW_SHA": missing_sha,
+                    }
+                ).returncode,
+                64,
+            )
+            failed_evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            validate_named("subprocess_evidence", failed_evidence, self.root)
+            self.assertEqual(failed_evidence["decision"], "BLOCK_TECHNICAL")
+            self.assertEqual(failed_evidence["termination"], "EXITED")
+            self.assertNotEqual(failed_evidence["exit_code"], 0)
+            self.assertTrue(failed_evidence["errors"])
+
             negative_cases = {
                 "partial core": {"REQUEST_OUTCOME": "POSTED"},
                 "optional only": {

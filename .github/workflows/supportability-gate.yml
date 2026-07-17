@@ -163,9 +163,13 @@ jobs:
           import json
           import os
           import re
-          import subprocess
           import sys
           from datetime import datetime
+          from pathlib import Path
+
+          sys.path.insert(0, "governance")
+
+          from governance_eval.subprocess_evidence import run_recorded_subprocess
 
           sha_re = re.compile(r"^[0-9a-f]{40}$")
           ref_re = re.compile(r"^[0-9a-f]{40}$")
@@ -268,23 +272,40 @@ jobs:
               if os.environ["REQUEST_WORKFLOW_SHA"] != os.environ["TARGET_BASE_SHA"]:
                   print("Legacy request caller must equal target base", file=sys.stderr)
                   raise SystemExit(64)
-              try:
-                  base_workflow = subprocess.run(
-                      [
-                          "git",
-                          "-C",
-                          "target",
-                          "show",
-                          os.environ["TARGET_BASE_SHA"]
-                          + ":.github/workflows/supportability-enforcement.yml",
-                      ],
-                      check=True,
-                      capture_output=True,
-                      text=True,
-                      timeout=10,
-                  ).stdout
-              except (OSError, subprocess.SubprocessError, UnicodeError):
+              caller_command = [
+                  "git",
+                  "-C",
+                  "target",
+                  "show",
+                  os.environ["TARGET_BASE_SHA"]
+                  + ":.github/workflows/supportability-enforcement.yml",
+              ]
+              caller_evidence, base_workflow_bytes = run_recorded_subprocess(
+                  caller_command,
+                  repository=os.environ["TARGET_REPOSITORY"],
+                  pull_request=int(os.environ["TARGET_PR_NUMBER"]),
+                  base_sha=os.environ["TARGET_BASE_SHA"],
+                  head_sha=os.environ["TARGET_HEAD_SHA"],
+                  evaluator_sha=os.environ["GOVERNANCE_REF"],
+                  caller_workflow_sha=os.environ["REQUEST_WORKFLOW_SHA"],
+                  output_path=Path(
+                      "target/artifacts/supportability/"
+                      "legacy-request-caller-subprocess-evidence.json"
+                  ),
+                  timeout_seconds=10,
+              )
+              if caller_evidence["decision"] != "PASS":
                   print("Legacy request caller cannot be read", file=sys.stderr)
+                  raise SystemExit(64)
+              try:
+                  base_workflow = base_workflow_bytes.decode("utf-8").replace(
+                      "\r\n", "\n"
+                  )
+              except UnicodeError:
+                  print("Legacy request caller cannot be decoded", file=sys.stderr)
+                  raise SystemExit(64)
+              if "\r" in base_workflow:
+                  print("Legacy request caller newlines are invalid", file=sys.stderr)
                   raise SystemExit(64)
               sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
               governance_ref = re.compile(
@@ -392,6 +413,13 @@ jobs:
           else
             echo "legacy-request-receipt=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Upload legacy caller subprocess evidence
+        if: always() && hashFiles('target/artifacts/supportability/legacy-request-caller-subprocess-evidence.json') != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ${{ inputs.artifact-name }}-legacy-caller-subprocess-evidence
+          path: target/artifacts/supportability/legacy-request-caller-subprocess-evidence.json
+          retention-days: 90
       - name: Bind validated AI-review supportability config
         id: bind_ai_config
         shell: bash

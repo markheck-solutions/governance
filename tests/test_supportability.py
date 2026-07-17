@@ -722,12 +722,16 @@ class SupportabilityGateTests(unittest.TestCase):
                 "governance_eval/ai_review_gate.py",
                 "governance_eval/codex_connector_evidence.py",
                 "governance_eval/codex_review_gate.py",
+                "governance_eval/schemas.py",
+                "governance_eval/subprocess_evidence.py",
+                "schemas/v1/subprocess_evidence.schema.json",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
                 "tests/test_codex_connector_collector.py",
                 "tests/test_codex_connector_evidence.py",
                 "tests/test_codex_review_gate.py",
                 "tests/test_supportability.py",
+                "tests/test_subprocess_evidence.py",
                 "tests/test_workflows.py",
             ]
 
