@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 import governance_eval.supportability as supportability_module
+from governance_eval.codex_review_gate import run_codex_review_gate
 from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
 from governance_eval.supportability import (
@@ -243,6 +244,31 @@ class SupportabilityConfigTests(unittest.TestCase):
 class SupportabilityGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
+
+    def test_missing_automatic_request_receipt_fails_before_gate_execution(
+        self,
+    ) -> None:
+        collector = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(
+                ValueError, "automatic workflow request receipt is required"
+            ):
+                run_codex_review_gate(
+                    config_path=root / "missing.yml",
+                    config_source_path=".github/governance/supportability.yml",
+                    config_binding_digest="sha256:" + "0" * 64,
+                    repository="owner/repo",
+                    pull_request_number=1,
+                    base_sha="a" * 40,
+                    head_sha="b" * 40,
+                    governance_sha="c" * 40,
+                    review_window_started_at="2026-07-13T00:00:00Z",
+                    output_dir=root / "artifacts",
+                    collector=collector,
+                )
+
+        collector.assert_not_called()
 
     def test_synthetic_repo_with_passing_config_returns_green(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

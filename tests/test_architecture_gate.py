@@ -58,6 +58,32 @@ class ArchitectureGateTests(unittest.TestCase):
             )
         )
 
+    def test_request_receipt_slice_has_architecture_coverage(self) -> None:
+        changed_files = [
+            "governance_eval/codex_connector_evidence.py",
+            "governance_eval/codex_review_gate.py",
+            "schemas/v3/codex_connector_evidence_result.schema.json",
+            "tests/test_architecture_gate.py",
+            "tests/test_codex_connector_evidence.py",
+            "tests/test_codex_review_gate.py",
+            "tests/test_supportability.py",
+        ]
+
+        result, code = run_architecture_gate(
+            self.root / ".github/governance/supportability.yml",
+            self.root,
+            "a" * 40,
+            "b" * 40,
+            changed_files=changed_files,
+        )
+
+        self.assertEqual(code, EXIT_OK, result["violations"])
+        self.assertEqual(result["changed_files"], sorted(changed_files))
+        self.assertEqual(
+            result["rule_results"]["changed_file_architecture_coverage"],
+            "PASS",
+        )
+
     def test_registered_python_module_passes_and_writes_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")
