@@ -743,7 +743,8 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
                 blocking = snapshot()
                 blocking["issue_comments"].append(human_comment("@codex review"))
                 blocking["issue_comments"][0]["body"] = (
-                    f"{severity}: unsafe exact-head evidence"
+                    f"{severity}: unsafe exact-head evidence\n\n"
+                    f"**Reviewed commit:** `{HEAD_SHA[:10]}`"
                 )
                 result = evaluate(blocking)
                 self.assertEqual(result["review_state"], "BLOCKING_FINDINGS_PRESENT")
@@ -1225,7 +1226,8 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
                     issue_comment = reaction_snapshot()
                     issue_comment["issue_comments"] = [
                         comment(
-                            f"{severity}: unsafe exact-head evidence",
+                            f"{severity}: unsafe exact-head evidence\n\n"
+                            f"**Reviewed commit:** `{HEAD_SHA[:10]}`",
                             created_at=submitted_at,
                         )
                     ]
@@ -1233,20 +1235,36 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
                     self.assertEqual(
                         issue_result["capability_status"], "BLOCK_TECHNICAL"
                     )
-                    if submitted_at == ANCHOR:
-                        self.assertEqual(
-                            issue_result["review_state"], "AI_REVIEW_UNAVAILABLE"
-                        )
-                        self.assertIn(
-                            "HEAD_ATTRIBUTION_AMBIGUOUS", issue_result["reasons"]
-                        )
-                        self.assertNotIn(
-                            "BLOCKING_FINDINGS_PRESENT", issue_result["reasons"]
-                        )
-                    else:
-                        self.assertIn(
-                            "BLOCKING_FINDINGS_PRESENT", issue_result["reasons"]
-                        )
+                    self.assertEqual(
+                        issue_result["review_state"], "BLOCKING_FINDINGS_PRESENT"
+                    )
+                    self.assertIn("BLOCKING_FINDINGS_PRESENT", issue_result["reasons"])
+
+    def test_stale_issue_comment_finding_cannot_poison_current_clean_head(
+        self,
+    ) -> None:
+        value = snapshot()
+        value["issue_comments"][0]["created_at"] = "2026-07-13T18:03:00Z"
+        value["issue_comments"].append(
+            comment(
+                f"P1: stale previous-head finding\n\n**Reviewed commit:** `{'c' * 10}`",
+                comment_id=201,
+                created_at="2026-07-13T18:04:00Z",
+            )
+        )
+
+        result = evaluate(value)
+
+        self.assertEqual(result["review_state"], "CLEAN")
+        self.assertEqual(result["capability_status"], "PASS")
+        self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
+
+        unbound = deepcopy(value)
+        unbound["issue_comments"][1]["body"] = "P1: unbound issue finding"
+        result = evaluate(unbound)
+        self.assertEqual(result["review_state"], "AI_REVIEW_UNAVAILABLE")
+        self.assertIn("HEAD_ATTRIBUTION_AMBIGUOUS", result["reasons"])
+        self.assertNotIn("BLOCKING_FINDINGS_PRESENT", result["reasons"])
 
     def test_exact_pr35_reaction_fixture_is_unavailable_without_head_attestation(
         self,

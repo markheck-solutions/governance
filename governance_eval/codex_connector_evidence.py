@@ -44,6 +44,9 @@ _CODEX_REVIEW_RE = re.compile(
 )
 _MANUAL_REQUEST_RE = re.compile(r"@codex\b", re.IGNORECASE)
 _BLOCKING_SEVERITY_RE = re.compile(r"\bP[0-2]\b", re.IGNORECASE)
+_REVIEWED_COMMIT_MARKER_RE = re.compile(
+    r"(?m)^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$"
+)
 _APPROVED_CLEAN_SUFFIXES = {
     "",
     " Bravo.",
@@ -459,6 +462,7 @@ def _evaluate_snapshot(
         ("issue_comment", item)
         for item in comments
         if _exact_connector_issue_comment(item)
+        and _issue_comment_head_state(item, trusted.head_sha) != "STALE"
     ] + [
         ("pull_request_review", item)
         for item in reviews
@@ -656,16 +660,18 @@ def _collection_reasons(
     if (
         any(
             _exact_connector_issue_comment(comment)
+            and _issue_comment_head_state(comment, trusted.head_sha) != "STALE"
             and unbound_boundary(comment["created_at"])
             for comment in comments
         )
         or any(
             _exact_connector_issue_comment(comment)
             and _BLOCKING_SEVERITY_RE.search(comment["body"])
+            and _issue_comment_head_state(comment, trusted.head_sha) == "UNBOUND"
             and _timestamp_in_window(
                 comment["created_at"],
                 trusted.pull_request_created_at,
-                trusted.review_window_started_at,
+                trusted.review_deadline_at,
                 include_lower=True,
             )
             for comment in comments
@@ -680,6 +686,7 @@ def _collection_reasons(
 
     connector_failure = any(
         _exact_connector_issue_comment(comment)
+        and _issue_comment_head_state(comment, trusted.head_sha) != "STALE"
         and is_ai_review_service_failure(comment["body"])
         and issue_in_window(comment["created_at"])
         for comment in comments
@@ -695,7 +702,13 @@ def _collection_reasons(
     if any(
         _exact_connector_issue_comment(comment)
         and _BLOCKING_SEVERITY_RE.search(comment["body"])
-        and issue_in_window(comment["created_at"])
+        and _issue_comment_head_state(comment, trusted.head_sha) == "CURRENT"
+        and _timestamp_in_window(
+            comment["created_at"],
+            trusted.pull_request_created_at,
+            trusted.review_deadline_at,
+            include_lower=True,
+        )
         for comment in comments
     ):
         reasons.append("BLOCKING_FINDINGS_PRESENT")
@@ -852,6 +865,17 @@ def _clean_commit_identity(body: str) -> str | None:
     if trailer and not _safe_product_trailer(trailer):
         return None
     return str(match.group("prefix"))
+
+
+def _issue_comment_head_state(comment: dict[str, Any], head_sha: str) -> str:
+    identities = _REVIEWED_COMMIT_MARKER_RE.findall(comment["body"])
+    if len(identities) != 1:
+        return "UNBOUND"
+    identity = identities[0]
+    current = (
+        identity == head_sha if len(identity) == 40 else head_sha.startswith(identity)
+    )
+    return "CURRENT" if current else "STALE"
 
 
 def _clean_review_commit_identity(review: dict[str, Any]) -> str | None:
