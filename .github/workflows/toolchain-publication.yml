@@ -1,0 +1,93 @@
+name: Governance Toolchain Publication
+
+on:
+  pull_request:
+    paths:
+      - .github/actions/setup-governance-toolchain/**
+      - .github/workflows/toolchain-publication.yml
+      - governance_eval/schemas.py
+      - governance_eval/toolchain_bootstrap.py
+      - requirements-governance.lock
+      - schemas/v1/governance_toolchain_receipt.schema.json
+      - tests/test_toolchain_bootstrap.py
+      - tests/test_workflows.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publication-proof:
+    name: Pinned toolchain proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up exact Python
+        id: setup-python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+      - name: Provision pinned governance toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-governance-toolchain
+        with:
+          governance-root: .
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          evaluator-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          python-path: ${{ steps.setup-python.outputs.python-path }}
+      - name: Run complete Phase 1 verification
+        run: >-
+          "${{ steps.toolchain.outputs.python-path }}"
+          -m governance_eval verify
+          --artifacts-dir artifacts/toolchain-publication/phase1
+      - name: Verify and record immutable toolchain receipt
+        if: always()
+        shell: bash
+        env:
+          BASE_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+          BOOTSTRAP_OUTCOME: ${{ steps.toolchain.outcome }}
+          DESTINATION: artifacts/toolchain-publication/governance-toolchain-receipt.json
+          EXPECTED_FILE_SHA256: ${{ steps.toolchain.outputs.receipt-file-sha256 }}
+          GOVERNANCE_ROOT: ${{ github.workspace }}
+          SOURCE: ${{ runner.temp }}/governance-toolchain-receipt.json
+        run: |
+          mkdir -p artifacts/toolchain-publication
+          "$BASE_PYTHON" -I - <<'PY'
+          import hashlib
+          import hmac
+          import json
+          import os
+          import runpy
+          import shutil
+          from pathlib import Path
+
+          source = Path(os.environ["SOURCE"])
+          destination = Path(os.environ["DESTINATION"])
+          governance_root = Path(os.environ["GOVERNANCE_ROOT"])
+          receipt = json.loads(source.read_text(encoding="utf-8"))
+          bootstrap = runpy.run_path(
+              str(governance_root / "governance_eval/toolchain_bootstrap.py")
+          )
+          bootstrap["validate_receipt"](governance_root, receipt)
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          expected = os.environ["EXPECTED_FILE_SHA256"]
+          outcome = os.environ["BOOTSTRAP_OUTCOME"]
+          if outcome == "success" and not expected:
+              raise SystemExit("successful bootstrap omitted receipt file digest")
+          if expected and not hmac.compare_digest(actual, expected):
+              raise SystemExit("toolchain receipt digest mismatch")
+          shutil.copyfile(source, destination)
+          PY
+      - name: Upload publication evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: governance-toolchain-publication-${{ github.run_id }}
+          path: artifacts/toolchain-publication
+          if-no-files-found: error
+          retention-days: 30

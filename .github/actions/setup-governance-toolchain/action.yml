@@ -1,0 +1,62 @@
+name: Setup governance toolchain
+description: Provision the hash-locked evaluator toolchain outside the target workspace.
+
+inputs:
+  governance-root:
+    description: Path to the exact governance checkout that owns the lock.
+    required: true
+  base-sha:
+    description: Exact base commit for publication or evaluation evidence.
+    required: true
+  evaluator-sha:
+    description: Exact governance commit evaluated by this runtime.
+    required: true
+  python-path:
+    description: Absolute interpreter path produced by actions/setup-python.
+    required: true
+
+outputs:
+  python-path:
+    description: Absolute Python path inside the provisioned runtime.
+    value: ${{ steps.bootstrap.outputs.python-path }}
+  bin-path:
+    description: Absolute executable directory inside the provisioned runtime.
+    value: ${{ steps.bootstrap.outputs.bin-path }}
+  receipt-path:
+    description: Machine-readable toolchain receipt path.
+    value: ${{ steps.bootstrap.outputs.receipt-path }}
+  lock-sha256:
+    description: SHA-256 digest of the installed lock.
+    value: ${{ steps.bootstrap.outputs.lock-sha256 }}
+  receipt-file-sha256:
+    description: SHA-256 digest of the serialized receipt file.
+    value: ${{ steps.bootstrap.outputs.receipt-file-sha256 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Provision hash-locked Ruff runtime
+      id: bootstrap
+      shell: bash
+      env:
+        BASE_PYTHON: ${{ inputs.python-path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        EVALUATOR_SHA: ${{ inputs.evaluator-sha }}
+        GH_TOKEN: ""
+        GITHUB_TOKEN: ""
+        GOVERNANCE_ROOT: ${{ inputs.governance-root }}
+        PYTHONHOME: ""
+        PYTHONPATH: ""
+      run: |
+        set -euo pipefail
+        base_python="${BASE_PYTHON:?}"
+        runtime_root="${RUNNER_TEMP:?}/governance-toolchain"
+        receipt_path="${RUNNER_TEMP}/governance-toolchain-receipt.json"
+        "$base_python" -I "${GOVERNANCE_ROOT:?}/governance_eval/toolchain_bootstrap.py" \
+          --governance-root "${GOVERNANCE_ROOT:?}" \
+          --workspace-root "${GITHUB_WORKSPACE:?}" \
+          --runtime-root "$runtime_root" \
+          --base-sha "${BASE_SHA:?}" \
+          --evaluator-sha "${EVALUATOR_SHA:?}" \
+          --receipt "$receipt_path" \
+          --github-output "${GITHUB_OUTPUT:?}"

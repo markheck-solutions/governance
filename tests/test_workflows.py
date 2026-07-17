@@ -39,6 +39,74 @@ class WorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 
+    def test_toolchain_publication_is_bounded_pinned_and_inert(self) -> None:
+        workflow = (
+            self.root / ".github/workflows/toolchain-publication.yml"
+        ).read_text(encoding="utf-8")
+        action = (
+            self.root / ".github/actions/setup-governance-toolchain/action.yml"
+        ).read_text(encoding="utf-8")
+        bootstrap = (self.root / "governance_eval/toolchain_bootstrap.py").read_text(
+            encoding="utf-8"
+        )
+        lock = (self.root / "requirements-governance.lock").read_text(encoding="utf-8")
+
+        self.assertIn('python-version: "3.12.13"', workflow)
+        self.assertIn("timeout-minutes: 10", workflow)
+        self.assertNotIn("continue-on-error:", workflow)
+        self.assertIn("uses: ./.github/actions/setup-governance-toolchain", workflow)
+        self.assertLess(
+            workflow.index("uses: ./.github/actions/setup-governance-toolchain"),
+            workflow.index("-m governance_eval verify"),
+        )
+        self.assertIn(
+            "python-path: ${{ steps.setup-python.outputs.python-path }}", workflow
+        )
+        self.assertIn('"${{ steps.toolchain.outputs.python-path }}"', workflow)
+        self.assertIn("steps.toolchain.outputs.receipt-file-sha256", workflow)
+        self.assertIn(
+            "base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}",
+            workflow,
+        )
+        self.assertIn("if: always()", workflow)
+        self.assertIn(
+            'bootstrap["validate_receipt"](governance_root, receipt)', workflow
+        )
+        self.assertIn("hmac.compare_digest(actual, expected)", workflow)
+        self.assertEqual(workflow.count("persist-credentials: false"), 1)
+        self.assertIn("governance-toolchain-publication-${{ github.run_id }}", workflow)
+        for required in (
+            "--require-hashes",
+            "--only-binary=:all:",
+            "--no-deps",
+            'venv.EnvBuilder(with_pip=False, clear=False, symlinks=os.name != "nt")',
+            '"ensurepip"',
+            "command_evidence",
+        ):
+            self.assertIn(required, bootstrap)
+        for required in (
+            'GH_TOKEN: ""',
+            'GITHUB_TOKEN: ""',
+            '"$base_python" -I',
+            "receipt-path",
+            "receipt-file-sha256",
+            '--github-output "${GITHUB_OUTPUT:?}"',
+        ):
+            self.assertIn(required, action)
+        run_script = action.split("      run: |", 1)[1]
+        self.assertNotIn("${{ inputs.", run_script)
+        self.assertNotIn("/bin/python", action)
+        self.assertNotIn("runtime_root}/bin", action)
+        self.assertEqual(lock.count("ruff==0.15.21"), 1)
+        self.assertIn(
+            "bab0905d2f29e0d9fbc3c373ed23db0095edaa3f71f1f4f519ec15134d9e85c8",
+            lock,
+        )
+        self.assertIn(
+            "d4b8d9a2f0f12b816b50447f6eccb9f4bb01a6b82c86b50fb3b5354b458dc6d3",
+            lock,
+        )
+
     def test_required_governance_text_uses_no_banned_condition_word(self) -> None:
         banned = "un" + "less"
         checked_suffixes = {".md", ".py", ".json", ".yml", ".yaml"}
