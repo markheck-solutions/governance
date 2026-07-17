@@ -144,20 +144,11 @@ def run_codex_review_gate(
     review_window_started_at: str,
     output_dir: Path,
     workflow_request_receipt: TrustedWorkflowRequestReceipt | None = None,
-    allow_legacy_caller_without_request_receipt: bool = False,
     collector: Collector = collect_codex_connector_snapshot,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    if (
-        workflow_request_receipt is None
-        and not allow_legacy_caller_without_request_receipt
-    ):
+    if workflow_request_receipt is None:
         raise ValueError("automatic workflow request receipt is required")
-    if (
-        workflow_request_receipt is not None
-        and allow_legacy_caller_without_request_receipt
-    ):
-        raise ValueError("legacy workflow request bridge requires an absent receipt")
     unavailable_after_cutoff, config_binding = _load_bound_supportability_policy(
         config_path=config_path,
         repository=repository,
@@ -246,24 +237,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request-response-validation-error-sha256")
     parser.add_argument("--request-comment-id", type=int)
     parser.add_argument("--request-comment-created-at")
-    parser.add_argument(
-        "--allow-legacy-caller-without-request-receipt", action="store_true"
-    )
     args = parser.parse_args(argv)
     try:
         workflow_request_receipt = _workflow_request_receipt_from_args(args)
-        if (
-            workflow_request_receipt is None
-            and not args.allow_legacy_caller_without_request_receipt
-        ):
+        if workflow_request_receipt is None:
             raise ValueError("automatic workflow request receipt is required")
-        if (
-            workflow_request_receipt is not None
-            and args.allow_legacy_caller_without_request_receipt
-        ):
-            raise ValueError(
-                "legacy workflow request bridge requires an absent receipt"
-            )
         result = run_codex_review_gate(
             config_path=args.config,
             config_source_path=args.config_source_path,
@@ -276,9 +254,6 @@ def main(argv: list[str] | None = None) -> int:
             review_window_started_at=args.review_window_started_at,
             output_dir=args.output_dir,
             workflow_request_receipt=workflow_request_receipt,
-            allow_legacy_caller_without_request_receipt=(
-                args.allow_legacy_caller_without_request_receipt
-            ),
         )
     except (OSError, TypeError, ValueError) as exc:
         parser.exit(2, f"Codex review gate failed: {exc}\n")

@@ -345,8 +345,6 @@ def _evaluate(
     observed_digest = _file_digest(raw)
     snapshot, parse_reasons = _load_snapshot(raw)
     reasons = list(parse_reasons)
-    if trusted.workflow_request_receipt is None:
-        reasons.append("WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE")
     if observed_digest != trusted.snapshot_file_sha256:
         reasons.append("SNAPSHOT_FILE_DIGEST_MISMATCH")
     normalized_digest = None
@@ -444,7 +442,6 @@ def _classify_review_state(
         "REVIEWED_COMMIT_NOT_HEAD",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
         "WORKFLOW_REQUEST_RESPONSE_INVALID",
-        "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
     }:
         return "BLOCKING_FINDINGS_PRESENT"
     if reason_set and reason_set <= {
@@ -454,7 +451,6 @@ def _classify_review_state(
         "ONLY_LATE_RESPONSE",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
         "WORKFLOW_REQUEST_RESPONSE_INVALID",
-        "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     if reason_set & {
@@ -468,7 +464,6 @@ def _classify_review_state(
         "RESPONSE_BODY_UNRECOGNIZED",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
         "WORKFLOW_REQUEST_RESPONSE_INVALID",
-        "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     if "CONNECTOR_FAILURE_PRESENT" in reason_set and reason_set <= {
@@ -478,7 +473,6 @@ def _classify_review_state(
         "RESPONSE_BODY_UNRECOGNIZED",
         "WORKFLOW_REQUEST_POSTED_AFTER_DEADLINE",
         "WORKFLOW_REQUEST_RESPONSE_INVALID",
-        "WORKFLOW_REQUEST_RECEIPT_UNAVAILABLE",
     }:
         return "AI_REVIEW_UNAVAILABLE"
     return "INVALID_EVIDENCE"

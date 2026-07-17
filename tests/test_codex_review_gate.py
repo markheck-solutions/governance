@@ -667,36 +667,6 @@ class CodexReviewGateTests(unittest.TestCase):
         "governance_eval.codex_review_gate.run_codex_review_gate",
         return_value={"owner_status": "GREEN"},
     )
-    def test_cli_explicit_legacy_bridge_passes_absent_receipt(
-        self, run_gate: Mock
-    ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config_path = write_config(root)
-            with contextlib.redirect_stdout(io.StringIO()):
-                code = main(
-                    [
-                        "--config",
-                        str(config_path),
-                        "--config-source-path",
-                        CONFIG_SOURCE_PATH,
-                        "--config-binding-digest",
-                        "sha256:" + "d" * 64,
-                        *cli_args(root / "out", include_request=False),
-                        "--allow-legacy-caller-without-request-receipt",
-                    ]
-                )
-
-        self.assertEqual(code, 0)
-        self.assertIsNone(run_gate.call_args.kwargs["workflow_request_receipt"])
-        self.assertTrue(
-            run_gate.call_args.kwargs["allow_legacy_caller_without_request_receipt"]
-        )
-
-    @patch(
-        "governance_eval.codex_review_gate.run_codex_review_gate",
-        return_value={"owner_status": "GREEN"},
-    )
     def test_cli_passes_transport_unavailable_request_receipt(
         self, run_gate: Mock
     ) -> None:
@@ -827,10 +797,6 @@ class CodexReviewGateTests(unittest.TestCase):
             cases = (
                 [],
                 ["--request-workflow-ref", WORKFLOW_REF],
-                [
-                    *request_cli_args(),
-                    "--allow-legacy-caller-without-request-receipt",
-                ],
                 rerun_args,
                 malformed_command,
                 reversed_timestamps,
