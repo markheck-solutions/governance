@@ -22,7 +22,7 @@ from governance_eval.legacy_copilot_gate import evaluate_copilot_review_gate
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
-from governance_eval.trusted_command import bind_current_python, split_command
+from governance_eval.trusted_command import run_bound_shell_command, split_command
 
 
 REQUIRED_COMMAND_GATES = (
@@ -1510,17 +1510,7 @@ def _command_result_errors(results: list[dict[str, Any]]) -> list[str]:
 
 
 def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    bound_command = bind_current_python(command)
-    return subprocess.run(
-        bound_command,
-        cwd=cwd,
-        shell=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        timeout=1200,
-    )
+    return run_bound_shell_command(command, cwd)
 
 
 def _git_changed_files(target_repo: Path, base_sha: str, head_sha: str) -> list[str]:

@@ -261,7 +261,7 @@ class TrustedCommandTests(unittest.TestCase):
         with (
             mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
             mock.patch.object(
-                supportability_module.subprocess, "run", return_value=completed
+                trusted_command_module.subprocess, "run", return_value=completed
             ) as run,
         ):
             result = supportability_module._run_one_command(
@@ -291,7 +291,7 @@ class TrustedCommandTests(unittest.TestCase):
             ),
             mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
             mock.patch.object(
-                supportability_module.subprocess, "run", return_value=completed
+                trusted_command_module.subprocess, "run", return_value=completed
             ) as run,
         ):
             supportability_module._run_shell_command(
@@ -333,7 +333,9 @@ class TrustedCommandTests(unittest.TestCase):
         for command in commands:
             with self.subTest(command=command):
                 with mock.patch.object(
-                    supportability_module.subprocess, "run", return_value=completed
+                    trusted_command_module.subprocess,
+                    "run",
+                    return_value=completed,
                 ) as run:
                     supportability_module._run_shell_command(command, Path("target"))
                 self.assertEqual(run.call_args.args[0], command)
@@ -362,6 +364,8 @@ class TrustedCommandTests(unittest.TestCase):
             ("  python\t-m ruff check .", f"  {quoted_python}\t-m ruff check ."),
             ('"python" -m ruff check .', f"{quoted_python} -m ruff check ."),
             ("'python' -m ruff check .", f"{quoted_python} -m ruff check ."),
+            ('pyt"hon" -m ruff check .', f"{quoted_python} -m ruff check ."),
+            ('python""&& echo ok', f"{quoted_python}&& echo ok"),
         )
         with mock.patch.object(
             trusted_command_module.sys, "executable", trusted_python
@@ -371,6 +375,50 @@ class TrustedCommandTests(unittest.TestCase):
                     self.assertEqual(
                         trusted_command_module.bind_current_python(command), expected
                     )
+
+    def test_trusted_runner_binds_platform_shell_escapes(self) -> None:
+        trusted_python = str(Path("trusted runtime") / "python.exe")
+        with mock.patch.object(
+            trusted_command_module.sys, "executable", trusted_python
+        ):
+            with mock.patch.object(trusted_command_module.os, "name", "posix"):
+                posix = trusted_command_module.bind_current_python(
+                    r"pyt\hon -m ruff check ."
+                )
+            with mock.patch.object(trusted_command_module.os, "name", "nt"):
+                windows = trusted_command_module.bind_current_python(
+                    "pyt^hon -m ruff check ."
+                )
+
+        self.assertNotIn(r"pyt\hon", posix)
+        self.assertNotIn("pyt^hon", windows)
+        self.assertTrue(posix.endswith(" -m ruff check ."))
+        self.assertTrue(windows.endswith(" -m ruff check ."))
+
+    def test_trusted_runner_rejects_dynamic_shell_executable_tokens(self) -> None:
+        with mock.patch.object(trusted_command_module.os, "name", "posix"):
+            with self.assertRaisesRegex(
+                trusted_command_module.TrustedCommandError, "dynamic shell executable"
+            ):
+                trusted_command_module.bind_current_python(
+                    "py${PYTHON_SUFFIX} -m ruff check ."
+                )
+        with mock.patch.object(trusted_command_module.os, "name", "nt"):
+            with self.assertRaisesRegex(
+                trusted_command_module.TrustedCommandError, "dynamic shell executable"
+            ):
+                trusted_command_module.bind_current_python("%PYTHON% -m ruff check .")
+
+    def test_default_runner_records_dynamic_executable_as_failure(self) -> None:
+        with mock.patch.object(trusted_command_module.os, "name", "posix"):
+            with mock.patch.object(trusted_command_module.subprocess, "run") as run:
+                completed = supportability_module._run_shell_command(
+                    "py${PYTHON_SUFFIX} -m ruff check .", Path("target")
+                )
+
+        run.assert_not_called()
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("dynamic shell executable token", completed.stderr)
 
 
 class SupportabilityGateTests(unittest.TestCase):
