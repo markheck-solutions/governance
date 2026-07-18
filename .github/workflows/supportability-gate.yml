@@ -343,7 +343,7 @@ jobs:
           GH_TOKEN: ""
         run: |
           cd governance
-          python - <<'PY' >> "$GITHUB_OUTPUT"
+          "${{ steps.toolchain.outputs.python-path }}" - <<'PY' >> "$GITHUB_OUTPUT"
           import os
           import subprocess
           from pathlib import Path
@@ -399,7 +399,7 @@ jobs:
           GH_TOKEN: ""
         run: |
           cd governance
-          python -m governance_eval supportability-config --config "../target/${CONFIG_PATH}"
+          "${{ steps.toolchain.outputs.python-path }}" -m governance_eval supportability-config --config "../target/${CONFIG_PATH}"
       - name: Run configured supportability gates
         id: gate
         continue-on-error: true
@@ -413,7 +413,7 @@ jobs:
           GOVERNANCE_TOOLCHAIN_RECEIPT_FILE_SHA256: ${{ steps.toolchain.outputs.receipt-file-sha256 }}
         run: |
           cd governance
-          python -m governance_eval supportability-gate \
+          "${{ steps.toolchain.outputs.python-path }}" -m governance_eval supportability-gate \
             --config "../target/${CONFIG_PATH}" \
             --target-repo ../target \
             --base-sha "$TARGET_BASE_SHA" \
@@ -429,7 +429,7 @@ jobs:
           GH_TOKEN: ""
         run: |
           cd governance
-          python -m governance_eval architecture-gate \
+          "${{ steps.toolchain.outputs.python-path }}" -m governance_eval architecture-gate \
             --config "../target/${CONFIG_PATH}" \
             --target-repo ../target \
             --base-sha "$TARGET_BASE_SHA" \
@@ -473,7 +473,7 @@ jobs:
               --request-response-validation-error-sha256 "$REQUEST_RESPONSE_VALIDATION_ERROR_SHA256"
             )
           fi
-          python -m governance_eval.codex_review_gate \
+          "${{ steps.toolchain.outputs.python-path }}" -m governance_eval.codex_review_gate \
             --config "${{ steps.bind_ai_config.outputs.bound-config-path }}" \
             --config-source-path "$CONFIG_PATH" \
             --config-binding-digest "${{ steps.bind_ai_config.outputs.binding-sha256 }}" \
@@ -490,7 +490,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
+          "${{ steps.toolchain.outputs.python-path }}" - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           from pathlib import Path
 

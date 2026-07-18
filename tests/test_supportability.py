@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -242,6 +243,95 @@ class SupportabilityConfigTests(unittest.TestCase):
 
 
 class SupportabilityGateTests(unittest.TestCase):
+    def test_default_runner_binds_python_commands_to_current_interpreter(self) -> None:
+        trusted_python = (
+            r"C:\Program Files\Governance Python\python.exe"
+            if os.name == "nt"
+            else "/opt/governance python/bin/python"
+        )
+        quoted_python = (
+            subprocess.list2cmdline([trusted_python])
+            if os.name == "nt"
+            else supportability_module.shlex.quote(trusted_python)
+        )
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with (
+            mock.patch.object(supportability_module.sys, "executable", trusted_python),
+            mock.patch.object(
+                supportability_module.subprocess, "run", return_value=completed
+            ) as run,
+        ):
+            result = supportability_module._run_one_command(
+                "lint",
+                "python -m ruff check .",
+                Path("target"),
+                supportability_module._run_shell_command,
+            )
+
+        self.assertEqual(result["command"], "python -m ruff check .")
+        self.assertEqual(run.call_args.args[0], f"{quoted_python} -m ruff check .")
+        self.assertTrue(run.call_args.kwargs["shell"])
+
+    def test_default_runner_ignores_ambient_python_path_evasion(self) -> None:
+        trusted_python = str(Path("trusted runtime") / "python.exe")
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "PATH": str(Path("candidate") / "fake-python"),
+                    "PYTHON": str(Path("candidate") / "python.exe"),
+                    "VIRTUAL_ENV": str(Path("candidate") / "venv"),
+                },
+            ),
+            mock.patch.object(supportability_module.sys, "executable", trusted_python),
+            mock.patch.object(
+                supportability_module.subprocess, "run", return_value=completed
+            ) as run,
+        ):
+            supportability_module._run_shell_command(
+                "python -c \"print('python later is data')\"", Path("target")
+            )
+
+        invoked = run.call_args.args[0]
+        self.assertTrue(invoked.startswith(subprocess.list2cmdline([trusted_python])))
+        self.assertEqual(invoked.count(trusted_python), 1)
+        self.assertIn("python later is data", invoked)
+        self.assertNotIn(str(Path("candidate") / "python.exe"), invoked)
+
+    def test_default_runner_executes_with_current_interpreter_when_path_empty(
+        self,
+    ) -> None:
+        command = 'python -c "import json,sys;print(json.dumps(sys.executable))"'
+        with mock.patch.dict(os.environ, {"PATH": ""}):
+            completed = supportability_module._run_shell_command(command, Path.cwd())
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            Path(json.loads(completed.stdout)).resolve(), Path(sys.executable).resolve()
+        )
+
+    def test_default_runner_preserves_non_python_commands(self) -> None:
+        commands = (
+            "node --version",
+            "echo python is data",
+            "python3 -m ruff check .",
+        )
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                with mock.patch.object(
+                    supportability_module.subprocess, "run", return_value=completed
+                ) as run:
+                    supportability_module._run_shell_command(command, Path("target"))
+                self.assertEqual(run.call_args.args[0], command)
+
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 

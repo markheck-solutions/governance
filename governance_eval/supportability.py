@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1516,8 +1517,9 @@ def _command_result_errors(results: list[dict[str, Any]]) -> list[str]:
 
 
 def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    bound_command = _bind_python_command(command)
     return subprocess.run(
-        command,
+        bound_command,
         cwd=cwd,
         shell=True,
         text=True,
@@ -1526,6 +1528,18 @@ def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[s
         capture_output=True,
         timeout=1200,
     )
+
+
+def _bind_python_command(command: str) -> str:
+    if command != "python" and not command.startswith("python "):
+        return command
+    if not sys.executable:
+        raise SupportabilityError("trusted Python interpreter path is unavailable")
+    if os.name == "nt":
+        executable = subprocess.list2cmdline([sys.executable])
+    else:
+        executable = shlex.quote(sys.executable)
+    return executable + command[len("python") :]
 
 
 def _git_changed_files(target_repo: Path, base_sha: str, head_sha: str) -> list[str]:

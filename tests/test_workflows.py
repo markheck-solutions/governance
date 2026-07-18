@@ -72,7 +72,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("PHASE1_SHADOW", action)
         self.assertNotIn("GITHUB_PATH", action)
 
-    def test_reusable_gate_publishes_inert_evaluation_toolchain_wiring(self) -> None:
+    def test_reusable_gate_consumes_pinned_toolchain_interpreter(self) -> None:
         workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
             encoding="utf-8"
         )
@@ -100,6 +100,12 @@ class WorkflowTests(unittest.TestCase):
             provision,
             workflow.index("      - name: Run configured supportability gates"),
         )
+        post_provision = workflow[provision:]
+        pinned_invocation = '"${{ steps.toolchain.outputs.python-path }}"'
+        self.assertEqual(post_provision.count(pinned_invocation), 6)
+        self.assertNotRegex(post_provision, r"(?m)^\s+python(?:\s|$)")
+        self.assertNotIn("GITHUB_PATH", post_provision)
+        self.assertNotRegex(post_provision, r"(?m)^\s+(?:export\s+)?PATH=")
         for binding in (
             "context-kind: SUPPORTABILITY_EVALUATION",
             "base-sha: ${{ inputs.governance-ref }}",
@@ -319,7 +325,7 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-gate.yml"],
         )
         self.assertIn(
-            "python -m governance_eval architecture-gate",
+            '"${{ steps.toolchain.outputs.python-path }}" -m governance_eval architecture-gate',
             workflows["supportability-gate.yml"],
         )
         self.assertIn(
@@ -333,7 +339,7 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertRegex(
             workflows["supportability-gate.yml"],
-            r"(?s)- name: Reconcile Codex review evidence.*?env:\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}.*?python -m governance_eval\.codex_review_gate",
+            r'(?s)- name: Reconcile Codex review evidence.*?env:\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}.*?"\$\{\{ steps\.toolchain\.outputs\.python-path \}\}" -m governance_eval\.codex_review_gate',
         )
         self.assertIn(
             "ai-review-gate-result.json", workflows["supportability-gate.yml"]
@@ -341,7 +347,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("copilot-review-gate", workflows["supportability-gate.yml"])
         self.assertRegex(
             workflows["supportability-gate.yml"],
-            r"(?s)- name: Run configured supportability gates.*?env:\s+GH_TOKEN: \"\".*?python -m governance_eval supportability-gate",
+            r'(?s)- name: Run configured supportability gates.*?env:\s+GH_TOKEN: "".*?"\$\{\{ steps\.toolchain\.outputs\.python-path \}\}" -m governance_eval supportability-gate',
         )
         self.assertIn(
             'replace("\\r", " ").replace("\\n", " ")',
@@ -538,7 +544,7 @@ class WorkflowTests(unittest.TestCase):
         )[1].split("      - name: Read supportability summary", 1)[0]
         self.assertNotIn("../target/${CONFIG_PATH}", codex_block)
         self.assertIn(
-            "python -m governance_eval.codex_review_gate \\\n"
+            '"${{ steps.toolchain.outputs.python-path }}" -m governance_eval.codex_review_gate \\\n'
             '            --config "${{ steps.bind_ai_config.outputs.bound-config-path }}" \\\n'
             '            --config-source-path "$CONFIG_PATH" \\\n'
             '            --config-binding-digest "${{ steps.bind_ai_config.outputs.binding-sha256 }}" \\\n',
@@ -548,7 +554,7 @@ class WorkflowTests(unittest.TestCase):
             "      - name: Run approved architecture fitness gate", 1
         )[1].split("      - name: Reconcile Codex review evidence", 1)[0]
         self.assertIn(
-            "python -m governance_eval architecture-gate \\\n"
+            '"${{ steps.toolchain.outputs.python-path }}" -m governance_eval architecture-gate \\\n'
             '            --config "../target/${CONFIG_PATH}" \\\n'
             "            --target-repo ../target \\\n",
             architecture_block,
