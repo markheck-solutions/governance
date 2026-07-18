@@ -62,7 +62,13 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("hmac.compare_digest(actual, expected)", workflow)
         self.assertIn("governance-toolchain-receipt.json", workflow)
         self.assertIn("steps.receipt.outcome != 'success'", workflow)
-        self.assertNotIn("continue-on-error: true", workflow)
+        shadow_job = workflow.split("  shadow:", 1)[1].split("    steps:", 1)[0]
+        self.assertIn("timeout-minutes: 10", shadow_job)
+        self.assertNotIn("continue-on-error:", shadow_job)
+        receipt_step = workflow.split(
+            "      - name: Validate and preserve shadow toolchain receipt", 1
+        )[1].split("      - name: Read benchmark summary", 1)[0]
+        self.assertIn("continue-on-error: true", receipt_step)
         self.assertIn("PHASE1_SHADOW", action)
         self.assertNotIn("GITHUB_PATH", action)
 
