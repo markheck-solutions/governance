@@ -299,7 +299,12 @@ class SupportabilityGateTests(unittest.TestCase):
             )
 
         invoked = run.call_args.args[0]
-        self.assertTrue(invoked.startswith(subprocess.list2cmdline([trusted_python])))
+        quoted_python = (
+            subprocess.list2cmdline([trusted_python])
+            if os.name == "nt"
+            else trusted_command_module.shlex.quote(trusted_python)
+        )
+        self.assertTrue(invoked.startswith(quoted_python))
         self.assertEqual(invoked.count(trusted_python), 1)
         self.assertIn("python later is data", invoked)
         self.assertNotIn(str(Path("candidate") / "python.exe"), invoked)
@@ -332,6 +337,19 @@ class SupportabilityGateTests(unittest.TestCase):
                 ) as run:
                     supportability_module._run_shell_command(command, Path("target"))
                 self.assertEqual(run.call_args.args[0], command)
+
+    def test_trusted_runner_quotes_posix_interpreter_as_one_token(self) -> None:
+        trusted_python = "/opt/governance python/bin/python"
+        with (
+            mock.patch.object(trusted_command_module.os, "name", "posix"),
+            mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
+        ):
+            bound = trusted_command_module.bind_current_python("python -m ruff check .")
+
+        self.assertEqual(
+            bound,
+            f"{trusted_command_module.shlex.quote(trusted_python)} -m ruff check .",
+        )
 
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
