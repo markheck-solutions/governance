@@ -64,6 +64,7 @@ class SelfUpdatePolicyTests(unittest.TestCase):
     def test_supportability_judge_is_a_protected_checker(self) -> None:
         for checker in (
             "governance_eval/supportability.py",
+            "governance_eval/trusted_command.py",
             "governance_eval/architecture_policy.py",
         ):
             with self.subTest(checker=checker), tempfile.TemporaryDirectory() as tmp:

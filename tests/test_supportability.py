@@ -243,7 +243,7 @@ class SupportabilityConfigTests(unittest.TestCase):
         )
 
 
-class SupportabilityGateTests(unittest.TestCase):
+class TrustedCommandTests(unittest.TestCase):
     def test_default_runner_binds_python_commands_to_current_interpreter(self) -> None:
         trusted_python = (
             r"C:\Program Files\Governance Python\python.exe"
@@ -351,6 +351,29 @@ class SupportabilityGateTests(unittest.TestCase):
             f"{trusted_command_module.shlex.quote(trusted_python)} -m ruff check .",
         )
 
+    def test_trusted_runner_binds_shell_whitespace_and_quoted_token(self) -> None:
+        trusted_python = str(Path("trusted runtime") / "python.exe")
+        quoted_python = (
+            subprocess.list2cmdline([trusted_python])
+            if os.name == "nt"
+            else trusted_command_module.shlex.quote(trusted_python)
+        )
+        cases = (
+            ("  python\t-m ruff check .", f"  {quoted_python}\t-m ruff check ."),
+            ('"python" -m ruff check .', f"{quoted_python} -m ruff check ."),
+            ("'python' -m ruff check .", f"{quoted_python} -m ruff check ."),
+        )
+        with mock.patch.object(
+            trusted_command_module.sys, "executable", trusted_python
+        ):
+            for command, expected in cases:
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        trusted_command_module.bind_current_python(command), expected
+                    )
+
+
+class SupportabilityGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 

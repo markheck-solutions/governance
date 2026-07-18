@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -18,7 +19,10 @@ def split_command(command: str) -> list[str]:
 
 
 def bind_current_python(command: str) -> str:
-    if command != "python" and not command.startswith("python "):
+    match = re.match(
+        r"^(?P<leading>[ \t]*)(?:python|'python'|\"python\")(?=[ \t]|$)", command
+    )
+    if match is None:
         return command
     if not sys.executable:
         raise TrustedCommandError("trusted Python interpreter path is unavailable")
@@ -26,4 +30,4 @@ def bind_current_python(command: str) -> str:
         executable = subprocess.list2cmdline([sys.executable])
     else:
         executable = shlex.quote(sys.executable)
-    return executable + command[len("python") :]
+    return match.group("leading") + executable + command[match.end() :]

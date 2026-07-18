@@ -965,6 +965,7 @@ def _architecture_governance_change_errors(
     errors: list[str] = []
     checker_paths = {
         "governance_eval/supportability.py",
+        "governance_eval/trusted_command.py",
         "governance_eval/architecture_policy.py",
         "governance_eval/architecture_gate.py",
         "governance_eval/ai_review_gate.py",
