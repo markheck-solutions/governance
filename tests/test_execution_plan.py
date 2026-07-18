@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -86,8 +87,9 @@ def assess_plan(
 def validated_ruff_python(
     runner: Any = subprocess.run,
 ) -> str:
+    python_path = os.environ.get("GOVERNANCE_TOOLCHAIN_PYTHON_PATH") or sys.executable
     completed = runner(
-        [sys.executable, "-I", "-c", RUFF_RUNTIME_PROBE],
+        [python_path, "-I", "-c", RUFF_RUNTIME_PROBE],
         capture_output=True,
         text=True,
         check=False,
@@ -114,7 +116,7 @@ def validated_ruff_python(
     if not origin.is_relative_to(prefix):
         raise AssertionError("Ruff module origin is outside the active Python runtime")
     print(f"RUFF_FORMAT_ADAPTER_CONTROL=PASS version={RUFF_VERSION}")
-    return sys.executable
+    return python_path
 
 
 def run_plan_step(
@@ -388,6 +390,33 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
             AssertionError, "BLOCK_TECHNICAL reason=RUNTIME_UNAVAILABLE"
         ):
             validated_ruff_python(runner)
+
+    def test_format_adapter_uses_protected_toolchain_runtime(self) -> None:
+        protected_python = str(Path(sys.prefix) / "protected" / "python")
+
+        def runner(
+            arguments: list[str], **_kwargs: Any
+        ) -> subprocess.CompletedProcess[str]:
+            self.assertEqual(arguments[0], protected_python)
+            return subprocess.CompletedProcess(
+                args=arguments,
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "available": True,
+                        "version": RUFF_VERSION,
+                        "origin": str(Path(sys.prefix) / "ruff" / "__init__.py"),
+                        "prefix": sys.prefix,
+                    }
+                ),
+                stderr="",
+            )
+
+        with mock.patch.dict(
+            os.environ,
+            {"GOVERNANCE_TOOLCHAIN_PYTHON_PATH": protected_python},
+        ):
+            self.assertEqual(validated_ruff_python(runner), protected_python)
 
     def test_format_adapter_rejects_wrong_runtime_version_or_origin(self) -> None:
         cases = (
