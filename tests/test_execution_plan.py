@@ -124,13 +124,19 @@ def run_plan_step(
 ) -> subprocess.CompletedProcess[str]:
     step = compile_plan(request).steps[0]
     return subprocess.run(
-        [python_path, "-m", step.module, *step.arguments],
+        [python_path, "-I", "-m", step.module, *step.arguments],
         cwd=target_root / step.working_directory,
         capture_output=True,
         text=True,
         check=False,
         timeout=10,
     )
+
+
+def defective_source(request: Mapping[str, Any]) -> str:
+    if request["capability"] == "lint":
+        return "import os\n"
+    return "def answer( ) -> int:\n return 42\n"
 
 
 class ExecutionPlanCompilationTests(unittest.TestCase):
@@ -290,85 +296,126 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
             serialize_execution_plan(plan), serialize_execution_plan(repeated)
         )
 
-    def test_format_adapter_accepts_formatted_fixture(self) -> None:
+    def test_ruff_adapters_accept_clean_fixture(self) -> None:
         python_path = validated_ruff_python()
-        with TemporaryDirectory() as directory:
-            target_root = Path(directory)
-            source = target_root / "clean.py"
-            source.write_text(
-                "def answer() -> int:\n    return 42\n",
-                encoding="utf-8",
-            )
-            before = sha256(source.read_bytes()).hexdigest()
+        for request in (VALID_REQUEST, FORMAT_REQUEST):
+            with self.subTest(capability=request["capability"]):
+                with TemporaryDirectory() as directory:
+                    target_root = Path(directory)
+                    source = target_root / "clean.py"
+                    source.write_text(
+                        "def answer() -> int:\n    return 42\n",
+                        encoding="utf-8",
+                    )
+                    before = sha256(source.read_bytes()).hexdigest()
 
-            completed = run_plan_step(FORMAT_REQUEST, target_root, python_path)
-            after = sha256(source.read_bytes()).hexdigest()
+                    completed = run_plan_step(request, target_root, python_path)
+                    after = sha256(source.read_bytes()).hexdigest()
 
-        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-        self.assertEqual(after, before)
-
-    def test_format_adapter_blocks_unformatted_fixture_without_mutation(self) -> None:
-        python_path = validated_ruff_python()
-        with TemporaryDirectory() as directory:
-            target_root = Path(directory)
-            source = target_root / "unformatted.py"
-            source.write_text("def answer( ) -> int:\n return 42\n", encoding="utf-8")
-            before = sha256(source.read_bytes()).hexdigest()
-
-            completed = run_plan_step(FORMAT_REQUEST, target_root, python_path)
-            after = sha256(source.read_bytes()).hexdigest()
-
-        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
-        self.assertEqual(after, before)
-
-    def test_format_adapter_blocks_candidate_ignore_evasion_without_mutation(
-        self,
-    ) -> None:
-        python_path = validated_ruff_python()
-        with TemporaryDirectory() as directory:
-            target_root = Path(directory)
-            source = target_root / "hidden.py"
-            source.write_text("def answer( ) -> int:\n return 42\n", encoding="utf-8")
-            (target_root / ".gitignore").write_text("hidden.py\n", encoding="utf-8")
-            (target_root / "pyproject.toml").write_text(
-                '[tool.ruff]\nexclude = ["hidden.py"]\n',
-                encoding="utf-8",
-            )
-            before = sha256(source.read_bytes()).hexdigest()
-
-            completed = run_plan_step(FORMAT_REQUEST, target_root, python_path)
-            after = sha256(source.read_bytes()).hexdigest()
-
-        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
-        self.assertEqual(after, before)
-
-    def test_format_adapter_blocks_builtin_exclusion_evasion_without_mutation(
-        self,
-    ) -> None:
-        python_path = validated_ruff_python()
-        with TemporaryDirectory() as directory:
-            target_root = Path(directory)
-            sources = []
-            for excluded_directory in (".venv", "node_modules", "dist"):
-                source = target_root / excluded_directory / "unformatted.py"
-                source.parent.mkdir()
-                source.write_text(
-                    "def answer( ) -> int:\n return 42\n", encoding="utf-8"
+                self.assertEqual(
+                    completed.returncode, 0, completed.stdout + completed.stderr
                 )
-                sources.append(source)
-            before = {
-                source: sha256(source.read_bytes()).hexdigest() for source in sources
-            }
+                self.assertEqual(after, before)
 
-            completed = run_plan_step(FORMAT_REQUEST, target_root, python_path)
-            after = {
-                source: sha256(source.read_bytes()).hexdigest() for source in sources
-            }
+    def test_ruff_adapters_block_defective_fixture_without_mutation(self) -> None:
+        python_path = validated_ruff_python()
+        for request in (VALID_REQUEST, FORMAT_REQUEST):
+            with self.subTest(capability=request["capability"]):
+                with TemporaryDirectory() as directory:
+                    target_root = Path(directory)
+                    source = target_root / "defective.py"
+                    source.write_text(defective_source(request), encoding="utf-8")
+                    before = sha256(source.read_bytes()).hexdigest()
 
-        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
-        self.assertEqual(after, before)
-        for excluded_directory in (".venv", "node_modules", "dist"):
-            self.assertIn(excluded_directory, completed.stdout + completed.stderr)
+                    completed = run_plan_step(request, target_root, python_path)
+                    after = sha256(source.read_bytes()).hexdigest()
+
+                self.assertEqual(
+                    completed.returncode, 1, completed.stdout + completed.stderr
+                )
+                self.assertEqual(after, before)
+
+    def test_ruff_adapters_block_candidate_ignore_evasion_without_mutation(
+        self,
+    ) -> None:
+        python_path = validated_ruff_python()
+        for request in (VALID_REQUEST, FORMAT_REQUEST):
+            with self.subTest(capability=request["capability"]):
+                with TemporaryDirectory() as directory:
+                    target_root = Path(directory)
+                    source = target_root / "hidden.py"
+                    source.write_text(defective_source(request), encoding="utf-8")
+                    (target_root / ".gitignore").write_text(
+                        "hidden.py\n", encoding="utf-8"
+                    )
+                    (target_root / "pyproject.toml").write_text(
+                        '[tool.ruff]\nexclude = ["hidden.py"]\n',
+                        encoding="utf-8",
+                    )
+                    before = sha256(source.read_bytes()).hexdigest()
+
+                    completed = run_plan_step(request, target_root, python_path)
+                    after = sha256(source.read_bytes()).hexdigest()
+
+                self.assertEqual(
+                    completed.returncode, 1, completed.stdout + completed.stderr
+                )
+                self.assertEqual(after, before)
+
+    def test_ruff_adapters_block_builtin_exclusion_evasion_without_mutation(
+        self,
+    ) -> None:
+        python_path = validated_ruff_python()
+        for request in (VALID_REQUEST, FORMAT_REQUEST):
+            with self.subTest(capability=request["capability"]):
+                with TemporaryDirectory() as directory:
+                    target_root = Path(directory)
+                    sources = []
+                    for excluded_directory in (".venv", "node_modules", "dist"):
+                        source = target_root / excluded_directory / "defective.py"
+                        source.parent.mkdir()
+                        source.write_text(defective_source(request), encoding="utf-8")
+                        sources.append(source)
+                    before = {
+                        source: sha256(source.read_bytes()).hexdigest()
+                        for source in sources
+                    }
+
+                    completed = run_plan_step(request, target_root, python_path)
+                    after = {
+                        source: sha256(source.read_bytes()).hexdigest()
+                        for source in sources
+                    }
+
+                self.assertEqual(
+                    completed.returncode, 1, completed.stdout + completed.stderr
+                )
+                self.assertEqual(after, before)
+                for excluded_directory in (".venv", "node_modules", "dist"):
+                    self.assertIn(
+                        excluded_directory, completed.stdout + completed.stderr
+                    )
+
+    def test_ruff_adapters_reject_candidate_module_shadowing(self) -> None:
+        python_path = validated_ruff_python()
+        for request in (VALID_REQUEST, FORMAT_REQUEST):
+            with self.subTest(capability=request["capability"]):
+                with TemporaryDirectory() as directory:
+                    target_root = Path(directory)
+                    (target_root / "ruff.py").write_text(
+                        'print("CANDIDATE_RUFF_EXECUTED")\n', encoding="utf-8"
+                    )
+                    source = target_root / "defective.py"
+                    source.write_text(defective_source(request), encoding="utf-8")
+                    before = sha256(source.read_bytes()).hexdigest()
+
+                    completed = run_plan_step(request, target_root, python_path)
+                    after = sha256(source.read_bytes()).hexdigest()
+
+                output = completed.stdout + completed.stderr
+                self.assertEqual(completed.returncode, 1, output)
+                self.assertNotIn("CANDIDATE_RUFF_EXECUTED", output)
+                self.assertEqual(after, before)
 
     def test_format_adapter_fails_closed_when_runtime_unavailable(self) -> None:
         def runner(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
