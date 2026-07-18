@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import unittest
@@ -42,6 +43,15 @@ FORMAT_REQUEST = {
 TARGET_TREE_SHA256 = "1" * 64
 EXECUTION_ID = "2" * 64
 MAX_PULL_REQUEST = 9_007_199_254_740_991
+RUFF_VERSION = "0.15.21"
+RUFF_RUNTIME_PROBE = (
+    "import importlib.metadata, importlib.util, json, pathlib, sys; "
+    "spec = importlib.util.find_spec('ruff'); "
+    "print(json.dumps({'available': spec is not None, "
+    "'version': importlib.metadata.version('ruff') if spec else None, "
+    "'origin': str(pathlib.Path(spec.origin).resolve()) if spec else None, "
+    "'prefix': str(pathlib.Path(sys.prefix).resolve())}, sort_keys=True))"
+)
 
 
 def compile_plan(
@@ -72,12 +82,43 @@ def assess_plan(
     )
 
 
+def validated_ruff_python(
+    runner: Any = subprocess.run,
+) -> str | None:
+    completed = runner(
+        [sys.executable, "-I", "-c", RUFF_RUNTIME_PROBE],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Ruff runtime probe failed: " + completed.stdout + completed.stderr
+        )
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError("Ruff runtime probe output is invalid") from exc
+    if payload.get("available") is False:
+        print("RUFF_FORMAT_ADAPTER_CONTROL=BLOCK_TECHNICAL reason=RUNTIME_UNAVAILABLE")
+        return None
+    if payload.get("available") is not True or payload.get("version") != RUFF_VERSION:
+        raise AssertionError("Ruff runtime version is not the approved pinned version")
+    origin = Path(str(payload.get("origin"))).resolve()
+    prefix = Path(str(payload.get("prefix"))).resolve()
+    if not origin.is_relative_to(prefix):
+        raise AssertionError("Ruff module origin is outside the active Python runtime")
+    print(f"RUFF_FORMAT_ADAPTER_CONTROL=PASS version={RUFF_VERSION}")
+    return sys.executable
+
+
 def run_plan_step(
-    request: Mapping[str, Any], target_root: Path
+    request: Mapping[str, Any], target_root: Path, python_path: str
 ) -> subprocess.CompletedProcess[str]:
     step = compile_plan(request).steps[0]
     return subprocess.run(
-        [sys.executable, "-m", step.module, *step.arguments],
+        [python_path, "-m", step.module, *step.arguments],
         cwd=target_root / step.working_directory,
         capture_output=True,
         text=True,
@@ -235,6 +276,10 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
         )
 
     def test_format_adapter_accepts_formatted_fixture(self) -> None:
+        python_path = validated_ruff_python()
+        if python_path is None:
+            self.assertIsNone(python_path)
+            return
         with TemporaryDirectory() as directory:
             target_root = Path(directory)
             source = target_root / "clean.py"
@@ -244,20 +289,24 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
             )
             before = sha256(source.read_bytes()).hexdigest()
 
-            completed = run_plan_step(FORMAT_REQUEST, target_root)
+            completed = run_plan_step(FORMAT_REQUEST, target_root, python_path)
             after = sha256(source.read_bytes()).hexdigest()
 
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertEqual(after, before)
 
     def test_format_adapter_blocks_unformatted_fixture_without_mutation(self) -> None:
+        python_path = validated_ruff_python()
+        if python_path is None:
+            self.assertIsNone(python_path)
+            return
         with TemporaryDirectory() as directory:
             target_root = Path(directory)
             source = target_root / "unformatted.py"
             source.write_text("def answer( ) -> int:\n return 42\n", encoding="utf-8")
             before = sha256(source.read_bytes()).hexdigest()
 
-            completed = run_plan_step(FORMAT_REQUEST, target_root)
+            completed = run_plan_step(FORMAT_REQUEST, target_root, python_path)
             after = sha256(source.read_bytes()).hexdigest()
 
         self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
@@ -266,6 +315,10 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
     def test_format_adapter_blocks_candidate_ignore_evasion_without_mutation(
         self,
     ) -> None:
+        python_path = validated_ruff_python()
+        if python_path is None:
+            self.assertIsNone(python_path)
+            return
         with TemporaryDirectory() as directory:
             target_root = Path(directory)
             source = target_root / "hidden.py"
@@ -277,11 +330,46 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
             )
             before = sha256(source.read_bytes()).hexdigest()
 
-            completed = run_plan_step(FORMAT_REQUEST, target_root)
+            completed = run_plan_step(FORMAT_REQUEST, target_root, python_path)
             after = sha256(source.read_bytes()).hexdigest()
 
         self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
         self.assertEqual(after, before)
+
+    def test_format_adapter_rejects_wrong_runtime_version_or_origin(self) -> None:
+        cases = (
+            (
+                {
+                    "available": True,
+                    "version": "0.15.20",
+                    "origin": str(Path(sys.prefix) / "ruff" / "__init__.py"),
+                    "prefix": sys.prefix,
+                },
+                "version is not the approved pinned version",
+            ),
+            (
+                {
+                    "available": True,
+                    "version": RUFF_VERSION,
+                    "origin": str(Path(sys.prefix).parent / "foreign" / "ruff.py"),
+                    "prefix": sys.prefix,
+                },
+                "module origin is outside the active Python runtime",
+            ),
+        )
+
+        for payload, message in cases:
+            with self.subTest(message=message):
+
+                def runner(
+                    *_args: Any, **_kwargs: Any
+                ) -> subprocess.CompletedProcess[str]:
+                    return subprocess.CompletedProcess(
+                        args=[], returncode=0, stdout=json.dumps(payload), stderr=""
+                    )
+
+                with self.assertRaisesRegex(AssertionError, message):
+                    validated_ruff_python(runner)
 
     def test_rejects_unsupported_adapter(self) -> None:
         cases = (
