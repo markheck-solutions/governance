@@ -152,6 +152,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("governance-toolchain-receipt.json", workflow)
         self.assertNotIn("shutil.copyfile", workflow)
         self.assertIn("path: target/artifacts/supportability/*", workflow)
+        summary_block = workflow.split("      - name: Read supportability summary", 1)[
+            1
+        ].split("      - name: Upload supportability evidence", 1)[0]
+        self.assertIn(
+            'summary_python="${{ steps.toolchain.outputs.python-path }}"',
+            summary_block,
+        )
+        self.assertIn(
+            'summary_python="${{ steps.setup-python.outputs.python-path }}"',
+            summary_block,
+        )
 
     def test_toolchain_publication_is_bounded_pinned_and_inert(self) -> None:
         workflow = (

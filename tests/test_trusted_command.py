@@ -75,6 +75,24 @@ class TrustedCommandModulePathTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertNotIn("CANDIDATE_PIP_EXECUTED", completed.stdout)
 
+    def test_trusted_governance_module_ignores_target_shadow_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            shadow = target / "governance_eval"
+            shadow.mkdir()
+            (shadow / "__main__.py").write_text(
+                "raise SystemExit('CANDIDATE_GOVERNANCE_EXECUTED')\n",
+                encoding="utf-8",
+            )
+
+            completed = trusted_command.run_bound_shell_command(
+                "python -m governance_eval --help", target
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("usage: governance-eval", completed.stdout)
+        self.assertNotIn("CANDIDATE_GOVERNANCE_EXECUTED", completed.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

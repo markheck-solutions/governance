@@ -49,9 +49,15 @@ def run_bound_shell_command(
             stdout="",
             stderr=f"trusted command rejected: {exc}",
         )
+    env = (
+        _trusted_governance_env()
+        if _uses_trusted_governance_module(bound_command)
+        else None
+    )
     return subprocess.run(
         bound_command,
         cwd=cwd,
+        env=env,
         shell=True,
         text=True,
         encoding="utf-8",
@@ -83,6 +89,18 @@ def _dynamic_executable_token_is_not_trusted(executable: str, rest: str) -> bool
     lowered = executable.casefold()
     tail = rest.lstrip().casefold()
     return "python" in lowered or tail.startswith(("-m ", "-c "))
+
+
+def _uses_trusted_governance_module(command: str) -> bool:
+    return bool(re.search(r"(?:^|\s)-P\s+-m\s+governance_eval\b", command))
+
+
+def _trusted_governance_env() -> dict[str, str]:
+    env = os.environ.copy()
+    root = str(Path(__file__).resolve().parents[1])
+    current = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = root if not current else root + os.pathsep + current
+    return env
 
 
 def _leading_static_shell_word(command: str) -> tuple[str, int, str]:

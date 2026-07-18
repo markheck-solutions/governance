@@ -490,7 +490,11 @@ jobs:
         if: always()
         shell: bash
         run: |
-          "${{ steps.toolchain.outputs.python-path }}" - <<'PY' >> "$GITHUB_OUTPUT"
+          summary_python="${{ steps.toolchain.outputs.python-path }}"
+          if [[ -z "$summary_python" ]]; then
+            summary_python="${{ steps.setup-python.outputs.python-path }}"
+          fi
+          "$summary_python" - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           from pathlib import Path
 
