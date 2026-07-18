@@ -16,6 +16,22 @@ class TrustedCommandModulePathTests(unittest.TestCase):
 
         self.assertIn(" -P -m ruff check .", bound)
 
+    def test_python_launcher_casing_still_binds_to_trusted_interpreter(self) -> None:
+        trusted_python = "/opt/governance-python/bin/python"
+
+        with (
+            mock.patch.object(trusted_command.os, "name", "posix"),
+            mock.patch.object(trusted_command.sys, "executable", trusted_python),
+        ):
+            bound = trusted_command.bind_current_python("Python -m ruff check .")
+
+        self.assertEqual(bound, f"{trusted_python} -P -m ruff check .")
+
+    def test_protected_module_casing_still_uses_safe_path(self) -> None:
+        bound = trusted_command.bind_current_python("python -m Ruff check .")
+
+        self.assertIn(" -P -m Ruff check .", bound)
+
     def test_target_controlled_module_does_not_shadow_protected_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)

@@ -27,8 +27,7 @@ def split_command(command: str) -> list[str]:
 def bind_current_python(command: str) -> str:
     leading, word_end, executable = _leading_static_shell_word(command)
     trusted_names = {"python", "python.exe"}
-    comparison = executable.casefold() if os.name == "nt" else executable
-    if comparison not in trusted_names:
+    if executable.casefold() not in trusted_names:
         return command
     if not sys.executable:
         raise TrustedCommandError("trusted Python interpreter path is unavailable")
@@ -77,7 +76,10 @@ def _safe_python_module_path(rest: str) -> str:
 
 
 def _is_protected_python_module(module: str) -> bool:
-    return module in PROTECTED_PYTHON_MODULES or module.startswith("governance_eval")
+    normalized = module.casefold()
+    return normalized in PROTECTED_PYTHON_MODULES or normalized.startswith(
+        "governance_eval"
+    )
 
 
 def _quote_windows_shell_token(token: str) -> str:
