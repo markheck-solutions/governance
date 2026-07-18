@@ -34,6 +34,7 @@ SCHEMA_FILES = {
     "execution_result": "execution_result.schema.json",
     "governance_toolchain_receipt": "governance_toolchain_receipt.schema.json",
     "governance_toolchain_evaluation_receipt": "governance_toolchain_evaluation_receipt.schema.json",
+    "governance_toolchain_shadow_receipt": "governance_toolchain_shadow_receipt.schema.json",
     "governance_toolchain_artifact_binding": "governance_toolchain_artifact_binding.schema.json",
 }
 

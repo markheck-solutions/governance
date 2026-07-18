@@ -71,6 +71,29 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
         context.update(overrides)
         return context
 
+    @staticmethod
+    def _shadow_context(**overrides: object) -> dict[str, object]:
+        context: dict[str, object] = {
+            "context_kind": "PHASE1_SHADOW",
+            "repository": "markheck-solutions/governance",
+            "repository_id": "1280677092",
+            "head_repository_id": "1280677092",
+            "event_name": "pull_request",
+            "pull_request_number": 75,
+            "base_sha": "b" * 40,
+            "head_sha": "a" * 40,
+            "workflow_ref": (
+                "markheck-solutions/governance/.github/workflows/"
+                "governance-shadow.yml@refs/pull/75/merge"
+            ),
+            "workflow_sha": "d" * 40,
+            "run_id": "123456789",
+            "run_attempt": "1",
+            "expected_artifact_name": "governance-benchmark-json",
+        }
+        context.update(overrides)
+        return context
+
     @classmethod
     def _context_argv(cls, **overrides: object) -> list[str]:
         context = cls._expected_context(**overrides)
@@ -151,6 +174,13 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
             ).read_bytes()
         )
         (
+            governance / "schemas/v1/governance_toolchain_shadow_receipt.schema.json"
+        ).write_bytes(
+            (
+                ROOT / "schemas/v1/governance_toolchain_shadow_receipt.schema.json"
+            ).read_bytes()
+        )
+        (
             governance / "schemas/v1/governance_toolchain_artifact_binding.schema.json"
         ).write_bytes(
             (
@@ -200,6 +230,78 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
 
 
 class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
+    def test_phase1_shadow_context_accepts_pr_push_and_dispatch(self) -> None:
+        contexts = (
+            self._shadow_context(),
+            self._shadow_context(
+                event_name="push",
+                pull_request_number=None,
+                workflow_ref=(
+                    "markheck-solutions/governance/.github/workflows/"
+                    "governance-shadow.yml@refs/heads/main"
+                ),
+            ),
+            self._shadow_context(
+                event_name="workflow_dispatch",
+                pull_request_number=None,
+                base_sha="a" * 40,
+                workflow_ref=(
+                    "markheck-solutions/governance/.github/workflows/"
+                    "governance-shadow.yml@refs/heads/main"
+                ),
+            ),
+        )
+
+        for context in contexts:
+            with self.subTest(event=context["event_name"]):
+                validated, kind = BOOTSTRAP._validated_context(context)
+                self.assertEqual(validated, context)
+                self.assertEqual(kind, "PHASE1_SHADOW")
+
+    def test_phase1_shadow_context_fails_closed(self) -> None:
+        cases = {
+            "kind": {"context_kind": "PUBLICATION"},
+            "event": {"event_name": "pull_request_target"},
+            "pr_missing": {"pull_request_number": None},
+            "workflow": {"workflow_ref": "owner/repo/.github/workflows/evil.yml@main"},
+            "artifact": {"expected_artifact_name": "other"},
+            "push_pr": {
+                "event_name": "push",
+                "workflow_ref": "markheck-solutions/governance/.github/workflows/governance-shadow.yml@refs/heads/main",
+            },
+            "dispatch_sha": {
+                "event_name": "workflow_dispatch",
+                "pull_request_number": None,
+                "workflow_ref": "markheck-solutions/governance/.github/workflows/governance-shadow.yml@refs/heads/main",
+            },
+        }
+        for name, mutation in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(BOOTSTRAP.BootstrapError):
+                    BOOTSTRAP._validated_shadow_context(
+                        self._shadow_context(**mutation)
+                    )
+
+    def test_phase1_shadow_failure_receipt_is_schema_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._provision_paths(Path(tmp))
+            context = self._shadow_context()
+            args = type(
+                "Args",
+                (),
+                {
+                    "base_sha": context["base_sha"],
+                    "evaluator_sha": context["head_sha"],
+                    "governance_root": paths["governance"],
+                    "workspace_root": paths["workspace"],
+                    "runtime_root": paths["runtime"],
+                },
+            )()
+            receipt = BOOTSTRAP.failure_receipt(args, context, [], "reproduced failure")
+
+            validate_named("governance_toolchain_shadow_receipt", receipt, ROOT)
+            BOOTSTRAP.validate_receipt(paths["governance"], receipt, context)
+
     def test_supportability_evaluation_context_is_separate_and_bound(self) -> None:
         context = self._evaluation_context()
 

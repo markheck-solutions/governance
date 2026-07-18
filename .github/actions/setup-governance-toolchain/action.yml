@@ -3,7 +3,7 @@ description: Provision the hash-locked evaluator toolchain outside the target wo
 
 inputs:
   context-kind:
-    description: PUBLICATION or SUPPORTABILITY_EVALUATION evidence contract.
+    description: PUBLICATION, SUPPORTABILITY_EVALUATION, or PHASE1_SHADOW evidence contract.
     required: false
     default: PUBLICATION
   governance-root:

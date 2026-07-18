@@ -39,6 +39,39 @@ class WorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 
+    def test_shadow_verification_consumes_pinned_toolchain(self) -> None:
+        workflow = (self.root / ".github/workflows/governance-shadow.yml").read_text(
+            encoding="utf-8"
+        )
+        action = (
+            self.root / ".github/actions/setup-governance-toolchain/action.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('python-version: "3.12.13"', workflow)
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("context-kind: PHASE1_SHADOW", workflow)
+        self.assertIn("expected-artifact-name: governance-benchmark-json", workflow)
+        self.assertIn('"${{ steps.toolchain.outputs.python-path }}"', workflow)
+        verification = workflow.split("      - name: Run Phase 1 verification", 1)[
+            1
+        ].split("      - name: Validate and preserve shadow toolchain receipt", 1)[0]
+        self.assertNotIn("run: python ", verification)
+        self.assertIn('bootstrap["validate_receipt"]', workflow)
+        self.assertIn('bootstrap["validate_live_receipt"]', workflow)
+        self.assertIn("hmac.compare_digest(actual, expected)", workflow)
+        self.assertIn("governance-toolchain-receipt.json", workflow)
+        self.assertIn("steps.receipt.outcome != 'success'", workflow)
+        shadow_job = workflow.split("  shadow:", 1)[1].split("    steps:", 1)[0]
+        self.assertIn("timeout-minutes: 10", shadow_job)
+        self.assertNotIn("continue-on-error:", shadow_job)
+        receipt_step = workflow.split(
+            "      - name: Validate and preserve shadow toolchain receipt", 1
+        )[1].split("      - name: Read benchmark summary", 1)[0]
+        self.assertIn("continue-on-error: true", receipt_step)
+        self.assertIn("PHASE1_SHADOW", action)
+        self.assertNotIn("GITHUB_PATH", action)
+
     def test_reusable_gate_publishes_inert_evaluation_toolchain_wiring(self) -> None:
         workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
             encoding="utf-8"
