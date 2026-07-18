@@ -22,6 +22,7 @@ from governance_eval.execution_plan import (
     serialize_execution_plan,
 )
 from governance_eval.hashing import sha256_json
+from governance_eval.schema_validator import SchemaValidationError, validate
 from governance_eval.schemas import validate_named
 
 VALID_REQUEST = {
@@ -84,7 +85,7 @@ def assess_plan(
 
 def validated_ruff_python(
     runner: Any = subprocess.run,
-) -> str | None:
+) -> str:
     completed = runner(
         [sys.executable, "-I", "-c", RUFF_RUNTIME_PROBE],
         capture_output=True,
@@ -101,8 +102,11 @@ def validated_ruff_python(
     except json.JSONDecodeError as exc:
         raise AssertionError("Ruff runtime probe output is invalid") from exc
     if payload.get("available") is False:
-        print("RUFF_FORMAT_ADAPTER_CONTROL=BLOCK_TECHNICAL reason=RUNTIME_UNAVAILABLE")
-        return None
+        message = (
+            "RUFF_FORMAT_ADAPTER_CONTROL=BLOCK_TECHNICAL reason=RUNTIME_UNAVAILABLE"
+        )
+        print(message)
+        raise AssertionError(message)
     if payload.get("available") is not True or payload.get("version") != RUFF_VERSION:
         raise AssertionError("Ruff runtime version is not the approved pinned version")
     origin = Path(str(payload.get("origin"))).resolve()
@@ -212,6 +216,7 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
                         "--isolated",
                         "--no-cache",
                         "--no-respect-gitignore",
+                        "--exclude=",
                         ".",
                     ],
                     "working_directory": ".",
@@ -235,7 +240,14 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
         self.assertEqual(step.module, "ruff")
         self.assertEqual(
             step.arguments,
-            ("check", "--isolated", "--no-cache", "--no-respect-gitignore", "."),
+            (
+                "check",
+                "--isolated",
+                "--no-cache",
+                "--no-respect-gitignore",
+                "--exclude=",
+                ".",
+            ),
         )
 
     def test_compiles_deterministic_schema_valid_format_plan(self) -> None:
@@ -259,6 +271,7 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
                         "--isolated",
                         "--no-cache",
                         "--no-respect-gitignore",
+                        "--exclude=",
                         ".",
                     ],
                     "working_directory": ".",
@@ -277,9 +290,6 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
 
     def test_format_adapter_accepts_formatted_fixture(self) -> None:
         python_path = validated_ruff_python()
-        if python_path is None:
-            self.assertIsNone(python_path)
-            return
         with TemporaryDirectory() as directory:
             target_root = Path(directory)
             source = target_root / "clean.py"
@@ -297,9 +307,6 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
 
     def test_format_adapter_blocks_unformatted_fixture_without_mutation(self) -> None:
         python_path = validated_ruff_python()
-        if python_path is None:
-            self.assertIsNone(python_path)
-            return
         with TemporaryDirectory() as directory:
             target_root = Path(directory)
             source = target_root / "unformatted.py"
@@ -316,9 +323,6 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
         self,
     ) -> None:
         python_path = validated_ruff_python()
-        if python_path is None:
-            self.assertIsNone(python_path)
-            return
         with TemporaryDirectory() as directory:
             target_root = Path(directory)
             source = target_root / "hidden.py"
@@ -335,6 +339,55 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
         self.assertEqual(after, before)
+
+    def test_format_adapter_blocks_builtin_exclusion_evasion_without_mutation(
+        self,
+    ) -> None:
+        python_path = validated_ruff_python()
+        with TemporaryDirectory() as directory:
+            target_root = Path(directory)
+            sources = []
+            for excluded_directory in (".venv", "node_modules", "dist"):
+                source = target_root / excluded_directory / "unformatted.py"
+                source.parent.mkdir()
+                source.write_text(
+                    "def answer( ) -> int:\n return 42\n", encoding="utf-8"
+                )
+                sources.append(source)
+            before = {
+                source: sha256(source.read_bytes()).hexdigest() for source in sources
+            }
+
+            completed = run_plan_step(FORMAT_REQUEST, target_root, python_path)
+            after = {
+                source: sha256(source.read_bytes()).hexdigest() for source in sources
+            }
+
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertEqual(after, before)
+        for excluded_directory in (".venv", "node_modules", "dist"):
+            self.assertIn(excluded_directory, completed.stdout + completed.stderr)
+
+    def test_format_adapter_fails_closed_when_runtime_unavailable(self) -> None:
+        def runner(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "available": False,
+                        "version": None,
+                        "origin": None,
+                        "prefix": sys.prefix,
+                    }
+                ),
+                stderr="",
+            )
+
+        with self.assertRaisesRegex(
+            AssertionError, "BLOCK_TECHNICAL reason=RUNTIME_UNAVAILABLE"
+        ):
+            validated_ruff_python(runner)
 
     def test_format_adapter_rejects_wrong_runtime_version_or_origin(self) -> None:
         cases = (
@@ -391,6 +444,56 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ExecutionPlanError, message):
                     compile_plan(request)
+
+    def test_rejects_cross_product_capability_adapter_pairs(self) -> None:
+        mutations = (
+            ("adapter_id", "python.ruff-format-check.v1"),
+            ("capability", "format_check"),
+            ("step_id", "format_check"),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                payload = deepcopy(compile_plan().to_json())
+                payload["steps"][0][field] = value
+                unsigned = {
+                    key: item for key, item in payload.items() if key != "plan_id"
+                }
+                payload["plan_id"] = sha256_json(unsigned)
+
+                result = assess_plan(payload)
+
+                self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+                self.assertRegex(
+                    result["errors"][0],
+                    r"execution plan schema invalid: .*expected exactly one oneOf match, got 0",
+                )
+
+    def test_schema_validator_one_of_requires_exactly_one_match(self) -> None:
+        with self.assertRaisesRegex(
+            SchemaValidationError, "expected exactly one oneOf match, got 0"
+        ):
+            validate(
+                {"kind": "unknown"},
+                {
+                    "oneOf": [
+                        {"properties": {"kind": {"enum": ["lint"]}}},
+                        {"properties": {"kind": {"enum": ["format_check"]}}},
+                    ]
+                },
+            )
+
+        with self.assertRaisesRegex(
+            SchemaValidationError, "expected exactly one oneOf match, got 2"
+        ):
+            validate(
+                "same",
+                {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"enum": ["same"]},
+                    ]
+                },
+            )
 
     def test_rejects_candidate_supplied_execution_fields(self) -> None:
         hostile_fields = {

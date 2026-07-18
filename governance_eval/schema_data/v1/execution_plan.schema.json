@@ -60,6 +60,24 @@
           "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
           "output_limit_bytes": {"type": "integer", "minimum": 1, "maximum": 65536}
         },
+        "oneOf": [
+          {
+            "required": ["step_id", "capability", "adapter_id"],
+            "properties": {
+              "step_id": {"enum": ["lint"]},
+              "capability": {"enum": ["lint"]},
+              "adapter_id": {"enum": ["python.ruff-check.v1"]}
+            }
+          },
+          {
+            "required": ["step_id", "capability", "adapter_id"],
+            "properties": {
+              "step_id": {"enum": ["format_check"]},
+              "capability": {"enum": ["format_check"]},
+              "adapter_id": {"enum": ["python.ruff-format-check.v1"]}
+            }
+          }
+        ],
         "additionalProperties": false
       }
     }
