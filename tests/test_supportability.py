@@ -1148,6 +1148,36 @@ class SupportabilityAiReviewPolicyTests(unittest.TestCase):
             self.assertTrue(seen)
             self.assertIn("python -m ruff check .", seen)
 
+    def test_config_change_rejects_unbound_python_launcher_semantics(self) -> None:
+        cases = (
+            ("lint", ["ruff check ."]),
+            ("lint", ["uv run python -m ruff check ."]),
+            ("tests", ["pytest tests -q"]),
+            ("package_audit", ["pip check"]),
+        )
+        for gate, commands in cases:
+            with self.subTest(gate=gate, commands=commands):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = _synthetic_repo(Path(tmp), self.root)
+                    base_config = _valid_config(repo)
+                    _set_semantic_gate_commands(base_config)
+                    head_config = json.loads(json.dumps(base_config))
+                    head_config["required_gates"][gate] = commands
+                    (repo / ".github/governance/supportability.yml").write_text(
+                        json.dumps(head_config), encoding="utf-8"
+                    )
+
+                    result = _run_config_change_with_base(repo, base_config)
+
+                self.assertEqual(result["owner_status"], STATUS_RED)
+                self.assertTrue(
+                    any(
+                        f"required_gates.{gate} lacks" in error
+                        for error in result["errors"]
+                    ),
+                    result["errors"],
+                )
+
     def test_config_change_rejects_blocking_trusted_base_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)

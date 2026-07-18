@@ -820,45 +820,40 @@ def _required_gate_change_errors(
         f"required gate command duplicated across capabilities: {command}"
         for command in duplicates
     )
-    runner = r"(?:(?:uv|poetry|pipenv)\s+run\s+)?"
     js_runner = r"(?:npx\s+|pnpm\s+(?:exec\s+)?|yarn\s+)?"
     required_semantics = {
         "lint": (
-            runner + r"(?:python\s+-m\s+)?ruff\s+check\b",
-            runner + js_runner + r"(?:eslint|biome\s+check)\b",
+            r"python\s+-m\s+ruff\s+check\b",
+            js_runner + r"(?:eslint|biome\s+check)\b",
             r"(?:golangci-lint|cargo\s+clippy|dotnet\s+format)\b",
             r"(?:mvn|gradle)\b.*\bcheckstyle\b",
         ),
         "format_check": (
-            runner + r"(?:python\s+-m\s+)?(?:ruff\s+format|black)\s+--check\b",
-            runner + js_runner + r"(?:prettier\s+--check|biome\s+format)\b",
+            r"python\s+-m\s+(?:ruff\s+format|black)\s+--check\b",
+            js_runner + r"(?:prettier\s+--check|biome\s+format)\b",
             r"(?:cargo\s+fmt|gofmt|dotnet\s+format\s+--verify-no-changes)\b",
         ),
         "typecheck": (
-            runner + r"(?:python\s+-m\s+)?(?:mypy|pyright)\b",
-            runner + js_runner + r"tsc\s+--noemit\b",
+            r"python\s+-m\s+(?:mypy|pyright)\b",
+            js_runner + r"tsc\s+--noemit\b",
             r"(?:cargo\s+check|go\s+vet|dotnet\s+build)\b",
             r"(?:mvn|gradle)\b.*\bcompile\b",
         ),
         "complexity": (
-            runner
-            + r"(?:python\s+-m\s+)?ruff\s+check\b.*(?:--select(?:=|\s+)C901|--extend-select(?:=|\s+)C901)",
-            runner + r"(?:python\s+-m\s+)?radon\b",
+            r"python\s+-m\s+ruff\s+check\b.*(?:--select(?:=|\s+)C901|--extend-select(?:=|\s+)C901)",
+            r"python\s+-m\s+radon\b",
             r"(?:lizard|gocyclo|cognitive-complexity)\b",
-            runner + js_runner + r"eslint\b.*\bcomplexity\b",
+            js_runner + r"eslint\b.*\bcomplexity\b",
         ),
-        "architecture": (
-            runner + r"python\s+-m\s+governance_eval\s+architecture-gate\b",
-        ),
+        "architecture": (r"python\s+-m\s+governance_eval\s+architecture-gate\b",),
         "tests": (
-            runner + r"python\s+-m\s+(?:pytest|unittest)\b",
-            runner + r"pytest\b",
+            r"python\s+-m\s+(?:pytest|unittest)\b",
             r"(?:npm|pnpm|yarn)\s+(?:run\s+)?test\b",
             js_runner + r"(?:vitest|jest)\b",
             r"(?:go|cargo|dotnet|mvn|gradle)\s+test\b",
         ),
         "compile_or_build": (
-            runner + r"python\s+-m\s+build\b",
+            r"python\s+-m\s+build\b",
             r"(?:npm|pnpm|yarn)\s+(?:run\s+)?build\b",
             r"(?:go|cargo|dotnet)\s+build\b",
             r"mvn\b.*\bpackage\b",
@@ -886,7 +881,7 @@ def _required_gate_change_errors(
         else []
     )
     audit_markers = (
-        runner + r"(?:python\s+-m\s+)?pip\s+check\b",
+        r"python\s+-m\s+pip\s+check\b",
         r"(?:npm|pnpm|yarn|cargo)\s+audit\b",
         r"(?:govulncheck|osv-scanner)\b",
         r"dotnet\s+list\b.*\bpackage\b",
