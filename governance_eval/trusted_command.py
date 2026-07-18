@@ -31,7 +31,7 @@ def bind_current_python(command: str) -> str:
     if not sys.executable:
         raise TrustedCommandError("trusted Python interpreter path is unavailable")
     if os.name == "nt":
-        executable = subprocess.list2cmdline([sys.executable])
+        executable = _quote_windows_shell_token(sys.executable)
     else:
         executable = shlex.quote(sys.executable)
     return leading + executable + _safe_python_module_path(command[word_end:])
@@ -72,6 +72,19 @@ def _is_protected_python_module(module: str) -> bool:
     return module in PROTECTED_PYTHON_MODULES or module.startswith("governance_eval")
 
 
+def _quote_windows_shell_token(token: str) -> str:
+    quoted = subprocess.list2cmdline([token])
+    if quoted == token and re.search(r'[&()<>^|%!" ]', token):
+        return '"' + token.replace('"', r"\"") + '"'
+    return quoted
+
+
+def _dynamic_executable_token_is_not_trusted(executable: str, rest: str) -> bool:
+    lowered = executable.casefold()
+    tail = rest.lstrip().casefold()
+    return "python" in lowered or tail.startswith(("-m ", "-c "))
+
+
 def _leading_static_shell_word(command: str) -> tuple[str, int, str]:
     index = 0
     while index < len(command) and command[index] in " \t":
@@ -79,6 +92,7 @@ def _leading_static_shell_word(command: str) -> tuple[str, int, str]:
     leading = command[:index]
     word: list[str] = []
     quote = ""
+    dynamic_seen = False
     dynamic = "$`" + ("%!" if os.name == "nt" else "")
     controls = "&|;<>()"
     while index < len(command):
@@ -95,7 +109,11 @@ def _leading_static_shell_word(command: str) -> tuple[str, int, str]:
                 index += 1
                 continue
         if char in dynamic and quote != "'":
-            raise TrustedCommandError("dynamic shell executable token is not trusted")
+            if char == "`":
+                raise TrustedCommandError(
+                    "dynamic shell executable token is not trusted"
+                )
+            dynamic_seen = True
         posix_escape = (
             os.name != "nt"
             and char == "\\"
@@ -118,4 +136,9 @@ def _leading_static_shell_word(command: str) -> tuple[str, int, str]:
         index += 1
     if quote:
         raise TrustedCommandError("shell executable token has an unclosed quote")
-    return leading, index, "".join(word)
+    executable = "".join(word)
+    if dynamic_seen and _dynamic_executable_token_is_not_trusted(
+        executable, command[index:]
+    ):
+        raise TrustedCommandError("dynamic shell executable token is not trusted")
+    return leading, index, executable

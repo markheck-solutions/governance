@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from governance_eval import trusted_command
 
@@ -35,6 +36,25 @@ class TrustedCommandModulePathTests(unittest.TestCase):
 
         self.assertNotIn(" -P -m unittest", bound)
         self.assertIn(" -m unittest discover", bound)
+
+    def test_env_expanded_non_python_executable_passes_through(self) -> None:
+        command = "$GOVERNANCE_TOOLCHAIN_BIN_PATH/printf ok"
+
+        with mock.patch.object(trusted_command.os, "name", "posix"):
+            bound = trusted_command.bind_current_python(command)
+
+        self.assertEqual(bound, command)
+
+    def test_windows_trusted_python_path_quotes_shell_metacharacters(self) -> None:
+        trusted_python = r"C:\trusted&runtime\python.exe"
+
+        with (
+            mock.patch.object(trusted_command.os, "name", "nt"),
+            mock.patch.object(trusted_command.sys, "executable", trusted_python),
+        ):
+            bound = trusted_command.bind_current_python("python -m ruff check .")
+
+        self.assertEqual(bound, f'"{trusted_python}" -P -m ruff check .')
 
     def test_safe_path_prevents_candidate_module_shadowing_directly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
