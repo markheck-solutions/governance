@@ -5,9 +5,7 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
-import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +22,7 @@ from governance_eval.legacy_copilot_gate import evaluate_copilot_review_gate
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
+from governance_eval.trusted_command import bind_current_python, split_command
 
 
 REQUIRED_COMMAND_GATES = (
@@ -905,7 +904,7 @@ def _required_gate_change_errors(
         )
     for command in commands:
         lowered = command.lower()
-        tokens = {token.lower() for token in _split_command(command)}
+        tokens = {token.lower() for token in split_command(command)}
         if any(
             marker in command
             for marker in (";", "|", ">", "<", "&", "`", "$(", "\n", "\r")
@@ -1293,7 +1292,7 @@ def _weakens_threshold(lowered: str) -> bool:
 
 
 def _path_scope_excludes_files(command: str, files: list[str]) -> bool:
-    tokens = _split_command(command)
+    tokens = split_command(command)
     scopes = [
         _normalize_scope(token) for token in tokens if _looks_like_scope_token(token)
     ]
@@ -1301,13 +1300,6 @@ def _path_scope_excludes_files(command: str, files: list[str]) -> bool:
     if not scopes or "." in scopes:
         return False
     return any(not _file_is_in_any_scope(path, scopes) for path in files)
-
-
-def _split_command(command: str) -> list[str]:
-    try:
-        return shlex.split(command, posix=os.name != "nt")
-    except ValueError:
-        return command.split()
 
 
 def _looks_like_scope_token(token: str) -> bool:
@@ -1517,7 +1509,7 @@ def _command_result_errors(results: list[dict[str, Any]]) -> list[str]:
 
 
 def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    bound_command = _bind_python_command(command)
+    bound_command = bind_current_python(command)
     return subprocess.run(
         bound_command,
         cwd=cwd,
@@ -1528,18 +1520,6 @@ def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[s
         capture_output=True,
         timeout=1200,
     )
-
-
-def _bind_python_command(command: str) -> str:
-    if command != "python" and not command.startswith("python "):
-        return command
-    if not sys.executable:
-        raise SupportabilityError("trusted Python interpreter path is unavailable")
-    if os.name == "nt":
-        executable = subprocess.list2cmdline([sys.executable])
-    else:
-        executable = shlex.quote(sys.executable)
-    return executable + command[len("python") :]
 
 
 def _git_changed_files(target_repo: Path, base_sha: str, head_sha: str) -> list[str]:

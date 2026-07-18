@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import governance_eval.supportability as supportability_module
+import governance_eval.trusted_command as trusted_command_module
 from governance_eval.codex_review_gate import run_codex_review_gate
 from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
@@ -252,13 +253,13 @@ class SupportabilityGateTests(unittest.TestCase):
         quoted_python = (
             subprocess.list2cmdline([trusted_python])
             if os.name == "nt"
-            else supportability_module.shlex.quote(trusted_python)
+            else trusted_command_module.shlex.quote(trusted_python)
         )
         completed = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=""
         )
         with (
-            mock.patch.object(supportability_module.sys, "executable", trusted_python),
+            mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
             mock.patch.object(
                 supportability_module.subprocess, "run", return_value=completed
             ) as run,
@@ -288,7 +289,7 @@ class SupportabilityGateTests(unittest.TestCase):
                     "VIRTUAL_ENV": str(Path("candidate") / "venv"),
                 },
             ),
-            mock.patch.object(supportability_module.sys, "executable", trusted_python),
+            mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
             mock.patch.object(
                 supportability_module.subprocess, "run", return_value=completed
             ) as run,
