@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -7,7 +8,7 @@ def architecture_command_lines(workflow_text: str) -> list[str]:
     return [
         line.strip()
         for line in workflow_text.splitlines()
-        if "python -m governance_eval architecture-gate" in line
+        if re.search(r"(?:^|\s)-m\s+governance_eval\s+architecture-gate\b", line)
     ]
 
 

@@ -9,6 +9,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from governance_eval.architecture_policy import architecture_command_lines
 from governance_eval.paths import repo_root
 
 
@@ -109,6 +110,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(
             f"{pinned_invocation} -m governance_eval architecture-gate",
             architecture_block,
+        )
+        self.assertEqual(
+            architecture_command_lines(workflow),
+            [
+                f"{pinned_invocation} -m governance_eval architecture-gate \\",
+            ],
         )
         self.assertNotRegex(post_provision, r"(?m)^\s+python(?:\s|$)")
         self.assertNotIn("GITHUB_PATH", post_provision)

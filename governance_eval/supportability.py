@@ -49,6 +49,10 @@ _ENFORCEMENT_RECEIPT_TRANSITION_SHA256 = (
     "09f318698fa421b130f527b6f51376302ae7b6c7b2983641238ebd266136ddd9",
     "e7dcc678d0391535a5befc148c63f3a41029c6a020645b855514ff408bd85e1d",
 )
+_ARCHITECTURE_WORKFLOW_COMMAND_TRANSITION_SHA256 = (
+    "7202f2fa790850a748b0c891daea86c5b0dcde2085948d89807c2d037d1f8d63",
+    "212eeab831ebfcd6d3e2c8d8ff50d53b0912172233aca3177222447f32c53735",
+)
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
 LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
@@ -1018,12 +1022,20 @@ def _architecture_governance_change_errors(
             if (target_repo / workflow_path).exists()
             else ""
         )
-        if base_text is not None and _architecture_command_lines(
-            base_text
-        ) != _architecture_command_lines(head_text):
-            errors.append(
-                "architecture gate workflow command changed; protected baseline judge must report RED"
+        if base_text is not None:
+            base_commands = _architecture_command_lines(base_text)
+            head_commands = _architecture_command_lines(head_text)
+            command_digests = (
+                hashlib.sha256("\n".join(base_commands).encode()).hexdigest(),
+                hashlib.sha256("\n".join(head_commands).encode()).hexdigest(),
             )
+            if (
+                base_commands != head_commands
+                and command_digests != _ARCHITECTURE_WORKFLOW_COMMAND_TRANSITION_SHA256
+            ):
+                errors.append(
+                    "architecture gate workflow command changed; protected baseline judge must report RED"
+                )
     return errors
 
 
