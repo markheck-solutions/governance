@@ -26,6 +26,30 @@ class ArchitectureGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 
+    def test_pinned_runner_slice_has_independent_architecture_coverage(self) -> None:
+        changed_files = [
+            ".github/workflows/supportability-gate.yml",
+            "governance_eval/supportability.py",
+            "governance_eval/trusted_command.py",
+            "tests/test_architecture_gate.py",
+            "tests/test_supportability.py",
+            "tests/test_workflows.py",
+        ]
+
+        result, code = run_architecture_gate(
+            self.root / ".github/governance/supportability.yml",
+            self.root,
+            "a" * 40,
+            "b" * 40,
+            changed_files=changed_files,
+        )
+
+        self.assertEqual(code, EXIT_OK, result["violations"])
+        self.assertEqual(result["changed_files"], sorted(changed_files))
+        self.assertEqual(
+            result["rule_results"]["changed_file_architecture_coverage"], "PASS"
+        )
+
     def test_architecture_policy_comparison_rejects_limit_increase(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _repo(Path(tmp), self.root, mode="block_all")

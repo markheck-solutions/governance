@@ -429,7 +429,7 @@ jobs:
           GH_TOKEN: ""
         run: |
           cd governance
-          "${{ steps.toolchain.outputs.python-path }}" -m governance_eval architecture-gate \
+          python -m governance_eval architecture-gate \
             --config "../target/${CONFIG_PATH}" \
             --target-repo ../target \
             --base-sha "$TARGET_BASE_SHA" \

@@ -102,8 +102,18 @@ class WorkflowTests(unittest.TestCase):
         )
         post_provision = workflow[provision:]
         pinned_invocation = '"${{ steps.toolchain.outputs.python-path }}"'
-        self.assertEqual(post_provision.count(pinned_invocation), 6)
-        self.assertNotRegex(post_provision, r"(?m)^\s+python(?:\s|$)")
+        self.assertEqual(post_provision.count(pinned_invocation), 5)
+        architecture_block = post_provision.split(
+            "      - name: Run approved architecture fitness gate", 1
+        )[1].split("      - name: Reconcile Codex review evidence", 1)[0]
+        self.assertIn("python -m governance_eval architecture-gate", architecture_block)
+        self.assertNotIn(pinned_invocation, architecture_block)
+        post_provision_without_architecture = post_provision.replace(
+            architecture_block, ""
+        )
+        self.assertNotRegex(
+            post_provision_without_architecture, r"(?m)^\s+python(?:\s|$)"
+        )
         self.assertNotIn("GITHUB_PATH", post_provision)
         self.assertNotRegex(post_provision, r"(?m)^\s+(?:export\s+)?PATH=")
         for binding in (
@@ -325,7 +335,7 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-gate.yml"],
         )
         self.assertIn(
-            '"${{ steps.toolchain.outputs.python-path }}" -m governance_eval architecture-gate',
+            "python -m governance_eval architecture-gate",
             workflows["supportability-gate.yml"],
         )
         self.assertIn(
@@ -554,7 +564,7 @@ class WorkflowTests(unittest.TestCase):
             "      - name: Run approved architecture fitness gate", 1
         )[1].split("      - name: Reconcile Codex review evidence", 1)[0]
         self.assertIn(
-            '"${{ steps.toolchain.outputs.python-path }}" -m governance_eval architecture-gate \\\n'
+            "python -m governance_eval architecture-gate \\\n"
             '            --config "../target/${CONFIG_PATH}" \\\n'
             "            --target-repo ../target \\\n",
             architecture_block,
