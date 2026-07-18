@@ -272,7 +272,7 @@ class TrustedCommandTests(unittest.TestCase):
             )
 
         self.assertEqual(result["command"], "python -m ruff check .")
-        self.assertEqual(run.call_args.args[0], f"{quoted_python} -m ruff check .")
+        self.assertEqual(run.call_args.args[0], f"{quoted_python} -P -m ruff check .")
         self.assertTrue(run.call_args.kwargs["shell"])
 
     def test_default_runner_ignores_ambient_python_path_evasion(self) -> None:
@@ -350,7 +350,7 @@ class TrustedCommandTests(unittest.TestCase):
 
         self.assertEqual(
             bound,
-            f"{trusted_command_module.shlex.quote(trusted_python)} -m ruff check .",
+            f"{trusted_command_module.shlex.quote(trusted_python)} -P -m ruff check .",
         )
 
     def test_trusted_runner_binds_shell_whitespace_and_quoted_token(self) -> None:
@@ -361,10 +361,10 @@ class TrustedCommandTests(unittest.TestCase):
             else trusted_command_module.shlex.quote(trusted_python)
         )
         cases = (
-            ("  python\t-m ruff check .", f"  {quoted_python}\t-m ruff check ."),
-            ('"python" -m ruff check .', f"{quoted_python} -m ruff check ."),
-            ("'python' -m ruff check .", f"{quoted_python} -m ruff check ."),
-            ('pyt"hon" -m ruff check .', f"{quoted_python} -m ruff check ."),
+            ("  python\t-m ruff check .", f"  {quoted_python}\t-P -m ruff check ."),
+            ('"python" -m ruff check .', f"{quoted_python} -P -m ruff check ."),
+            ("'python' -m ruff check .", f"{quoted_python} -P -m ruff check ."),
+            ('pyt"hon" -m ruff check .', f"{quoted_python} -P -m ruff check ."),
             ('python""&& echo ok', f"{quoted_python}&& echo ok"),
         )
         with mock.patch.object(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -9,6 +10,9 @@ from pathlib import Path
 
 class TrustedCommandError(ValueError):
     pass
+
+
+PROTECTED_PYTHON_MODULES = frozenset({"build", "mypy", "pip", "pyright", "ruff"})
 
 
 def split_command(command: str) -> list[str]:
@@ -30,7 +34,7 @@ def bind_current_python(command: str) -> str:
         executable = subprocess.list2cmdline([sys.executable])
     else:
         executable = shlex.quote(sys.executable)
-    return leading + executable + command[word_end:]
+    return leading + executable + _safe_python_module_path(command[word_end:])
 
 
 def run_bound_shell_command(
@@ -55,6 +59,17 @@ def run_bound_shell_command(
         capture_output=True,
         timeout=1200,
     )
+
+
+def _safe_python_module_path(rest: str) -> str:
+    match = re.match(r"(\s+)(-m\s+)([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\b", rest)
+    if not match or not _is_protected_python_module(match.group(3)):
+        return rest
+    return f"{match.group(1)}-P {rest[match.start(2) :]}"
+
+
+def _is_protected_python_module(module: str) -> bool:
+    return module in PROTECTED_PYTHON_MODULES or module.startswith("governance_eval")
 
 
 def _leading_static_shell_word(command: str) -> tuple[str, int, str]:
