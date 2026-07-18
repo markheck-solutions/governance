@@ -1,14 +1,43 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any
+
+_ARCHITECTURE_WORKFLOW_TRANSITION_SHA256 = (
+    "822cf029f1d8b68dc9dc9732d47a127de4980e9c04997d8d8c37df7375a44ce7",
+    "83109a8f5ba3b0641aa3c81fa9cca0170a6be133aff202d7b1e0397b0fc3e78d",
+)
+_ARCHITECTURE_WORKFLOW_BASE_COMMAND = (
+    "          python -m governance_eval architecture-gate \\\n"
+)
+_ARCHITECTURE_WORKFLOW_PINNED_COMMAND = (
+    '          "${{ steps.toolchain.outputs.python-path }}" '
+    "-m governance_eval architecture-gate \\\n"
+)
 
 
 def architecture_command_lines(workflow_text: str) -> list[str]:
     return [
         line.strip()
         for line in workflow_text.splitlines()
-        if "python -m governance_eval architecture-gate" in line
+        if re.search(r"(?:^|\s)-m\s+governance_eval\s+architecture-gate\b", line)
     ]
+
+
+def architecture_workflow_transition_allowed(base_text: str, head_text: str) -> bool:
+    expected_head = base_text.replace(
+        _ARCHITECTURE_WORKFLOW_BASE_COMMAND,
+        _ARCHITECTURE_WORKFLOW_PINNED_COMMAND,
+        1,
+    )
+    if expected_head == base_text or head_text != expected_head:
+        return False
+    digests = (
+        hashlib.sha256(base_text.encode()).hexdigest(),
+        hashlib.sha256(head_text.encode()).hexdigest(),
+    )
+    return digests == _ARCHITECTURE_WORKFLOW_TRANSITION_SHA256
 
 
 def architecture_policy_weakening_errors(

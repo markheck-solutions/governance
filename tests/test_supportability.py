@@ -7,12 +7,14 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import governance_eval.supportability as supportability_module
+import governance_eval.trusted_command as trusted_command_module
 from governance_eval.codex_review_gate import run_codex_review_gate
 from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
@@ -47,12 +49,16 @@ class SupportabilityConfigTests(unittest.TestCase):
         config["standard"]["hash"] = "not-a-hash"
         config["required_gates"].pop("tests")
         config["required_gates"]["lint"] = []
+        config["required_gates"]["typecheck"] = ["python -m pyright"]
 
         errors = validate_supportability_config(config)
 
         self.assertTrue(any("standard.hash" in error for error in errors))
         self.assertTrue(any("required_gates.tests" in error for error in errors))
         self.assertTrue(any("required_gates.lint" in error for error in errors))
+        self.assertTrue(
+            any("required_gates.typecheck lacks" in error for error in errors)
+        )
 
     def test_config_accepts_typed_codex_policy_and_rejects_legacy_copilot(self) -> None:
         config = _valid_config(self.root)
@@ -239,6 +245,182 @@ class SupportabilityConfigTests(unittest.TestCase):
                 for error in errors
             )
         )
+
+
+class TrustedCommandTests(unittest.TestCase):
+    def test_default_runner_binds_python_commands_to_current_interpreter(self) -> None:
+        trusted_python = (
+            r"C:\Program Files\Governance Python\python.exe"
+            if os.name == "nt"
+            else "/opt/governance python/bin/python"
+        )
+        quoted_python = (
+            subprocess.list2cmdline([trusted_python])
+            if os.name == "nt"
+            else trusted_command_module.shlex.quote(trusted_python)
+        )
+        bound_command = f"{quoted_python} -P -m ruff check ."
+        completed = subprocess.CompletedProcess(bound_command, 0, "", "")
+        with (
+            mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
+            mock.patch.object(
+                trusted_command_module.subprocess, "run", return_value=completed
+            ) as run,
+        ):
+            result = supportability_module._run_one_command(
+                "lint",
+                "python -m ruff check .",
+                Path("target"),
+                supportability_module._run_shell_command,
+            )
+
+        self.assertEqual(result["command"], bound_command)
+        self.assertEqual(result["configured_command"], "python -m ruff check .")
+        self.assertEqual(run.call_args.args[0], bound_command)
+        self.assertTrue(run.call_args.kwargs["shell"])
+
+    def test_default_runner_ignores_ambient_python_path_evasion(self) -> None:
+        trusted_python = str(Path("trusted runtime") / "python.exe")
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "PATH": str(Path("candidate") / "fake-python"),
+                    "PYTHON": str(Path("candidate") / "python.exe"),
+                    "VIRTUAL_ENV": str(Path("candidate") / "venv"),
+                },
+            ),
+            mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
+            mock.patch.object(
+                trusted_command_module.subprocess, "run", return_value=completed
+            ) as run,
+        ):
+            supportability_module._run_shell_command(
+                "python -c \"print('python later is data')\"", Path("target")
+            )
+
+        invoked = run.call_args.args[0]
+        quoted_python = (
+            subprocess.list2cmdline([trusted_python])
+            if os.name == "nt"
+            else trusted_command_module.shlex.quote(trusted_python)
+        )
+        self.assertTrue(invoked.startswith(quoted_python))
+        self.assertEqual(invoked.count(trusted_python), 1)
+        self.assertIn("python later is data", invoked)
+        self.assertNotIn(str(Path("candidate") / "python.exe"), invoked)
+
+    def test_default_runner_executes_with_current_interpreter_when_path_empty(
+        self,
+    ) -> None:
+        command = 'python -c "import json,sys;print(json.dumps(sys.executable))"'
+        with mock.patch.dict(os.environ, {"PATH": ""}):
+            completed = supportability_module._run_shell_command(command, Path.cwd())
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            Path(json.loads(completed.stdout)).resolve(), Path(sys.executable).resolve()
+        )
+
+    def test_default_runner_preserves_non_python_commands(self) -> None:
+        commands = (
+            "node --version",
+            "echo python is data",
+            "python3 -m ruff check .",
+        )
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                with mock.patch.object(
+                    trusted_command_module.subprocess,
+                    "run",
+                    return_value=completed,
+                ) as run:
+                    supportability_module._run_shell_command(command, Path("target"))
+                self.assertEqual(run.call_args.args[0], command)
+
+    def test_trusted_runner_quotes_posix_interpreter_as_one_token(self) -> None:
+        trusted_python = "/opt/governance python/bin/python"
+        with (
+            mock.patch.object(trusted_command_module.os, "name", "posix"),
+            mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
+        ):
+            bound = trusted_command_module.bind_current_python("python -m ruff check .")
+
+        self.assertEqual(
+            bound,
+            f"{trusted_command_module.shlex.quote(trusted_python)} -P -m ruff check .",
+        )
+
+    def test_trusted_runner_binds_shell_whitespace_and_quoted_token(self) -> None:
+        trusted_python = str(Path("trusted runtime") / "python.exe")
+        quoted_python = (
+            subprocess.list2cmdline([trusted_python])
+            if os.name == "nt"
+            else trusted_command_module.shlex.quote(trusted_python)
+        )
+        cases = (
+            ("  python\t-m ruff check .", f"  {quoted_python}\t-P -m ruff check ."),
+            ('"python" -m ruff check .', f"{quoted_python} -P -m ruff check ."),
+            ('pyt"hon" -m ruff check .', f"{quoted_python} -P -m ruff check ."),
+        )
+        with mock.patch.object(
+            trusted_command_module.sys, "executable", trusted_python
+        ):
+            for command, expected in cases:
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        trusted_command_module.bind_current_python(command), expected
+                    )
+
+    def test_trusted_runner_binds_platform_shell_escapes(self) -> None:
+        trusted_python = str(Path("trusted runtime") / "python.exe")
+        with mock.patch.object(
+            trusted_command_module.sys, "executable", trusted_python
+        ):
+            with mock.patch.object(trusted_command_module.os, "name", "posix"):
+                posix = trusted_command_module.bind_current_python(
+                    r"pyt\hon -m ruff check ."
+                )
+            with mock.patch.object(trusted_command_module.os, "name", "nt"):
+                windows = trusted_command_module.bind_current_python(
+                    "pyt^hon -m ruff check ."
+                )
+
+        self.assertNotIn(r"pyt\hon", posix)
+        self.assertNotIn("pyt^hon", windows)
+        self.assertTrue(posix.endswith(" -m ruff check ."))
+        self.assertTrue(windows.endswith(" -m ruff check ."))
+
+    def test_trusted_runner_rejects_dynamic_shell_executable_tokens(self) -> None:
+        with mock.patch.object(trusted_command_module.os, "name", "posix"):
+            with self.assertRaisesRegex(
+                trusted_command_module.TrustedCommandError, "dynamic shell executable"
+            ):
+                trusted_command_module.bind_current_python(
+                    "py${PYTHON_SUFFIX} -m ruff check ."
+                )
+        with mock.patch.object(trusted_command_module.os, "name", "nt"):
+            with self.assertRaisesRegex(
+                trusted_command_module.TrustedCommandError, "dynamic shell executable"
+            ):
+                trusted_command_module.bind_current_python("%PYTHON% -m ruff check .")
+
+    def test_default_runner_records_dynamic_executable_as_failure(self) -> None:
+        with mock.patch.object(trusted_command_module.os, "name", "posix"):
+            with mock.patch.object(trusted_command_module.subprocess, "run") as run:
+                completed = supportability_module._run_shell_command(
+                    "py${PYTHON_SUFFIX} -m ruff check .", Path("target")
+                )
+
+        run.assert_not_called()
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("dynamic shell executable token", completed.stderr)
 
 
 class SupportabilityGateTests(unittest.TestCase):
@@ -963,10 +1145,47 @@ class SupportabilityAiReviewPolicyTests(unittest.TestCase):
                     changed_files=[".github/governance/supportability.yml"],
                     command_runner=runner,
                 )
-
             self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
             self.assertTrue(seen)
             self.assertIn("python -m ruff check .", seen)
+
+    def test_config_change_rejects_untrusted_python_semantics(self) -> None:
+        cases = (
+            ("lint", ["ruff check ."]),
+            ("lint", ["python -m compileall -q ."]),
+            ("format_check", ["python -m black --check ."]),
+            (
+                "format_check",
+                ["python -m ruff format --check .", "python -m black --check ."],
+            ),
+            ("typecheck", ["python -m pyright"]),
+            ("typecheck", ["python -m compileall -q ."]),
+            ("complexity", ["python -m radon cc ."]),
+            ("tests", ["pytest tests -q"]),
+            ("tests", ["python -m pytest tests -q"]),
+            ("compile_or_build", ["python -m compileall -q ."]),
+            ("package_audit", ["python -m pip check", "python -m build"]),
+        )
+        for gate, commands in cases:
+            with self.subTest(gate=gate, commands=commands):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = _synthetic_repo(Path(tmp), self.root)
+                    base_config = _valid_config(repo)
+                    _set_semantic_gate_commands(base_config)
+                    head_config = json.loads(json.dumps(base_config))
+                    head_config["required_gates"][gate] = commands
+                    (repo / ".github/governance/supportability.yml").write_text(
+                        json.dumps(head_config), encoding="utf-8"
+                    )
+                    result = _run_config_change_with_base(repo, base_config)
+                self.assertEqual(result["owner_status"], STATUS_RED)
+                self.assertTrue(
+                    any(
+                        f"required_gates.{gate} lacks" in error
+                        for error in result["errors"]
+                    ),
+                    result["errors"],
+                )
 
     def test_config_change_rejects_blocking_trusted_base_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1977,7 +2196,7 @@ def _valid_config(root: Path) -> dict:
         "required_gates": {
             "lint": ["python -c pass"],
             "format_check": ["python -c pass"],
-            "typecheck": ["python -c pass"],
+            "typecheck": ["python -m mypy ."],
             "complexity": ["python -c pass"],
             "architecture": ["python -c pass"],
             "tests": ["python -c pass"],
@@ -2017,7 +2236,7 @@ required_gates:
   format_check:
     - python -c pass
   typecheck:
-    - python -c pass
+    - python -m mypy .
   complexity:
     - python -c pass
   architecture:
@@ -2209,8 +2428,8 @@ def _set_semantic_gate_commands(config: dict) -> None:
             "architecture": [
                 "python -m governance_eval architecture-gate --config .github/governance/supportability.yml --target-repo . --base-sha $BASE_SHA --head-sha $HEAD_SHA"
             ],
-            "tests": ["python -m pytest tests -q"],
-            "compile_or_build": ["python -m build"],
+            "tests": ["python -m unittest discover -s tests -p test_*.py"],
+            "compile_or_build": ["npm run build"],
             "package_audit": ["python -m pip check"],
         }
     )
@@ -2277,7 +2496,3 @@ def _architecture_result() -> dict:
         "expired_known_debt": [],
         "errors": [],
     }
-
-
-if __name__ == "__main__":
-    unittest.main()

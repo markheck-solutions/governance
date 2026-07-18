@@ -1,87 +1,468 @@
 {
   "type": "object",
   "required": [
-    "schema_version", "status", "decision", "context_kind",
-    "repository", "repository_id", "head_repository_id", "event_name",
-    "event_action", "pull_request_number", "target_base_sha", "target_head_sha",
-    "base_sha", "claimed_base_sha", "head_sha", "evaluator_sha",
-    "claimed_evaluator_sha", "checkout_head_sha", "merge_base_sha",
-    "workflow_ref", "workflow_sha", "run_id", "run_attempt",
-    "expected_artifact_name", "lock_sha256", "governance_root",
-    "workspace_root", "git_executable", "python_version", "platform_system",
-    "platform_machine", "runtime_root", "python_path", "ruff_module_origin",
-    "ruff_executable", "packages", "commands", "error", "payload_sha256"
+    "schema_version",
+    "status",
+    "decision",
+    "context_kind",
+    "repository",
+    "repository_id",
+    "head_repository_id",
+    "event_name",
+    "event_action",
+    "pull_request_number",
+    "target_base_sha",
+    "target_head_sha",
+    "base_sha",
+    "claimed_base_sha",
+    "head_sha",
+    "evaluator_sha",
+    "claimed_evaluator_sha",
+    "checkout_head_sha",
+    "merge_base_sha",
+    "workflow_ref",
+    "workflow_sha",
+    "run_id",
+    "run_attempt",
+    "expected_artifact_name",
+    "lock_sha256",
+    "governance_root",
+    "workspace_root",
+    "git_executable",
+    "python_version",
+    "platform_system",
+    "platform_machine",
+    "runtime_root",
+    "python_path",
+    "ruff_module_origin",
+    "ruff_executable",
+    "packages",
+    "commands",
+    "error",
+    "payload_sha256"
   ],
   "properties": {
-    "schema_version": {"type": "string", "enum": ["1.0"]},
-    "status": {"type": "string", "enum": ["PASS", "FAIL"]},
-    "decision": {"type": "string", "enum": ["TOOLCHAIN_READY", "BLOCK_TECHNICAL"]},
-    "context_kind": {"type": "string", "enum": ["SUPPORTABILITY_EVALUATION"]},
-    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
-    "repository_id": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"},
-    "head_repository_id": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"},
-    "event_name": {"type": "string", "enum": ["pull_request_target"]},
-    "event_action": {"type": "string", "enum": ["opened", "reopened", "synchronize", "ready_for_review"]},
-    "pull_request_number": {"type": "integer", "minimum": 1},
-    "target_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "target_head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "claimed_base_sha": {"type": "string", "maxLength": 200},
-    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "evaluator_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "claimed_evaluator_sha": {"type": "string", "maxLength": 200},
-    "checkout_head_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-    "merge_base_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-    "workflow_ref": {"type": "string", "pattern": "^[^\\r\\n]{1,500}$"},
-    "workflow_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "run_id": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"},
-    "run_attempt": {"type": "string", "enum": ["1"]},
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "1.0"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "FAIL"
+      ]
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "TOOLCHAIN_READY",
+        "BLOCK_TECHNICAL"
+      ]
+    },
+    "context_kind": {
+      "type": "string",
+      "enum": [
+        "SUPPORTABILITY_EVALUATION"
+      ]
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "repository_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "head_repository_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "event_name": {
+      "type": "string",
+      "enum": [
+        "pull_request_target"
+      ]
+    },
+    "event_action": {
+      "type": "string",
+      "enum": [
+        "opened",
+        "reopened",
+        "synchronize",
+        "ready_for_review"
+      ]
+    },
+    "pull_request_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "target_base_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "target_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "base_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "claimed_base_sha": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "evaluator_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "claimed_evaluator_sha": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "checkout_head_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "merge_base_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "workflow_ref": {
+      "type": "string",
+      "pattern": "^[^\\r\\n]{1,500}$"
+    },
+    "workflow_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "run_attempt": {
+      "type": "string",
+      "enum": [
+        "1"
+      ]
+    },
     "expected_artifact_name": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_.-]{1,120}$"
     },
-    "lock_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-    "governance_root": {"type": "string", "minLength": 1},
-    "workspace_root": {"type": "string", "minLength": 1},
-    "git_executable": {"type": ["string", "null"], "minLength": 1},
-    "python_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
-    "platform_system": {"type": "string", "minLength": 1},
-    "platform_machine": {"type": "string", "minLength": 1},
-    "runtime_root": {"type": "string", "minLength": 1},
-    "python_path": {"type": ["string", "null"], "minLength": 1},
-    "ruff_module_origin": {"type": ["string", "null"], "minLength": 1},
-    "ruff_executable": {"type": ["string", "null"], "minLength": 1},
+    "lock_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "governance_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspace_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "git_executable": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "python_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "platform_system": {
+      "type": "string",
+      "minLength": 1
+    },
+    "platform_machine": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "python_path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "ruff_module_origin": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "ruff_executable": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
     "packages": {
-      "type": "array", "minItems": 0, "maxItems": 1,
-      "items": {
-        "type": "object", "required": ["name", "version"],
-        "properties": {
-          "name": {"type": "string", "enum": ["ruff"]},
-          "version": {"type": "string", "enum": ["0.15.21"]}
+      "type": "array",
+      "oneOf": [
+        {
+          "maxItems": 0
         },
-        "additionalProperties": false
-      }
+        {
+          "minItems": 7,
+          "maxItems": 7,
+          "prefixItems": [
+            {
+              "$ref": "#/definitions/ruff_package"
+            },
+            {
+              "$ref": "#/definitions/mypy_package"
+            },
+            {
+              "$ref": "#/definitions/ast_serialize_package"
+            },
+            {
+              "$ref": "#/definitions/librt_package"
+            },
+            {
+              "$ref": "#/definitions/mypy_extensions_package"
+            },
+            {
+              "$ref": "#/definitions/pathspec_package"
+            },
+            {
+              "$ref": "#/definitions/typing_extensions_package"
+            }
+          ]
+        }
+      ]
     },
     "commands": {
-      "type": "array", "minItems": 0, "maxItems": 10,
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 11,
       "items": {
         "type": "object",
-        "required": ["command", "started_at", "completed_at", "timeout_seconds", "timed_out", "exit_code", "stdout_sha256", "stderr_sha256"],
+        "required": [
+          "command",
+          "started_at",
+          "completed_at",
+          "timeout_seconds",
+          "timed_out",
+          "exit_code",
+          "stdout_sha256",
+          "stderr_sha256"
+        ],
         "properties": {
-          "command": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}},
-          "started_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"},
-          "completed_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"},
-          "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
-          "timed_out": {"type": "boolean"},
-          "exit_code": {"type": ["integer", "null"]},
-          "stdout_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-          "stderr_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+          "command": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "started_at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+          },
+          "completed_at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120
+          },
+          "timed_out": {
+            "type": "boolean"
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stdout_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "stderr_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          }
         },
         "additionalProperties": false
       }
     },
-    "error": {"type": ["string", "null"], "minLength": 1, "maxLength": 4096},
-    "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "payload_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "ruff_package": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "ruff"
+        },
+        "version": {
+          "type": "string",
+          "const": "0.15.21"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mypy_package": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "mypy"
+        },
+        "version": {
+          "type": "string",
+          "const": "2.2.0"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ast_serialize_package": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "ast-serialize"
+        },
+        "version": {
+          "type": "string",
+          "const": "0.6.0"
+        }
+      },
+      "additionalProperties": false
+    },
+    "librt_package": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "librt"
+        },
+        "version": {
+          "type": "string",
+          "const": "0.13.0"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mypy_extensions_package": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "mypy-extensions"
+        },
+        "version": {
+          "type": "string",
+          "const": "1.1.0"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pathspec_package": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "pathspec"
+        },
+        "version": {
+          "type": "string",
+          "const": "1.1.1"
+        }
+      },
+      "additionalProperties": false
+    },
+    "typing_extensions_package": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "typing-extensions"
+        },
+        "version": {
+          "type": "string",
+          "const": "4.16.0"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

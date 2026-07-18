@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -16,6 +15,9 @@ from governance_eval.architecture_policy import (
     architecture_command_lines as _architecture_command_lines,
 )
 from governance_eval.architecture_policy import (
+    architecture_workflow_transition_allowed as _architecture_workflow_transition_allowed,
+)
+from governance_eval.architecture_policy import (
     architecture_policy_weakening_errors as _architecture_policy_weakening_errors,
 )
 from governance_eval.hashing import sha256_file
@@ -23,6 +25,7 @@ from governance_eval.legacy_copilot_gate import evaluate_copilot_review_gate
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
+from governance_eval.trusted_command import run_bound_shell_command, split_command
 
 
 REQUIRED_COMMAND_GATES = (
@@ -577,6 +580,11 @@ def _required_gate_errors(gates: Any) -> list[str]:
         )
     )
     errors.extend(_sql_config_errors(gates.get("sql_supportability")))
+    if any(
+        re.search(r"python\s+-m\s+pyright\b", command)
+        for command in _command_list(gates.get("typecheck"))
+    ):
+        errors.append("required_gates.typecheck lacks required capability semantics")
     return errors
 
 
@@ -820,45 +828,38 @@ def _required_gate_change_errors(
         f"required gate command duplicated across capabilities: {command}"
         for command in duplicates
     )
-    runner = r"(?:(?:uv|poetry|pipenv)\s+run\s+)?"
     js_runner = r"(?:npx\s+|pnpm\s+(?:exec\s+)?|yarn\s+)?"
     required_semantics = {
         "lint": (
-            runner + r"(?:python\s+-m\s+)?ruff\s+check\b",
-            runner + js_runner + r"(?:eslint|biome\s+check)\b",
+            r"python\s+-m\s+ruff\s+check\b",
+            js_runner + r"(?:eslint|biome\s+check)\b",
             r"(?:golangci-lint|cargo\s+clippy|dotnet\s+format)\b",
             r"(?:mvn|gradle)\b.*\bcheckstyle\b",
         ),
         "format_check": (
-            runner + r"(?:python\s+-m\s+)?(?:ruff\s+format|black)\s+--check\b",
-            runner + js_runner + r"(?:prettier\s+--check|biome\s+format)\b",
+            r"python\s+-m\s+ruff\s+format\s+--check\b",
+            js_runner + r"(?:prettier\s+--check|biome\s+format)\b",
             r"(?:cargo\s+fmt|gofmt|dotnet\s+format\s+--verify-no-changes)\b",
         ),
         "typecheck": (
-            runner + r"(?:python\s+-m\s+)?(?:mypy|pyright)\b",
-            runner + js_runner + r"tsc\s+--noemit\b",
+            r"python\s+-m\s+mypy\b",
+            js_runner + r"tsc\s+--noemit\b",
             r"(?:cargo\s+check|go\s+vet|dotnet\s+build)\b",
             r"(?:mvn|gradle)\b.*\bcompile\b",
         ),
         "complexity": (
-            runner
-            + r"(?:python\s+-m\s+)?ruff\s+check\b.*(?:--select(?:=|\s+)C901|--extend-select(?:=|\s+)C901)",
-            runner + r"(?:python\s+-m\s+)?radon\b",
+            r"python\s+-m\s+ruff\s+check\b.*(?:--select(?:=|\s+)C901|--extend-select(?:=|\s+)C901)",
             r"(?:lizard|gocyclo|cognitive-complexity)\b",
-            runner + js_runner + r"eslint\b.*\bcomplexity\b",
+            js_runner + r"eslint\b.*\bcomplexity\b",
         ),
-        "architecture": (
-            runner + r"python\s+-m\s+governance_eval\s+architecture-gate\b",
-        ),
+        "architecture": (r"python\s+-m\s+governance_eval\s+architecture-gate\b",),
         "tests": (
-            runner + r"python\s+-m\s+(?:pytest|unittest)\b",
-            runner + r"pytest\b",
+            r"python\s+-m\s+unittest\b",
             r"(?:npm|pnpm|yarn)\s+(?:run\s+)?test\b",
             js_runner + r"(?:vitest|jest)\b",
             r"(?:go|cargo|dotnet|mvn|gradle)\s+test\b",
         ),
         "compile_or_build": (
-            runner + r"python\s+-m\s+build\b",
             r"(?:npm|pnpm|yarn)\s+(?:run\s+)?build\b",
             r"(?:go|cargo|dotnet)\s+build\b",
             r"mvn\b.*\bpackage\b",
@@ -873,8 +874,8 @@ def _required_gate_change_errors(
         if (
             gate_commands != base_commands
             and gate_commands
-            and not any(
-                _command_invokes_capability(command, markers)
+            and any(
+                not _command_invokes_capability(command, markers)
                 for command in gate_commands
             )
         ):
@@ -886,7 +887,7 @@ def _required_gate_change_errors(
         else []
     )
     audit_markers = (
-        runner + r"(?:python\s+-m\s+)?pip\s+check\b",
+        r"python\s+-m\s+pip\s+check\b",
         r"(?:npm|pnpm|yarn|cargo)\s+audit\b",
         r"(?:govulncheck|osv-scanner)\b",
         r"dotnet\s+list\b.*\bpackage\b",
@@ -894,8 +895,8 @@ def _required_gate_change_errors(
     if (
         package_commands != base_package_commands
         and package_commands
-        and not any(
-            _command_invokes_capability(command, audit_markers)
+        and any(
+            not _command_invokes_capability(command, audit_markers)
             for command in package_commands
         )
     ):
@@ -904,7 +905,7 @@ def _required_gate_change_errors(
         )
     for command in commands:
         lowered = command.lower()
-        tokens = {token.lower() for token in _split_command(command)}
+        tokens = {token.lower() for token in split_command(command)}
         if any(
             marker in command
             for marker in (";", "|", ">", "<", "&", "`", "$(", "\n", "\r")
@@ -965,6 +966,7 @@ def _architecture_governance_change_errors(
     errors: list[str] = []
     checker_paths = {
         "governance_eval/supportability.py",
+        "governance_eval/trusted_command.py",
         "governance_eval/architecture_policy.py",
         "governance_eval/architecture_gate.py",
         "governance_eval/ai_review_gate.py",
@@ -1022,12 +1024,16 @@ def _architecture_governance_change_errors(
             if (target_repo / workflow_path).exists()
             else ""
         )
-        if base_text is not None and _architecture_command_lines(
-            base_text
-        ) != _architecture_command_lines(head_text):
-            errors.append(
-                "architecture gate workflow command changed; protected baseline judge must report RED"
-            )
+        if base_text is not None:
+            base_commands = _architecture_command_lines(base_text)
+            head_commands = _architecture_command_lines(head_text)
+            if (
+                base_commands != head_commands
+                and not _architecture_workflow_transition_allowed(base_text, head_text)
+            ):
+                errors.append(
+                    "architecture gate workflow command changed; protected baseline judge must report RED"
+                )
     return errors
 
 
@@ -1292,7 +1298,7 @@ def _weakens_threshold(lowered: str) -> bool:
 
 
 def _path_scope_excludes_files(command: str, files: list[str]) -> bool:
-    tokens = _split_command(command)
+    tokens = split_command(command)
     scopes = [
         _normalize_scope(token) for token in tokens if _looks_like_scope_token(token)
     ]
@@ -1300,13 +1306,6 @@ def _path_scope_excludes_files(command: str, files: list[str]) -> bool:
     if not scopes or "." in scopes:
         return False
     return any(not _file_is_in_any_scope(path, scopes) for path in files)
-
-
-def _split_command(command: str) -> list[str]:
-    try:
-        return shlex.split(command, posix=os.name != "nt")
-    except ValueError:
-        return command.split()
 
 
 def _looks_like_scope_token(token: str) -> bool:
@@ -1499,12 +1498,21 @@ def _run_one_command(
     completed = runner(command, target_repo)
     return {
         "gate": gate,
-        "command": command,
+        "command": _completed_args_text(completed.args),
+        "configured_command": command,
         "status": "PASS" if completed.returncode == 0 else "FAIL",
         "exit_code": completed.returncode,
         "stdout": _truncate(completed.stdout),
         "stderr": _truncate(completed.stderr),
     }
+
+
+def _completed_args_text(args: Any) -> str:
+    if isinstance(args, str):
+        return args
+    if isinstance(args, (list, tuple)):
+        return json.dumps([str(item) for item in args])
+    return str(args)
 
 
 def _command_result_errors(results: list[dict[str, Any]]) -> list[str]:
@@ -1516,16 +1524,7 @@ def _command_result_errors(results: list[dict[str, Any]]) -> list[str]:
 
 
 def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command,
-        cwd=cwd,
-        shell=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        timeout=1200,
-    )
+    return run_bound_shell_command(command, cwd)
 
 
 def _git_changed_files(target_repo: Path, base_sha: str, head_sha: str) -> list[str]:

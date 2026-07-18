@@ -30,6 +30,20 @@ def validate(
         raise SchemaValidationError(
             f"{path}: {instance!r} not in enum {schema['enum']!r}"
         )
+    if "const" in schema and instance != schema["const"]:
+        raise SchemaValidationError(f"{path}: expected constant {schema['const']!r}")
+    if "oneOf" in schema:
+        matches = 0
+        for option in schema["oneOf"]:
+            try:
+                validate(instance, option, path, root)
+            except SchemaValidationError:
+                continue
+            matches += 1
+        if matches != 1:
+            raise SchemaValidationError(
+                f"{path}: expected exactly one matching schema, got {matches}"
+            )
 
     if isinstance(instance, dict):
         for key in schema.get("required", []):
@@ -58,6 +72,10 @@ def validate(
         if "items" in schema:
             for index, item in enumerate(instance):
                 validate(item, schema["items"], f"{path}[{index}]", root)
+        prefix_items = schema.get("prefixItems")
+        if isinstance(prefix_items, list):
+            for index, item_schema in enumerate(prefix_items[: len(instance)]):
+                validate(instance[index], item_schema, f"{path}[{index}]", root)
 
     if isinstance(instance, str):
         min_length = schema.get("minLength")
