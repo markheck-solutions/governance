@@ -45,26 +45,6 @@ def validate(
                 f"{path}: expected exactly one matching schema, got {matches}"
             )
 
-    if "oneOf" in schema:
-        branches = schema["oneOf"]
-        if (
-            not isinstance(branches, list)
-            or not branches
-            or any(not isinstance(branch, dict) for branch in branches)
-        ):
-            raise SchemaValidationError(f"{path}: oneOf must contain schemas")
-        matches = 0
-        for branch in branches:
-            try:
-                validate(instance, branch, path, root)
-            except SchemaValidationError:
-                continue
-            matches += 1
-        if matches != 1:
-            raise SchemaValidationError(
-                f"{path}: expected exactly one oneOf match, got {matches}"
-            )
-
     if isinstance(instance, dict):
         for key in schema.get("required", []):
             if key not in instance:

@@ -465,12 +465,12 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
                 self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
                 self.assertRegex(
                     result["errors"][0],
-                    r"execution plan schema invalid: .*expected exactly one oneOf match, got 0",
+                    r"execution plan schema invalid: .*expected exactly one matching schema, got 0",
                 )
 
     def test_schema_validator_one_of_requires_exactly_one_match(self) -> None:
         with self.assertRaisesRegex(
-            SchemaValidationError, "expected exactly one oneOf match, got 0"
+            SchemaValidationError, "expected exactly one matching schema, got 0"
         ):
             validate(
                 {"kind": "unknown"},
@@ -483,7 +483,7 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(
-            SchemaValidationError, "expected exactly one oneOf match, got 2"
+            SchemaValidationError, "expected exactly one matching schema, got 2"
         ):
             validate(
                 "same",
