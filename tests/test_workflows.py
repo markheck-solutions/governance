@@ -62,6 +62,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("hmac.compare_digest(actual, expected)", workflow)
         self.assertIn("governance-toolchain-receipt.json", workflow)
         self.assertIn("steps.receipt.outcome != 'success'", workflow)
+        self.assertNotIn("continue-on-error: true", workflow)
         self.assertIn("PHASE1_SHADOW", action)
         self.assertNotIn("GITHUB_PATH", action)
 
