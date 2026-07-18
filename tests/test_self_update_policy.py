@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from governance_eval import architecture_policy
 from governance_eval import supportability
 
 
@@ -78,6 +79,62 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                 self.assertTrue(
                     any("protected checker change" in error for error in errors)
                 )
+
+    def test_architecture_runner_transition_is_exact_workflow_change(self) -> None:
+        base = (REPO_ROOT / ".github/workflows/supportability-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        head = base.replace(
+            architecture_policy._ARCHITECTURE_WORKFLOW_BASE_COMMAND,
+            architecture_policy._ARCHITECTURE_WORKFLOW_PINNED_COMMAND,
+            1,
+        )
+
+        self.assertTrue(
+            architecture_policy.architecture_workflow_transition_allowed(base, head)
+        )
+        self.assertEqual(
+            hashlib.sha256(base.encode()).hexdigest(),
+            architecture_policy._ARCHITECTURE_WORKFLOW_TRANSITION_SHA256[0],
+        )
+        self.assertEqual(
+            hashlib.sha256(head.encode()).hexdigest(),
+            architecture_policy._ARCHITECTURE_WORKFLOW_TRANSITION_SHA256[1],
+        )
+
+    def test_architecture_runner_transition_rejects_companion_workflow_change(
+        self,
+    ) -> None:
+        base = (REPO_ROOT / ".github/workflows/supportability-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        head = base.replace(
+            architecture_policy._ARCHITECTURE_WORKFLOW_BASE_COMMAND,
+            architecture_policy._ARCHITECTURE_WORKFLOW_PINNED_COMMAND,
+            1,
+        ).replace("permissions:\n  actions: read", "permissions:\n  actions: write", 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow = repo / ".github/workflows/supportability-gate.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(head, encoding="utf-8")
+            with mock.patch(
+                "governance_eval.supportability._git_show_text", return_value=base
+            ):
+                errors = supportability._architecture_governance_change_errors(
+                    repo,
+                    [".github/workflows/supportability-gate.yml"],
+                    "a" * 40,
+                    repo / ".github/governance/supportability.yml",
+                )
+
+        self.assertTrue(
+            any(
+                "architecture gate workflow command changed" in error
+                for error in errors
+            )
+        )
 
     def test_config_migration_must_not_ship_shadowing_code(self) -> None:
         head = _config()

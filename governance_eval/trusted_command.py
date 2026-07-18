@@ -12,7 +12,9 @@ class TrustedCommandError(ValueError):
     pass
 
 
-PROTECTED_PYTHON_MODULES = frozenset({"build", "mypy", "pip", "pyright", "ruff"})
+PROTECTED_PYTHON_MODULES = frozenset(
+    {"build", "compileall", "mypy", "pip", "pyright", "ruff"}
+)
 
 
 def split_command(command: str) -> list[str]:

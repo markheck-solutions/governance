@@ -75,6 +75,21 @@ class TrustedCommandModulePathTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertNotIn("CANDIDATE_PIP_EXECUTED", completed.stdout)
 
+    def test_compileall_shadow_cannot_bypass_current_self_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            (target / "compileall.py").write_text(
+                "print('CANDIDATE_COMPILEALL_EXECUTED')\n", encoding="utf-8"
+            )
+            (target / "app.py").write_text("value = 1\n", encoding="utf-8")
+
+            completed = trusted_command.run_bound_shell_command(
+                "python -m compileall -q .", target
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("CANDIDATE_COMPILEALL_EXECUTED", completed.stdout)
+
     def test_trusted_governance_module_ignores_target_shadow_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
