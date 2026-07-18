@@ -18,6 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 RUFF_VERSION = "0.15.21"
+MYPY_VERSION = "2.2.0"
+AST_SERIALIZE_VERSION = "0.6.0"
+LIBRT_VERSION = "0.13.0"
+MYPY_EXTENSIONS_VERSION = "1.1.0"
+PATHSPEC_VERSION = "1.1.1"
+TYPING_EXTENSIONS_VERSION = "4.16.0"
 LOCK_NAME = "requirements-governance.lock"
 _PYTHON_VERSION = (3, 12, 13)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -99,6 +105,57 @@ _RUFF_HASHES = frozenset(
         "sha256:d4b8d9a2f0f12b816b50447f6eccb9f4bb01a6b82c86b50fb3b5354b458dc6d3",
     }
 )
+_MYPY_HASHES = frozenset(
+    {
+        "sha256:511320b17467402e2906130e185abffffa3d7648aff1444fc2abb61f4c8a087d",
+        "sha256:b0179a3a0b833f724a65f22613607cf7ea941ab17ec34fa283f8d6dfe21d9fa9",
+    }
+)
+_AST_SERIALIZE_HASHES = frozenset(
+    {
+        "sha256:113b58346f9ceb664352032770caca817d4a3c86f611c6088e6ef65ddaa70f0e",
+        "sha256:dcbed41e9386059fc0261d602445ede0976c2ecec2939688bcbcb9ed0b6f28b7",
+    }
+)
+_LIBRT_HASHES = frozenset(
+    {
+        "sha256:b222493da6e7b6199db9bd79502436cf5a27da3c1f7fa83c7e285444fc93fd03",
+        "sha256:e54a315caf843c8d77e388cadc56ea9ded569935ee2d2347d7ea94992e5aa6fa",
+    }
+)
+_MYPY_EXTENSIONS_HASHES = frozenset(
+    {
+        "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505",
+    }
+)
+_PATHSPEC_HASHES = frozenset(
+    {
+        "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189",
+    }
+)
+_TYPING_EXTENSIONS_HASHES = frozenset(
+    {
+        "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+    }
+)
+_APPROVED_LOCK_REQUIREMENTS = (
+    (f"ruff=={RUFF_VERSION}", _RUFF_HASHES),
+    (f"mypy=={MYPY_VERSION}", _MYPY_HASHES),
+    (f"ast-serialize=={AST_SERIALIZE_VERSION}", _AST_SERIALIZE_HASHES),
+    (f"librt=={LIBRT_VERSION}", _LIBRT_HASHES),
+    (f"mypy-extensions=={MYPY_EXTENSIONS_VERSION}", _MYPY_EXTENSIONS_HASHES),
+    (f"pathspec=={PATHSPEC_VERSION}", _PATHSPEC_HASHES),
+    (f"typing-extensions=={TYPING_EXTENSIONS_VERSION}", _TYPING_EXTENSIONS_HASHES),
+)
+_TOOLCHAIN_PACKAGES = (
+    {"name": "ruff", "version": RUFF_VERSION},
+    {"name": "mypy", "version": MYPY_VERSION},
+    {"name": "ast-serialize", "version": AST_SERIALIZE_VERSION},
+    {"name": "librt", "version": LIBRT_VERSION},
+    {"name": "mypy-extensions", "version": MYPY_EXTENSIONS_VERSION},
+    {"name": "pathspec", "version": PATHSPEC_VERSION},
+    {"name": "typing-extensions", "version": TYPING_EXTENSIONS_VERSION},
+)
 _SAFE_ENV_KEYS = (
     "APPDATA",
     "COMSPEC",
@@ -130,25 +187,34 @@ def validate_lock(lock_path: Path) -> str:
     except UnicodeDecodeError as exc:
         raise BootstrapError("toolchain lock must be UTF-8") from exc
     logical_lines = _logical_requirement_lines(text)
-    if len(logical_lines) != 1:
-        raise BootstrapError("toolchain lock must contain exactly one requirement")
-    try:
-        tokens = shlex.split(logical_lines[0], posix=True)
-    except ValueError as exc:
-        raise BootstrapError(f"toolchain lock syntax invalid: {exc}") from exc
-    if not tokens or tokens[0] != f"ruff=={RUFF_VERSION}":
-        raise BootstrapError(f"toolchain lock must pin ruff=={RUFF_VERSION}")
-    hash_tokens = tokens[1:]
-    if len(hash_tokens) != len(_RUFF_HASHES):
-        raise BootstrapError("toolchain lock hash count invalid")
-    parsed_hashes = {
-        token.removeprefix("--hash=")
-        for token in hash_tokens
-        if token.startswith("--hash=")
-    }
-    if parsed_hashes != _RUFF_HASHES:
-        raise BootstrapError("toolchain lock hashes do not match approved artifacts")
+    if len(logical_lines) != len(_APPROVED_LOCK_REQUIREMENTS):
+        raise BootstrapError("toolchain lock must contain exact approved requirements")
+    for logical_line, (requirement, approved_hashes) in zip(
+        logical_lines, _APPROVED_LOCK_REQUIREMENTS, strict=True
+    ):
+        try:
+            tokens = shlex.split(logical_line, posix=True)
+        except ValueError as exc:
+            raise BootstrapError(f"toolchain lock syntax invalid: {exc}") from exc
+        if not tokens or tokens[0] != requirement:
+            raise BootstrapError(f"toolchain lock must pin {requirement}")
+        hash_tokens = tokens[1:]
+        if len(hash_tokens) != len(approved_hashes):
+            raise BootstrapError("toolchain lock hash count invalid")
+        parsed_hashes = {
+            token.removeprefix("--hash=")
+            for token in hash_tokens
+            if token.startswith("--hash=")
+        }
+        if parsed_hashes != approved_hashes:
+            raise BootstrapError(
+                "toolchain lock hashes do not match approved artifacts"
+            )
     return hashlib.sha256(payload).hexdigest()
+
+
+def toolchain_packages() -> list[dict[str, str]]:
+    return [dict(item) for item in _TOOLCHAIN_PACKAGES]
 
 
 def _logical_requirement_lines(text: str) -> list[str]:
@@ -578,7 +644,7 @@ def _validate_success_receipt(
         raise BootstrapError("successful toolchain receipt identity binding invalid")
     if receipt.get("python_version") != "3.12.13":
         raise BootstrapError("successful toolchain receipt Python version invalid")
-    if receipt.get("packages") != [{"name": "ruff", "version": RUFF_VERSION}]:
+    if receipt.get("packages") != toolchain_packages():
         raise BootstrapError("successful toolchain receipt package evidence invalid")
     _validate_portable_success_environment(governance_root, receipt)
     if not _valid_success_command_evidence(receipt):
@@ -897,7 +963,7 @@ def _validate_success_executables(
 
 def _valid_success_command_evidence(receipt: Mapping[str, object]) -> bool:
     value = receipt.get("commands")
-    if not isinstance(value, list) or len(value) != 10:
+    if not isinstance(value, list) or len(value) != 11:
         return False
     if any(
         not isinstance(record, dict)
@@ -922,6 +988,7 @@ def _valid_success_command_evidence(receipt: Mapping[str, object]) -> bool:
         30,
         15,
         15,
+        15,
     ]:
         return False
     expected_stdout = {
@@ -940,6 +1007,7 @@ def _valid_success_command_evidence(receipt: Mapping[str, object]) -> bool:
             sort_keys=True,
         ),
         9: f"ruff {RUFF_VERSION}",
+        10: f"mypy {MYPY_VERSION} (compiled: yes)",
     }
     return all(
         value[index].get("stdout_sha256") == _stream_sha256(stdout)
@@ -976,6 +1044,7 @@ def _expected_success_commands(
         (str(python_path), "-I", "-m", "pip", "check"),
         (str(python_path), "-I", "-c", _RUFF_PROBE),
         (str(python_path), "-I", "-m", "ruff", "--version"),
+        (str(python_path), "-I", "-m", "mypy", "--version"),
     ]
 
 
@@ -1244,6 +1313,14 @@ def provision(
     ).stdout.strip()
     if version != f"ruff {RUFF_VERSION}":
         raise BootstrapError(f"unexpected Ruff version output: {version}")
+    mypy_version = _run(
+        (str(python_path), "-I", "-m", "mypy", "--version"),
+        environment=environment,
+        timeout_seconds=15,
+        command_evidence=command_evidence,
+    ).stdout.strip()
+    if not mypy_version.startswith(f"mypy {MYPY_VERSION}"):
+        raise BootstrapError(f"unexpected mypy version output: {mypy_version}")
     receipt: dict[str, object] = {
         **expected,
         "schema_version": "1.0",
@@ -1267,7 +1344,7 @@ def provision(
         "python_path": str(python_path),
         "ruff_module_origin": str(module_origin),
         "ruff_executable": str(ruff_executable.resolve(strict=True)),
-        "packages": [{"name": "ruff", "version": RUFF_VERSION}],
+        "packages": toolchain_packages(),
         "commands": command_evidence,
         "error": None,
     }

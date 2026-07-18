@@ -692,8 +692,8 @@ def _semantic_gate_commands(suffix: str) -> dict[str, list[str]]:
         "typecheck": ["python -m mypy ." + suffix],
         "complexity": ["python -m ruff check --select C901 ." + suffix],
         "architecture": ["python -m governance_eval architecture-gate" + suffix],
-        "tests": ["python -m pytest" + suffix],
-        "compile_or_build": ["python -m build" + suffix],
+        "tests": ["python -m unittest discover -s tests -p test_*.py" + suffix],
+        "compile_or_build": ["npm run build" + suffix],
     }
 
 

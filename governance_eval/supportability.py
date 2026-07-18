@@ -580,6 +580,11 @@ def _required_gate_errors(gates: Any) -> list[str]:
         )
     )
     errors.extend(_sql_config_errors(gates.get("sql_supportability")))
+    if any(
+        re.search(r"python\s+-m\s+pyright\b", command)
+        for command in _command_list(gates.get("typecheck"))
+    ):
+        errors.append("required_gates.typecheck lacks required capability semantics")
     return errors
 
 
@@ -832,31 +837,29 @@ def _required_gate_change_errors(
             r"(?:mvn|gradle)\b.*\bcheckstyle\b",
         ),
         "format_check": (
-            r"python\s+-m\s+(?:ruff\s+format|black)\s+--check\b",
+            r"python\s+-m\s+ruff\s+format\s+--check\b",
             js_runner + r"(?:prettier\s+--check|biome\s+format)\b",
             r"(?:cargo\s+fmt|gofmt|dotnet\s+format\s+--verify-no-changes)\b",
         ),
         "typecheck": (
-            r"python\s+-m\s+(?:mypy|pyright)\b",
+            r"python\s+-m\s+mypy\b",
             js_runner + r"tsc\s+--noemit\b",
             r"(?:cargo\s+check|go\s+vet|dotnet\s+build)\b",
             r"(?:mvn|gradle)\b.*\bcompile\b",
         ),
         "complexity": (
             r"python\s+-m\s+ruff\s+check\b.*(?:--select(?:=|\s+)C901|--extend-select(?:=|\s+)C901)",
-            r"python\s+-m\s+radon\b",
             r"(?:lizard|gocyclo|cognitive-complexity)\b",
             js_runner + r"eslint\b.*\bcomplexity\b",
         ),
         "architecture": (r"python\s+-m\s+governance_eval\s+architecture-gate\b",),
         "tests": (
-            r"python\s+-m\s+(?:pytest|unittest)\b",
+            r"python\s+-m\s+unittest\b",
             r"(?:npm|pnpm|yarn)\s+(?:run\s+)?test\b",
             js_runner + r"(?:vitest|jest)\b",
             r"(?:go|cargo|dotnet|mvn|gradle)\s+test\b",
         ),
         "compile_or_build": (
-            r"python\s+-m\s+build\b",
             r"(?:npm|pnpm|yarn)\s+(?:run\s+)?build\b",
             r"(?:go|cargo|dotnet)\s+build\b",
             r"mvn\b.*\bpackage\b",
@@ -871,8 +874,8 @@ def _required_gate_change_errors(
         if (
             gate_commands != base_commands
             and gate_commands
-            and not any(
-                _command_invokes_capability(command, markers)
+            and any(
+                not _command_invokes_capability(command, markers)
                 for command in gate_commands
             )
         ):
@@ -892,8 +895,8 @@ def _required_gate_change_errors(
     if (
         package_commands != base_package_commands
         and package_commands
-        and not any(
-            _command_invokes_capability(command, audit_markers)
+        and any(
+            not _command_invokes_capability(command, audit_markers)
             for command in package_commands
         )
     ):
@@ -1495,12 +1498,21 @@ def _run_one_command(
     completed = runner(command, target_repo)
     return {
         "gate": gate,
-        "command": command,
+        "command": _completed_args_text(completed.args),
+        "configured_command": command,
         "status": "PASS" if completed.returncode == 0 else "FAIL",
         "exit_code": completed.returncode,
         "stdout": _truncate(completed.stdout),
         "stderr": _truncate(completed.stderr),
     }
+
+
+def _completed_args_text(args: Any) -> str:
+    if isinstance(args, str):
+        return args
+    if isinstance(args, (list, tuple)):
+        return json.dumps([str(item) for item in args])
+    return str(args)
 
 
 def _command_result_errors(results: list[dict[str, Any]]) -> list[str]:

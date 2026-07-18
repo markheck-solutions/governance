@@ -378,15 +378,19 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
 
     def test_lock_rejects_missing_hash(self) -> None:
         self._assert_lock_rejected(
-            "ruff==0.15.21 \\\n"
-            "  --hash=sha256:bab0905d2f29e0d9fbc3c373ed23db0095edaa3f71f1f4f519ec15134d9e85c8\n",
+            self._valid_lock().replace(
+                " \\\n"
+                "    --hash=sha256:d4b8d9a2f0f12b816b50447f6eccb9f4bb01a6b82c86b50fb3b5354b458dc6d3\n",
+                "\n",
+                1,
+            ),
             "hash count",
         )
 
     def test_lock_rejects_extra_package_or_install_option(self) -> None:
         self._assert_lock_rejected(
-            self._valid_lock() + "mypy==2.2.0 --hash=sha256:" + "0" * 64 + "\n",
-            "exactly one requirement",
+            self._valid_lock() + "black==26.1.0 --hash=sha256:" + "0" * 64 + "\n",
+            "exact approved requirements",
         )
         self._assert_lock_rejected(
             self._valid_lock().replace(
@@ -477,6 +481,8 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                     )
                 elif command[-2:] == ("ruff", "--version"):
                     stdout = f"ruff {BOOTSTRAP.RUFF_VERSION}\n"
+                elif command[-2:] == ("mypy", "--version"):
+                    stdout = f"mypy {BOOTSTRAP.MYPY_VERSION} (compiled: yes)\n"
                 else:
                     stdout = ""
                 evidence.append(
@@ -522,9 +528,7 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
             self.assertEqual(receipt["merge_base_sha"], "c" * 40)
             self._assert_expected_context(receipt)
             self.assertEqual(receipt["python_version"], "3.12.13")
-            self.assertEqual(
-                receipt["packages"], [{"name": "ruff", "version": "0.15.21"}]
-            )
+            self.assertEqual(receipt["packages"], BOOTSTRAP.toolchain_packages())
             self.assertRegex(str(receipt["payload_sha256"]), r"^[0-9a-f]{64}$")
             claimed_digest = receipt["payload_sha256"]
             self.assertEqual(
@@ -537,7 +541,8 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
             validate_named("governance_toolchain_receipt", receipt, ROOT)
             self.assertEqual(commands[5][1:4], ("-I", "-m", "ensurepip"))
             self.assertEqual(commands[6][1:4], ("-I", "-m", "pip"))
-            self.assertEqual(commands[-1][-3:], ("-m", "ruff", "--version"))
+            self.assertEqual(commands[-2][-3:], ("-m", "ruff", "--version"))
+            self.assertEqual(commands[-1][-3:], ("-m", "mypy", "--version"))
             self.assertEqual(
                 receipt["commands"][0]["stdout_sha256"],
                 BOOTSTRAP._stream_sha256(paths["governance"].as_posix()),
@@ -1276,6 +1281,67 @@ class ToolchainBootstrapCommandTests(_ToolchainBootstrapTestCase):
             }
             with self.assertRaises(SchemaValidationError):
                 validate_named("governance_toolchain_receipt", invalid, ROOT)
+
+    def test_receipt_schema_requires_empty_or_exact_toolchain_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._provision_paths(Path(tmp))
+            args = type(
+                "Args",
+                (),
+                {
+                    "base_sha": "a" * 40,
+                    "evaluator_sha": "a" * 40,
+                    "governance_root": paths["governance"],
+                    "workspace_root": paths["workspace"],
+                    "runtime_root": paths["runtime"],
+                },
+            )()
+            receipts = (
+                ("governance_toolchain_receipt", self._valid_failure_receipt(paths)),
+                (
+                    "governance_toolchain_evaluation_receipt",
+                    BOOTSTRAP.failure_receipt(
+                        args, self._evaluation_context(), [], "reproduced failure"
+                    ),
+                ),
+                (
+                    "governance_toolchain_shadow_receipt",
+                    BOOTSTRAP.failure_receipt(
+                        args, self._shadow_context(), [], "reproduced failure"
+                    ),
+                ),
+            )
+
+            cases = (
+                (
+                    "mismatched version",
+                    lambda item: item.__setitem__("version", "2.2.0"),
+                ),
+                (
+                    "missing package",
+                    lambda item: item.__setitem__("packages", item["packages"][:-1]),
+                ),
+                (
+                    "duplicate package",
+                    lambda item: item.__setitem__(
+                        "packages", item["packages"][:-1] + [item["packages"][0]]
+                    ),
+                ),
+            )
+            for schema_name, receipt in receipts:
+                with self.subTest(schema=schema_name, packages="empty"):
+                    validate_named(schema_name, receipt, ROOT)
+
+                receipt["packages"] = BOOTSTRAP.toolchain_packages()
+                with self.subTest(schema=schema_name, packages="exact"):
+                    validate_named(schema_name, receipt, ROOT)
+
+                for name, mutate in cases:
+                    with self.subTest(schema=schema_name, mutation=name):
+                        invalid = json.loads(json.dumps(receipt))
+                        mutate(invalid)
+                        with self.assertRaises(SchemaValidationError):
+                            validate_named(schema_name, invalid, ROOT)
 
     def test_main_persists_schema_valid_block_receipt_on_subprocess_failure(
         self,

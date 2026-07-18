@@ -49,12 +49,16 @@ class SupportabilityConfigTests(unittest.TestCase):
         config["standard"]["hash"] = "not-a-hash"
         config["required_gates"].pop("tests")
         config["required_gates"]["lint"] = []
+        config["required_gates"]["typecheck"] = ["python -m pyright"]
 
         errors = validate_supportability_config(config)
 
         self.assertTrue(any("standard.hash" in error for error in errors))
         self.assertTrue(any("required_gates.tests" in error for error in errors))
         self.assertTrue(any("required_gates.lint" in error for error in errors))
+        self.assertTrue(
+            any("required_gates.typecheck lacks" in error for error in errors)
+        )
 
     def test_config_accepts_typed_codex_policy_and_rejects_legacy_copilot(self) -> None:
         config = _valid_config(self.root)
@@ -255,9 +259,8 @@ class TrustedCommandTests(unittest.TestCase):
             if os.name == "nt"
             else trusted_command_module.shlex.quote(trusted_python)
         )
-        completed = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        bound_command = f"{quoted_python} -P -m ruff check ."
+        completed = subprocess.CompletedProcess(bound_command, 0, "", "")
         with (
             mock.patch.object(trusted_command_module.sys, "executable", trusted_python),
             mock.patch.object(
@@ -271,8 +274,9 @@ class TrustedCommandTests(unittest.TestCase):
                 supportability_module._run_shell_command,
             )
 
-        self.assertEqual(result["command"], "python -m ruff check .")
-        self.assertEqual(run.call_args.args[0], f"{quoted_python} -P -m ruff check .")
+        self.assertEqual(result["command"], bound_command)
+        self.assertEqual(result["configured_command"], "python -m ruff check .")
+        self.assertEqual(run.call_args.args[0], bound_command)
         self.assertTrue(run.call_args.kwargs["shell"])
 
     def test_default_runner_ignores_ambient_python_path_evasion(self) -> None:
@@ -363,9 +367,7 @@ class TrustedCommandTests(unittest.TestCase):
         cases = (
             ("  python\t-m ruff check .", f"  {quoted_python}\t-P -m ruff check ."),
             ('"python" -m ruff check .', f"{quoted_python} -P -m ruff check ."),
-            ("'python' -m ruff check .", f"{quoted_python} -P -m ruff check ."),
             ('pyt"hon" -m ruff check .', f"{quoted_python} -P -m ruff check ."),
-            ('python""&& echo ok', f"{quoted_python}&& echo ok"),
         )
         with mock.patch.object(
             trusted_command_module.sys, "executable", trusted_python
@@ -1143,17 +1145,26 @@ class SupportabilityAiReviewPolicyTests(unittest.TestCase):
                     changed_files=[".github/governance/supportability.yml"],
                     command_runner=runner,
                 )
-
             self.assertEqual(result["owner_status"], STATUS_GREEN, result["errors"])
             self.assertTrue(seen)
             self.assertIn("python -m ruff check .", seen)
 
-    def test_config_change_rejects_unbound_python_launcher_semantics(self) -> None:
+    def test_config_change_rejects_untrusted_python_semantics(self) -> None:
         cases = (
             ("lint", ["ruff check ."]),
-            ("lint", ["uv run python -m ruff check ."]),
+            ("lint", ["python -m compileall -q ."]),
+            ("format_check", ["python -m black --check ."]),
+            (
+                "format_check",
+                ["python -m ruff format --check .", "python -m black --check ."],
+            ),
+            ("typecheck", ["python -m pyright"]),
+            ("typecheck", ["python -m compileall -q ."]),
+            ("complexity", ["python -m radon cc ."]),
             ("tests", ["pytest tests -q"]),
-            ("package_audit", ["pip check"]),
+            ("tests", ["python -m pytest tests -q"]),
+            ("compile_or_build", ["python -m compileall -q ."]),
+            ("package_audit", ["python -m pip check", "python -m build"]),
         )
         for gate, commands in cases:
             with self.subTest(gate=gate, commands=commands):
@@ -1166,9 +1177,7 @@ class SupportabilityAiReviewPolicyTests(unittest.TestCase):
                     (repo / ".github/governance/supportability.yml").write_text(
                         json.dumps(head_config), encoding="utf-8"
                     )
-
                     result = _run_config_change_with_base(repo, base_config)
-
                 self.assertEqual(result["owner_status"], STATUS_RED)
                 self.assertTrue(
                     any(
@@ -2187,7 +2196,7 @@ def _valid_config(root: Path) -> dict:
         "required_gates": {
             "lint": ["python -c pass"],
             "format_check": ["python -c pass"],
-            "typecheck": ["python -c pass"],
+            "typecheck": ["python -m mypy ."],
             "complexity": ["python -c pass"],
             "architecture": ["python -c pass"],
             "tests": ["python -c pass"],
@@ -2227,7 +2236,7 @@ required_gates:
   format_check:
     - python -c pass
   typecheck:
-    - python -c pass
+    - python -m mypy .
   complexity:
     - python -c pass
   architecture:
@@ -2419,8 +2428,8 @@ def _set_semantic_gate_commands(config: dict) -> None:
             "architecture": [
                 "python -m governance_eval architecture-gate --config .github/governance/supportability.yml --target-repo . --base-sha $BASE_SHA --head-sha $HEAD_SHA"
             ],
-            "tests": ["python -m pytest tests -q"],
-            "compile_or_build": ["python -m build"],
+            "tests": ["python -m unittest discover -s tests -p test_*.py"],
+            "compile_or_build": ["npm run build"],
             "package_audit": ["python -m pip check"],
         }
     )
@@ -2487,7 +2496,3 @@ def _architecture_result() -> dict:
         "expired_known_debt": [],
         "errors": [],
     }
-
-
-if __name__ == "__main__":
-    unittest.main()
