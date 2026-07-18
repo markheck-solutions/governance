@@ -29,18 +29,116 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Set up Python
+        id: setup-python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.12"
+          python-version: "3.12.13"
+      - name: Provision pinned governance toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-governance-toolchain
+        with:
+          context-kind: PHASE1_SHADOW
+          governance-root: .
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
+          evaluator-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          python-path: ${{ steps.setup-python.outputs.python-path }}
+          repository: ${{ github.repository }}
+          repository-id: ${{ github.repository_id }}
+          head-repository-id: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.id || github.repository_id }}
+          event-name: ${{ github.event_name }}
+          pull-request-number: ${{ github.event.pull_request.number || '' }}
+          workflow-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          run-id: ${{ github.run_id }}
+          run-attempt: ${{ github.run_attempt }}
+          expected-artifact-name: governance-benchmark-json
       - name: Run Phase 1 verification
-        run: python -m governance_eval verify --artifacts-dir artifacts/phase1
+        run: >-
+          "${{ steps.toolchain.outputs.python-path }}"
+          -m governance_eval verify
+          --artifacts-dir artifacts/phase1
+      - name: Validate and preserve shadow toolchain receipt
+        id: receipt
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          BASE_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
+          BOOTSTRAP_OUTCOME: ${{ steps.toolchain.outcome }}
+          DESTINATION: artifacts/phase1/governance-toolchain-receipt.json
+          EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_FILE_SHA256: ${{ steps.toolchain.outputs.receipt-file-sha256 }}
+          GOVERNANCE_ROOT: ${{ github.workspace }}
+          HEAD_REPOSITORY_ID: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.id || github.repository_id }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          SOURCE: ${{ runner.temp }}/governance-toolchain-receipt.json
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          mkdir -p artifacts/phase1
+          "$BASE_PYTHON" -I - <<'PY'
+          import hashlib
+          import hmac
+          import json
+          import os
+          import runpy
+          import shutil
+          from pathlib import Path
+
+          source = Path(os.environ["SOURCE"])
+          destination = Path(os.environ["DESTINATION"])
+          governance_root = Path(os.environ["GOVERNANCE_ROOT"])
+          receipt = json.loads(source.read_text(encoding="utf-8"))
+          bootstrap = runpy.run_path(
+              str(governance_root / "governance_eval/toolchain_bootstrap.py")
+          )
+          pr_number = os.environ["PR_NUMBER"]
+          expected_context = {
+              "context_kind": "PHASE1_SHADOW",
+              "repository": os.environ["REPOSITORY"],
+              "repository_id": os.environ["REPOSITORY_ID"],
+              "head_repository_id": os.environ["HEAD_REPOSITORY_ID"],
+              "event_name": os.environ["EVENT_NAME"],
+              "pull_request_number": int(pr_number) if pr_number else None,
+              "base_sha": os.environ["BASE_SHA"],
+              "head_sha": os.environ["HEAD_SHA"],
+              "workflow_ref": os.environ["WORKFLOW_REF"],
+              "workflow_sha": os.environ["WORKFLOW_SHA"],
+              "run_id": os.environ["RUN_ID"],
+              "run_attempt": os.environ["RUN_ATTEMPT"],
+              "expected_artifact_name": "governance-benchmark-json",
+          }
+          bootstrap["validate_receipt"](governance_root, receipt, expected_context)
+          if receipt.get("status") == "PASS":
+              bootstrap["validate_live_receipt"](
+                  governance_root, receipt, expected_context
+              )
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          expected = os.environ["EXPECTED_FILE_SHA256"]
+          if expected and not hmac.compare_digest(actual, expected):
+              raise SystemExit("shadow toolchain receipt digest mismatch")
+          shutil.copyfile(source, destination)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"status={receipt['status']}", file=output)
+              print(f"file_sha256={actual}", file=output)
+          if os.environ["BOOTSTRAP_OUTCOME"] != "success" or receipt["status"] != "PASS":
+              raise SystemExit("shadow toolchain provisioning is not GREEN")
+          PY
       - name: Read benchmark summary
         id: benchmark
         if: always()
         shell: bash
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
+          "${{ steps.setup-python.outputs.python-path }}" -I - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           from pathlib import Path
 
@@ -78,7 +176,7 @@ jobs:
           REVIEW_QUORUM_JSON: ${{ inputs.review-quorum-json }}
         run: |
           mkdir -p artifacts/review-quorum
-          python - <<'PY'
+          "${{ steps.toolchain.outputs.python-path }}" -I - <<'PY'
           import os
           from pathlib import Path
 
@@ -102,7 +200,7 @@ jobs:
               args+=(--trusted-reviewer-agent "$agent")
             fi
           done
-          python -m governance_eval validate-review-quorum \
+          "${{ steps.toolchain.outputs.python-path }}" -m governance_eval validate-review-quorum \
             --path artifacts/review-quorum/review-quorum.json \
             --head-sha "$GITHUB_SHA" \
             "${args[@]}"
@@ -133,6 +231,14 @@ jobs:
             echo "| Artifact ID | \`${{ steps.upload.outputs.artifact-id }}\` |"
             echo "| Artifact digest | \`${{ steps.upload.outputs.artifact-digest }}\` |"
             echo "| Artifact content hash | \`${{ steps.benchmark.outputs.content_hash }}\` |"
+            echo "| Toolchain status | \`${{ steps.receipt.outputs.status || 'MISSING' }}\` |"
+            echo "| Toolchain lock SHA-256 | \`${{ steps.toolchain.outputs.lock-sha256 || 'MISSING' }}\` |"
+            echo "| Toolchain receipt SHA-256 | \`${{ steps.receipt.outputs.file_sha256 || 'MISSING' }}\` |"
             echo "| Review quorum artifact | \`${{ steps.upload_quorum.outputs.artifact-id || 'not uploaded' }}\` |"
             echo "| Review quorum digest | \`${{ steps.upload_quorum.outputs.artifact-digest || 'not uploaded' }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail closed on shadow evidence
+        if: always() && (steps.toolchain.outcome != 'success' || steps.receipt.outcome != 'success' || steps.benchmark.outputs.result != 'BENCHMARK_PASS')
+        run: |
+          echo "Phase 1 shadow evidence is RED"
+          exit 1

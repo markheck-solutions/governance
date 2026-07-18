@@ -56,6 +56,21 @@ _EVALUATION_CONTEXT_FIELDS = (
     "run_attempt",
     "expected_artifact_name",
 )
+_SHADOW_CONTEXT_FIELDS = (
+    "context_kind",
+    "repository",
+    "repository_id",
+    "head_repository_id",
+    "event_name",
+    "pull_request_number",
+    "base_sha",
+    "head_sha",
+    "workflow_ref",
+    "workflow_sha",
+    "run_id",
+    "run_attempt",
+    "expected_artifact_name",
+)
 _EVALUATION_ACTIONS = frozenset(
     {"opened", "reopened", "synchronize", "ready_for_review"}
 )
@@ -325,11 +340,11 @@ def validate_receipt(
     expected_context: Mapping[str, object],
 ) -> None:
     expected, context_kind = _validated_context(expected_context)
-    schema_name = (
-        "governance_toolchain_receipt.schema.json"
-        if context_kind == "PUBLICATION"
-        else "governance_toolchain_evaluation_receipt.schema.json"
-    )
+    schema_name = {
+        "PUBLICATION": "governance_toolchain_receipt.schema.json",
+        "SUPPORTABILITY_EVALUATION": "governance_toolchain_evaluation_receipt.schema.json",
+        "PHASE1_SHADOW": "governance_toolchain_shadow_receipt.schema.json",
+    }[context_kind]
     _validate_schema(governance_root, schema_name, receipt)
     _validate_payload_digest(receipt, "toolchain receipt")
     _validate_context_binding(receipt, expected)
@@ -444,6 +459,54 @@ def _validated_evaluation_context(
     return context
 
 
+def _validated_shadow_context(value: Mapping[str, object]) -> dict[str, object]:
+    context = dict(value)
+    if set(context) != set(_SHADOW_CONTEXT_FIELDS):
+        raise BootstrapError("authoritative shadow context fields invalid")
+    strings = tuple(
+        field for field in _SHADOW_CONTEXT_FIELDS if field != "pull_request_number"
+    )
+    if any(not isinstance(context.get(key), str) for key in strings):
+        raise BootstrapError("authoritative shadow context types invalid")
+    if context["context_kind"] != "PHASE1_SHADOW":
+        raise BootstrapError("authoritative shadow context kind invalid")
+    if not _REPOSITORY_RE.fullmatch(str(context["repository"])):
+        raise BootstrapError("authoritative shadow repository invalid")
+    for key in ("repository_id", "head_repository_id", "run_id", "run_attempt"):
+        if not _POSITIVE_ID_RE.fullmatch(str(context[key])):
+            raise BootstrapError(f"authoritative shadow {key} invalid")
+    for key in ("base_sha", "head_sha", "workflow_sha"):
+        _validate_sha(f"authoritative shadow {key}", str(context[key]))
+    workflow_ref = str(context["workflow_ref"])
+    marker = "/.github/workflows/governance-shadow.yml@"
+    if marker not in workflow_ref or "\n" in workflow_ref or len(workflow_ref) > 500:
+        raise BootstrapError("authoritative shadow workflow ref invalid")
+    event_name = context["event_name"]
+    pull_request_number = context["pull_request_number"]
+    if event_name == "pull_request":
+        if not isinstance(pull_request_number, int) or pull_request_number < 1:
+            raise BootstrapError("pull request shadow requires a PR number")
+    elif event_name in {"push", "workflow_dispatch"}:
+        if pull_request_number is not None:
+            raise BootstrapError("non-PR shadow forbids a PR number")
+        if context["head_repository_id"] != context["repository_id"]:
+            raise BootstrapError("non-PR shadow repository identity mismatch")
+        if not workflow_ref.endswith("@refs/heads/main"):
+            raise BootstrapError("non-PR shadow requires the main workflow ref")
+        if (
+            event_name == "workflow_dispatch"
+            and context["base_sha"] != context["head_sha"]
+        ):
+            raise BootstrapError(
+                "workflow dispatch shadow requires identical base and head"
+            )
+    else:
+        raise BootstrapError("authoritative shadow event invalid")
+    if context["expected_artifact_name"] != "governance-benchmark-json":
+        raise BootstrapError("authoritative shadow artifact name invalid")
+    return context
+
+
 def _validated_context(
     value: Mapping[str, object],
 ) -> tuple[dict[str, object], str]:
@@ -451,6 +514,8 @@ def _validated_context(
         return _validated_publication_context(value), "PUBLICATION"
     if set(value) == set(_EVALUATION_CONTEXT_FIELDS):
         return _validated_evaluation_context(value), "SUPPORTABILITY_EVALUATION"
+    if set(value) == set(_SHADOW_CONTEXT_FIELDS):
+        return _validated_shadow_context(value), "PHASE1_SHADOW"
     raise BootstrapError("authoritative toolchain context fields invalid")
 
 
@@ -1085,7 +1150,7 @@ def provision(
     _validate_python_version()
     _validate_sha("base SHA", base_sha)
     _validate_sha("evaluator SHA", evaluator_sha)
-    if context_kind == "PUBLICATION":
+    if context_kind in {"PUBLICATION", "PHASE1_SHADOW"}:
         identity_matches = (
             base_sha == expected["base_sha"] and evaluator_sha == expected["head_sha"]
         )
@@ -1295,7 +1360,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--expected-artifact-name", required=True)
     parser.add_argument(
         "--context-kind",
-        choices=("PUBLICATION", "SUPPORTABILITY_EVALUATION"),
+        choices=("PUBLICATION", "SUPPORTABILITY_EVALUATION", "PHASE1_SHADOW"),
         default="PUBLICATION",
     )
     parser.add_argument("--event-action", default="")
@@ -1358,10 +1423,39 @@ def _evaluation_context_from_args(args: argparse.Namespace) -> dict[str, object]
     )
 
 
+def _shadow_context_from_args(args: argparse.Namespace) -> dict[str, object]:
+    raw_pr_number = str(args.pull_request_number)
+    if raw_pr_number:
+        if not re.fullmatch(r"[1-9][0-9]{0,9}", raw_pr_number):
+            raise BootstrapError("pull request number invalid")
+        pull_request_number: int | None = int(raw_pr_number)
+    else:
+        pull_request_number = None
+    return _validated_shadow_context(
+        {
+            "context_kind": "PHASE1_SHADOW",
+            "repository": args.repository,
+            "repository_id": args.repository_id,
+            "head_repository_id": args.head_repository_id,
+            "event_name": args.event_name,
+            "pull_request_number": pull_request_number,
+            "base_sha": args.base_sha,
+            "head_sha": args.evaluator_sha,
+            "workflow_ref": args.workflow_ref,
+            "workflow_sha": args.workflow_sha,
+            "run_id": args.run_id,
+            "run_attempt": args.run_attempt,
+            "expected_artifact_name": args.expected_artifact_name,
+        }
+    )
+
+
 def _context_from_args(args: argparse.Namespace) -> dict[str, object]:
     if args.context_kind == "PUBLICATION":
         return _publication_context_from_args(args)
-    return _evaluation_context_from_args(args)
+    if args.context_kind == "SUPPORTABILITY_EVALUATION":
+        return _evaluation_context_from_args(args)
+    return _shadow_context_from_args(args)
 
 
 def _validated_external_path(
