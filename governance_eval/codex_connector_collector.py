@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, timedelta
 from email.utils import parsedate_to_datetime
-from hashlib import sha256
-from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from governance_eval.hashing import sha256_json
@@ -325,45 +321,3 @@ def _github_response_timestamp(headers: Mapping[str, str]) -> str:
         raise CodexConnectorCollectionError("GitHub response Date header is invalid")
     safe_cutoff = parsed.astimezone(UTC).replace(microsecond=0) - timedelta(seconds=1)
     return safe_cutoff.isoformat().replace("+00:00", "Z")
-
-
-def snapshot_sha256(snapshot: dict[str, Any]) -> str:
-    return "sha256:" + sha256(serialize_codex_connector_snapshot(snapshot)).hexdigest()
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="governance-eval collect-codex-connector-snapshot"
-    )
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--pull-request", required=True, type=int)
-    parser.add_argument("--governance-evaluator-sha", required=True)
-    parser.add_argument("--output", required=True, type=Path)
-    args = parser.parse_args(argv)
-    try:
-        snapshot = collect_codex_connector_snapshot(
-            args.repository,
-            args.pull_request,
-            args.governance_evaluator_sha,
-        )
-        serialized = serialize_codex_connector_snapshot(snapshot)
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_bytes(serialized)
-    except (CodexConnectorCollectionError, OSError, ValueError) as exc:
-        print(f"Codex connector collection failed: {exc}", file=sys.stderr)
-        return 2
-    print(
-        json.dumps(
-            {
-                "output": str(args.output.resolve()),
-                "snapshot_file_sha256": "sha256:" + sha256(serialized).hexdigest(),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

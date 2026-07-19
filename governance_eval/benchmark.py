@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import platform
-import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,7 +11,7 @@ from typing import Any
 from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
-from governance_eval.hashing import sha256_json
+from governance_eval.hashing import git_sha, sha256_json
 from governance_eval.lock import read_spaghetti_lock, validate_spaghetti_lock
 from governance_eval.models import Decision, Label
 from governance_eval.paths import repo_root
@@ -73,7 +72,7 @@ def run_benchmark(
         "run_id": run_id,
         "generated_at": run_id,
         "governance_repository_url": GOVERNANCE_REPOSITORY_URL,
-        "governance_evaluator_git_sha": _git_sha(resolved_root),
+        "governance_evaluator_git_sha": git_sha(resolved_root),
         "governance_target_pack_hash": target_pack_hash(
             resolved_root / DEFAULT_TARGET_PACK
         ),
@@ -232,16 +231,14 @@ def _metrics(repetitions: list[list[dict[str, Any]]]) -> dict[str, Any]:
         ]
         if len(set(evidence_signatures)) != 1:
             flaking_cases += 1
-        else:
-            pass
 
     return {
         "critical_defects_blocked": _blocked_count(historical_critical),
         "critical_defect_recall": _blocked_rate(historical_critical),
         "negative_controls_blocked": _blocked_count(synthetic_defects),
         "negative_control_recall": _blocked_rate(synthetic_defects),
-        "false_blocks": _false_block_count(verified_safe),
-        "false_block_rate": _false_block_rate(verified_safe),
+        "false_blocks": _blocked_count(verified_safe),
+        "false_block_rate": _blocked_rate(verified_safe),
         "repeated_run_decision_stability": stable_cases / len(first) if first else 0.0,
         "deterministic_flake_rate": flaking_cases / len(first) if first else 1.0,
         "execution_duration_seconds": 0.0,
@@ -263,20 +260,6 @@ def _blocked_rate(items: list[dict[str, Any]]) -> float:
 
 
 def _blocked_count(items: list[dict[str, Any]]) -> int:
-    return sum(
-        1
-        for item in items
-        if item["decision"]["decision"] == Decision.BLOCK_TECHNICAL.value
-    )
-
-
-def _false_block_rate(items: list[dict[str, Any]]) -> float:
-    if not items:
-        return 0.0
-    return _false_block_count(items) / len(items)
-
-
-def _false_block_count(items: list[dict[str, Any]]) -> int:
     return sum(
         1
         for item in items
@@ -333,12 +316,3 @@ def _stable_benchmark_payload(result: dict[str, Any]) -> dict[str, Any]:
         "deterministic_evidence_hash": "",
         "artifact_content_hash": "",
     }
-
-
-def _git_sha(root: Path) -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=root, text=True
-        ).strip()
-    except Exception:
-        return "UNKNOWN"

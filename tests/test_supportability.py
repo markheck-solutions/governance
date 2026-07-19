@@ -1088,28 +1088,6 @@ class SupportabilityGateTests(unittest.TestCase):
                 ],
             )
 
-    def test_gate_blocks_existing_copilot_review_evidence_checker_change(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _synthetic_repo(Path(tmp), self.root)
-
-            with mock.patch(
-                "governance_eval.supportability._git_show_text",
-                return_value="base parser",
-            ):
-                result = run_supportability_gate(
-                    repo / ".github/governance/supportability.yml",
-                    repo,
-                    "a" * 40,
-                    "b" * 40,
-                    changed_files=["governance_eval/copilot_review_evidence.py"],
-                    command_runner=_passing_runner,
-                )
-
-            self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(
-                any("copilot_review_evidence.py" in error for error in result["errors"])
-            )
-
 
 class SupportabilityAiReviewPolicyTests(unittest.TestCase):
     def setUp(self) -> None:

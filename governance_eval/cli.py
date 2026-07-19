@@ -12,8 +12,6 @@ from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
 from governance_eval.architecture_gate import main as architecture_gate_main
-from governance_eval.delivery_readiness import main as delivery_readiness_main
-from governance_eval.delivery_readiness import validate_review_quorum_document
 from governance_eval.lock import write_spaghetti_lock
 from governance_eval.paths import repo_root
 from governance_eval.supportability import main as supportability_main
@@ -28,7 +26,6 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in {
         "supportability-config",
         "supportability-gate",
-        "copilot-review-gate",
         "delivery-receipt",
         "bootstrap-receipt",
         "verify-receipt",
@@ -81,7 +78,6 @@ def main(argv: list[str] | None = None) -> int:
         "--review-gate",
         choices=[
             "GITHUB_CODEX_FINAL_REVIEW",
-            "FALLBACK_CLEAN_ROOM_QUORUM",
             "NOT_APPLICABLE",
         ],
         default=None,
@@ -114,35 +110,6 @@ def main(argv: list[str] | None = None) -> int:
         choices=["HISTORICAL_FIXED", "SAFE_FIXED", "CANDIDATE_DYNAMIC"],
         required=True,
     )
-
-    delivery_parser = subparsers.add_parser(
-        "delivery-readiness", help="verify PR review/workflow readiness before merge"
-    )
-    delivery_parser.add_argument("--repo", required=True)
-    delivery_parser.add_argument("--pr", required=True, type=int)
-    delivery_parser.add_argument("--payload", default=None)
-    delivery_parser.add_argument("--benchmark-artifact", default=None)
-    delivery_parser.add_argument("--benchmark-artifact-digest", default=None)
-    delivery_parser.add_argument("--benchmark-run-id", default=None)
-    delivery_parser.add_argument("--benchmark-artifact-id", default=None)
-    delivery_parser.add_argument(
-        "--benchmark-artifact-name", default="governance-benchmark-json"
-    )
-    delivery_parser.add_argument(
-        "--require-github-artifact-digest", action="store_true"
-    )
-    delivery_parser.add_argument("--fallback-quorum", default=None)
-    delivery_parser.add_argument(
-        "--trusted-reviewer-agent", action="append", default=[]
-    )
-
-    quorum_parser = subparsers.add_parser(
-        "validate-review-quorum", help="validate fallback review quorum JSON"
-    )
-    quorum_parser.add_argument("--path", type=Path, required=True)
-    quorum_parser.add_argument("--head-sha", required=True)
-    quorum_parser.add_argument("--base-sha", default="")
-    quorum_parser.add_argument("--trusted-reviewer-agent", action="append", default=[])
 
     args = parser.parse_args(argv)
     root = repo_root(getattr(args, "root", None))
@@ -203,45 +170,6 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
-    if args.command == "delivery-readiness":
-        delivery_args = ["--repo", args.repo, "--pr", str(args.pr)]
-        if args.payload:
-            delivery_args.extend(["--payload", args.payload])
-        if args.benchmark_artifact:
-            delivery_args.extend(["--benchmark-artifact", args.benchmark_artifact])
-        if args.benchmark_artifact_digest:
-            delivery_args.extend(
-                ["--benchmark-artifact-digest", args.benchmark_artifact_digest]
-            )
-        if args.benchmark_run_id:
-            delivery_args.extend(["--benchmark-run-id", args.benchmark_run_id])
-        if args.benchmark_artifact_id:
-            delivery_args.extend(
-                ["--benchmark-artifact-id", args.benchmark_artifact_id]
-            )
-        if args.benchmark_artifact_name:
-            delivery_args.extend(
-                ["--benchmark-artifact-name", args.benchmark_artifact_name]
-            )
-        if args.require_github_artifact_digest:
-            delivery_args.append("--require-github-artifact-digest")
-        if args.fallback_quorum:
-            delivery_args.extend(["--fallback-quorum", args.fallback_quorum])
-        for agent_id in args.trusted_reviewer_agent:
-            delivery_args.extend(["--trusted-reviewer-agent", agent_id])
-        return delivery_readiness_main(delivery_args)
-    if args.command == "validate-review-quorum":
-        path = root / args.path if not args.path.is_absolute() else args.path
-        quorum = json.loads(path.read_text(encoding="utf-8"))
-        errors = validate_review_quorum_document(
-            quorum, args.head_sha, args.base_sha, args.trusted_reviewer_agent
-        )
-        print(
-            json.dumps(
-                {"valid": not errors, "errors": errors}, indent=2, sort_keys=True
-            )
-        )
-        return 0 if not errors else 1
     raise AssertionError(args.command)
 
 

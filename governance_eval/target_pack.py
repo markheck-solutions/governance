@@ -212,14 +212,6 @@ def _validate_requested_repository(
         raise ValueError(
             f"target repository mismatch for pack {pack['id']}: {repository_url}"
         )
-    if (
-        revision_mode == "CANDIDATE_DYNAMIC"
-        and repository_url
-        and _normalize_url(repository_url) != _normalize_url(pack["repository_url"])
-    ):
-        raise ValueError(
-            f"candidate mode cannot override target repository for pack {pack['id']}"
-        )
 
 
 def _validate_requested_revisions(

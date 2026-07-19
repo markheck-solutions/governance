@@ -13,7 +13,3 @@ def repo_root(start: Path | None = None) -> Path:
 
 def case_dir(root: Path) -> Path:
     return root / "cases" / "v1"
-
-
-def schema_dir(root: Path) -> Path:
-    return root / "schemas" / "v1"

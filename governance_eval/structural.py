@@ -925,10 +925,6 @@ def _gate_delta(
     }
 
 
-def _workflow_command_text(workflows: dict[str, Any]) -> str:
-    return "\n".join(_workflow_command_lines(workflows))
-
-
 def _workflow_command_lines(workflows: dict[str, Any]) -> list[str]:
     commands: list[str] = []
     for item in sorted(workflows.get("run_commands") or []):

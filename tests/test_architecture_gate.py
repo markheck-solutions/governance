@@ -26,13 +26,15 @@ class ArchitectureGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 
-    def test_pinned_runner_slice_has_independent_architecture_coverage(self) -> None:
+    def test_ponytail_cleanup_slice_has_independent_architecture_coverage(self) -> None:
         changed_files = [
-            ".github/workflows/supportability-gate.yml",
+            ".github/workflows/governance-shadow.yml",
+            "governance_eval/codex_connector_collector.py",
+            "governance_eval/structural.py",
             "governance_eval/supportability.py",
-            "governance_eval/trusted_command.py",
             "tests/test_architecture_gate.py",
             "tests/test_supportability.py",
+            "tests/test_structural_delta.py",
             "tests/test_workflows.py",
         ]
 

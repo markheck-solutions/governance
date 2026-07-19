@@ -73,7 +73,7 @@
     "python_version": { "type": "string" },
     "review_gate": {
       "type": "string",
-      "enum": ["GITHUB_CODEX_FINAL_REVIEW", "FALLBACK_CLEAN_ROOM_QUORUM", "NOT_APPLICABLE"]
+      "enum": ["GITHUB_CODEX_FINAL_REVIEW", "NOT_APPLICABLE"]
     },
     "github_review_state": {
       "type": "string",
