@@ -131,6 +131,13 @@ def validate_benchmark_result(result: dict[str, Any], root: Path | None = None) 
     resolved_root = repo_root(root)
     validate_named("benchmark_run_result", result, resolved_root)
     target_lock = result["target_lock"]
+    _validate_target_lock(target_lock)
+    _validate_top_level_shas(result)
+    _validate_target_lock_bindings(result, target_lock)
+    _validate_case_evidence(result["cases"], resolved_root)
+
+
+def _validate_target_lock(target_lock: dict[str, Any]) -> None:
     required_lock_fields = {
         "base_sha",
         "head_sha",
@@ -144,13 +151,11 @@ def validate_benchmark_result(result: dict[str, Any], root: Path | None = None) 
             f"target_lock missing fields: {missing_lock_fields}"
         )
     for key in required_lock_fields:
-        value = target_lock[key]
-        if not (
-            isinstance(value, str)
-            and len(value) == 40
-            and all(char in "0123456789abcdef" for char in value)
-        ):
+        if not _full_sha(target_lock[key]):
             raise SchemaValidationError(f"target_lock.{key}: expected full SHA")
+
+
+def _validate_top_level_shas(result: dict[str, Any]) -> None:
     top_level_shas = {
         "governance_evaluator_git_sha": result["governance_evaluator_git_sha"],
         "target_base_sha": result["target_base_sha"],
@@ -158,12 +163,21 @@ def validate_benchmark_result(result: dict[str, Any], root: Path | None = None) 
         "target_merge_sha": result["target_merge_sha"],
     }
     for key, value in top_level_shas.items():
-        if not (
-            isinstance(value, str)
-            and len(value) == 40
-            and all(char in "0123456789abcdef" for char in value)
-        ):
+        if not _full_sha(value):
             raise SchemaValidationError(f"{key}: expected full SHA")
+
+
+def _full_sha(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _validate_target_lock_bindings(
+    result: dict[str, Any], target_lock: dict[str, Any]
+) -> None:
     if result["target_repository_url"] != target_lock["repository_url"]:
         raise SchemaValidationError(
             "target_repository_url must match target_lock.repository_url"
@@ -180,12 +194,15 @@ def validate_benchmark_result(result: dict[str, Any], root: Path | None = None) 
         raise SchemaValidationError(
             "target_merge_sha must match target_lock.merge_commit_sha"
         )
-    for item in result["cases"]:
-        validate_named("final_decision", item["decision"], resolved_root)
+
+
+def _validate_case_evidence(items: list[dict[str, Any]], root: Path) -> None:
+    for item in items:
+        validate_named("final_decision", item["decision"], root)
         for evidence in item["evidence"]:
-            validate_named("detector_evidence", evidence, resolved_root)
+            validate_named("detector_evidence", evidence, root)
             for finding in evidence["findings"]:
-                validate_named("review_finding", finding, resolved_root)
+                validate_named("review_finding", finding, root)
 
 
 def _case_result(item: dict[str, Any]) -> dict[str, Any]:

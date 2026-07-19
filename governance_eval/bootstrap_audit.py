@@ -26,107 +26,17 @@ def generate_bootstrap_audit_receipt(
     candidate = str(record.get("candidate_sha") or "")
     pr_head = str(record.get("pr_head_before_merge") or "")
     errors: list[str] = []
-    repository_url = str(record.get("repository_url") or "")
-    match = re.fullmatch(
-        r"https://github\.com/(?P<slug>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)",
-        repository_url,
+    context = _bootstrap_resource_context(record, errors)
+    repository_url = context["repository_url"]
+    slug = context["slug"]
+    safe_slug = context["safe_slug"]
+    expected_protection_url = context["protection_url"]
+    urls_bound = context["urls_bound"]
+    actor, pull_request_number, safe_etags, etags_valid = _bootstrap_identity(
+        record, errors
     )
-    slug = match.group("slug") if match else ""
-    safe_slug = slug or "invalid/invalid"
-    expected_protection_url = (
-        f"https://api.github.com/repos/{slug}/branches/main/protection"
-    )
-    expected_rulesets_url = f"https://api.github.com/repos/{slug}/rulesets"
-    urls_bound = bool(
-        slug
-        and record.get("protection_url") == expected_protection_url
-        and record.get("rulesets_url") == expected_rulesets_url
-    )
-    if not urls_bound:
-        errors.append("repository resource URLs are not bound")
-    actor = str(record.get("actor") or "")
-    if not actor:
-        errors.append("actor is invalid")
-    pull_request_number = record.get("pull_request_number")
-    if not isinstance(pull_request_number, int) or pull_request_number < 1:
-        errors.append("pull_request_number is invalid")
-    etags = record.get("resource_etags")
-    expected_etag_keys = {
-        "pre_protection",
-        "post_protection",
-        "pre_rulesets",
-        "post_rulesets",
-    }
-    etags_valid = bool(
-        isinstance(etags, dict)
-        and set(etags) == expected_etag_keys
-        and all(
-            value is None or isinstance(value, str) and value
-            for value in etags.values()
-        )
-    )
-    if not etags_valid:
-        errors.append("resource_etags are invalid")
-    safe_etags = {
-        key: value if isinstance(value, str) and value else None
-        for key in expected_etag_keys
-        for value in [etags.get(key) if isinstance(etags, dict) else None]
-    }
-    for field in ("candidate_sha", "pr_head_before_merge", "merge_sha", "rollback_sha"):
-        if not _SHA_RE.fullmatch(str(record.get(field) or "")):
-            errors.append(f"{field} is invalid")
-    events = record.get("mutation_events")
-    if not isinstance(events, list) or len(events) != 2:
-        errors.append("exactly two protection mutation events are required")
-        events = []
-    else:
-        expected = ("disable_enforce_admins", "restore_enforce_admins")
-        for index, (event, action) in enumerate(zip(events, expected, strict=True)):
-            if not isinstance(event, dict) or event.get("action") != action:
-                errors.append(f"mutation event {index} action is invalid")
-                continue
-            if not _timestamp_valid(event.get("server_timestamp")):
-                errors.append(f"mutation event {index} timestamp is invalid")
-            if event.get("resource_url") != expected_protection_url:
-                errors.append(f"mutation event {index} resource_url is invalid")
-            for key in ("request_sha256", "response_sha256"):
-                if not _DIGEST_RE.fullmatch(str(event.get(key) or "")):
-                    errors.append(f"mutation event {index} {key} is invalid")
-            for payload_key, digest_key in (
-                ("request", "request_sha256"),
-                ("response", "response_sha256"),
-            ):
-                if payload_key not in event:
-                    errors.append(f"mutation event {index} {payload_key} is missing")
-                elif sha256_json(event[payload_key]) != event.get(digest_key):
-                    errors.append(f"mutation event {index} {digest_key} mismatch")
-            raw_request = event.get("request")
-            raw_response = event.get("response")
-            request: dict[str, Any] = (
-                raw_request if isinstance(raw_request, dict) else {}
-            )
-            response: dict[str, Any] = (
-                raw_response if isinstance(raw_response, dict) else {}
-            )
-            endpoint = f"{expected_protection_url}/enforce_admins"
-            expected_method = "DELETE" if index == 0 else "POST"
-            expected_status = 204 if index == 0 else 200
-            if (
-                request.get("method") != expected_method
-                or request.get("url") != endpoint
-            ):
-                errors.append(f"mutation event {index} request semantics are invalid")
-            if response.get("status") != expected_status:
-                errors.append(f"mutation event {index} response status is invalid")
-            body = response.get("body")
-            if index == 0 and body is not None:
-                errors.append("disable response body must be null")
-            if index == 1 and not (
-                isinstance(body, dict)
-                and body.get("enabled") is True
-                and body.get("url") == endpoint
-            ):
-                errors.append("restore response body is invalid")
+    _validate_bootstrap_shas(record, errors)
+    events = _bootstrap_mutation_events(record, expected_protection_url, errors)
     started = _timestamp(record.get("started_at"), errors, "started_at")
     completed = _timestamp(record.get("completed_at"), errors, "completed_at")
     expires = _timestamp(record.get("expires_at"), errors, "expires_at")
@@ -156,7 +66,7 @@ def generate_bootstrap_audit_receipt(
         "schema_version": "1.0",
         "decision": "BLOCK_TECHNICAL" if errors else "PASS",
         "repository_url": repository_url
-        if match
+        if slug
         else "https://github.com/invalid/invalid",
         "protection_url": record.get("protection_url")
         if isinstance(record.get("protection_url"), str)
@@ -211,6 +121,142 @@ def generate_bootstrap_audit_receipt(
     receipt["content_hash"] = sha256_json(receipt)
     validate_named("bootstrap_audit_receipt", receipt)
     return receipt
+
+
+def _bootstrap_resource_context(
+    record: dict[str, Any], errors: list[str]
+) -> dict[str, Any]:
+    repository_url = str(record.get("repository_url") or "")
+    match = re.fullmatch(
+        r"https://github\.com/(?P<slug>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)",
+        repository_url,
+    )
+    slug = match.group("slug") if match else ""
+    protection_url = f"https://api.github.com/repos/{slug}/branches/main/protection"
+    rulesets_url = f"https://api.github.com/repos/{slug}/rulesets"
+    urls_bound = bool(
+        slug
+        and record.get("protection_url") == protection_url
+        and record.get("rulesets_url") == rulesets_url
+    )
+    if not urls_bound:
+        errors.append("repository resource URLs are not bound")
+    return {
+        "repository_url": repository_url,
+        "slug": slug,
+        "safe_slug": slug or "invalid/invalid",
+        "protection_url": protection_url,
+        "rulesets_url": rulesets_url,
+        "urls_bound": urls_bound,
+    }
+
+
+def _bootstrap_identity(
+    record: dict[str, Any], errors: list[str]
+) -> tuple[str, Any, dict[str, str | None], bool]:
+    actor = str(record.get("actor") or "")
+    if not actor:
+        errors.append("actor is invalid")
+    pull_request_number = record.get("pull_request_number")
+    if not isinstance(pull_request_number, int) or pull_request_number < 1:
+        errors.append("pull_request_number is invalid")
+    keys = {"pre_protection", "post_protection", "pre_rulesets", "post_rulesets"}
+    etags = record.get("resource_etags")
+    valid = bool(
+        isinstance(etags, dict)
+        and set(etags) == keys
+        and all(
+            value is None or isinstance(value, str) and value
+            for value in etags.values()
+        )
+    )
+    if not valid:
+        errors.append("resource_etags are invalid")
+    safe = {
+        key: value if isinstance(value, str) and value else None
+        for key in keys
+        for value in [etags.get(key) if isinstance(etags, dict) else None]
+    }
+    return actor, pull_request_number, safe, valid
+
+
+def _validate_bootstrap_shas(record: dict[str, Any], errors: list[str]) -> None:
+    for field in ("candidate_sha", "pr_head_before_merge", "merge_sha", "rollback_sha"):
+        if not _SHA_RE.fullmatch(str(record.get(field) or "")):
+            errors.append(f"{field} is invalid")
+
+
+def _bootstrap_mutation_events(
+    record: dict[str, Any], protection_url: str, errors: list[str]
+) -> list[Any]:
+    events = record.get("mutation_events")
+    if not isinstance(events, list) or len(events) != 2:
+        errors.append("exactly two protection mutation events are required")
+        return []
+    actions = ("disable_enforce_admins", "restore_enforce_admins")
+    for index, (event, action) in enumerate(zip(events, actions, strict=True)):
+        errors.extend(_mutation_event_errors(index, event, action, protection_url))
+    return events
+
+
+def _mutation_event_errors(
+    index: int, event: Any, action: str, protection_url: str
+) -> list[str]:
+    if not isinstance(event, dict) or event.get("action") != action:
+        return [f"mutation event {index} action is invalid"]
+    errors: list[str] = []
+    if not _timestamp_valid(event.get("server_timestamp")):
+        errors.append(f"mutation event {index} timestamp is invalid")
+    if event.get("resource_url") != protection_url:
+        errors.append(f"mutation event {index} resource_url is invalid")
+    errors.extend(_mutation_digest_errors(index, event))
+    errors.extend(_mutation_semantic_errors(index, event, protection_url))
+    return errors
+
+
+def _mutation_digest_errors(index: int, event: dict[str, Any]) -> list[str]:
+    errors = [
+        f"mutation event {index} {key} is invalid"
+        for key in ("request_sha256", "response_sha256")
+        if not _DIGEST_RE.fullmatch(str(event.get(key) or ""))
+    ]
+    for payload_key, digest_key in (
+        ("request", "request_sha256"),
+        ("response", "response_sha256"),
+    ):
+        if payload_key not in event:
+            errors.append(f"mutation event {index} {payload_key} is missing")
+        elif sha256_json(event[payload_key]) != event.get(digest_key):
+            errors.append(f"mutation event {index} {digest_key} mismatch")
+    return errors
+
+
+def _mutation_semantic_errors(
+    index: int, event: dict[str, Any], protection_url: str
+) -> list[str]:
+    raw_request = event.get("request")
+    raw_response = event.get("response")
+    request: dict[str, Any] = raw_request if isinstance(raw_request, dict) else {}
+    response: dict[str, Any] = raw_response if isinstance(raw_response, dict) else {}
+    endpoint = f"{protection_url}/enforce_admins"
+    errors: list[str] = []
+    if (
+        request.get("method") != ("DELETE" if index == 0 else "POST")
+        or request.get("url") != endpoint
+    ):
+        errors.append(f"mutation event {index} request semantics are invalid")
+    if response.get("status") != (204 if index == 0 else 200):
+        errors.append(f"mutation event {index} response status is invalid")
+    body = response.get("body")
+    if index == 0 and body is not None:
+        errors.append("disable response body must be null")
+    if index == 1 and not (
+        isinstance(body, dict)
+        and body.get("enabled") is True
+        and body.get("url") == endpoint
+    ):
+        errors.append("restore response body is invalid")
+    return errors
 
 
 def main(argv: list[str] | None = None) -> int:
