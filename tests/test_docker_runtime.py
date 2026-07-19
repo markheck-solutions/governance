@@ -199,6 +199,22 @@ class DockerRuntimePolicyTests(unittest.TestCase):
         self.assertEqual(outcome["errors"], ["Docker container cleanup failed"])
         self.assertGreater(outcome["stdout"]["captured_bytes"], 0)
 
+    def test_cleanup_listing_transport_failure_blocks(self) -> None:
+        with mock.patch(
+            "governance_eval.docker_runtime._command",
+            side_effect=(
+                SimpleNamespace(returncode=1, stdout="", stderr="daemon unavailable"),
+                SimpleNamespace(returncode=0, stdout="", stderr=""),
+            ),
+        ):
+            errors = docker_runtime._cleanup_errors(
+                Path("C:/trusted/docker.exe"),
+                "npipe:////./pipe/docker_engine",
+                "governance-test-container",
+            )
+
+        self.assertEqual(errors, ["Docker container cleanup failed"])
+
     def _host_result(
         self,
         *,

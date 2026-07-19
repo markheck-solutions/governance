@@ -167,6 +167,29 @@ class ExecutionPlanV2Tests(unittest.TestCase):
             finally:
                 chdir(original)
 
+    def test_rejects_self_hashed_pull_request_url_mismatch(self) -> None:
+        receipt = _receipt()
+        hostile = CheckoutReceipt(
+            **{
+                **receipt.__dict__,
+                "pull_request": {
+                    **receipt.pull_request,
+                    "url": "https://github.com/markheck-solutions/other/pull/999",
+                },
+                "receipt_id": "",
+            }
+        )
+        unsigned = hostile.to_json()
+        unsigned.pop("receipt_id")
+        hostile = CheckoutReceipt(
+            **{**hostile.__dict__, "receipt_id": sha256_json(unsigned)}
+        )
+
+        with self.assertRaisesRegex(ExecutionPlanV2Error, "pull request URL"):
+            compile_execution_plan_v2(
+                hostile, capability="lint", adapter_id="python.ruff-check.v1"
+            )
+
     def test_blocks_rehashed_runtime_or_command_mutation(self) -> None:
         plan = compile_execution_plan_v2(
             _receipt(), capability="lint", adapter_id="python.ruff-check.v1"

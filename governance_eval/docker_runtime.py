@@ -338,20 +338,27 @@ def _run_bounded(
 
 def _cleanup_errors(docker: Path, docker_host: str, container_name: str) -> list[str]:
     environment = _docker_environment(docker)
-    inspect_command = [
+    list_command = [
         str(docker),
         f"--host={docker_host}",
         "container",
-        "inspect",
-        container_name,
+        "ls",
+        "--all",
+        "--quiet",
+        "--filter",
+        f"name=^/{container_name}$",
     ]
     try:
-        cleanup = _command(inspect_command, timeout=10, check=False, env=environment)
+        cleanup = _command(list_command, timeout=10, check=False, env=environment)
     except (OSError, subprocess.SubprocessError):
         return _remove_after_cleanup_error(
             docker, docker_host, container_name, environment
         )
     if cleanup.returncode != 0:
+        return _remove_after_cleanup_error(
+            docker, docker_host, container_name, environment
+        )
+    if not cleanup.stdout.strip():
         return []
     return _remove_after_cleanup_error(docker, docker_host, container_name, environment)
 

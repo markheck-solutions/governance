@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from governance_eval.capability_catalog import get_capability_adapter
 from governance_eval.checkout_receipt import CheckoutReceipt
@@ -132,6 +133,8 @@ def _validate_receipt(receipt: CheckoutReceipt) -> None:
         validate_packaged_named("checkout_receipt", payload)
     except (KeyError, OSError, SchemaValidationError, ValueError) as exc:
         raise ExecutionPlanV2Error("checkout receipt schema is invalid") from exc
+    if not _receipt_url_matches_identity(payload):
+        raise ExecutionPlanV2Error("checkout receipt pull request URL is invalid")
     receipt_id = payload.pop("receipt_id", None)
     if receipt_id != sha256_json(payload):
         raise ExecutionPlanV2Error("checkout receipt integrity is invalid")
@@ -142,6 +145,21 @@ def _validate_receipt(receipt: CheckoutReceipt) -> None:
         datetime.fromisoformat(observed_at.removesuffix("Z") + "+00:00")
     except ValueError as exc:
         raise ExecutionPlanV2Error("checkout receipt observed_at is invalid") from exc
+
+
+def _receipt_url_matches_identity(payload: dict[str, Any]) -> bool:
+    repository = payload["repository"]["full_name"]
+    pull_request = payload["pull_request"]
+    parsed = urlparse(pull_request["url"])
+    expected_path = f"/{repository}/pull/{pull_request['number']}"
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "github.com"
+        and parsed.path == expected_path
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def _unsigned(plan: ExecutionPlanV2) -> dict[str, Any]:
