@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from governance_eval.hashing import sha256_file, sha256_json
 from governance_eval.schema_validator import SchemaValidationError
-from governance_eval.schemas import validate_named
+from governance_eval.schemas import validate_packaged_named
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -102,7 +102,7 @@ def bind_checkout(
     )
     receipt = replace(receipt, receipt_id=sha256_json(_unsigned(receipt)))
     try:
-        validate_named("checkout_receipt", receipt.to_json())
+        validate_packaged_named("checkout_receipt", receipt.to_json())
     except (KeyError, OSError, SchemaValidationError, ValueError) as exc:
         raise CheckoutReceiptError(
             f"checkout receipt schema is invalid: {exc}"

@@ -70,6 +70,17 @@ def docker_run_argv(
     ]
 
 
+def runtime_root_name(plan: ExecutionPlanV2) -> str:
+    token = sha256_json(
+        {"plan_id": plan.plan_id, "checkout_receipt_id": plan.checkout_receipt_id}
+    )[:24]
+    return f"governance-runtime-{token}"
+
+
+def runtime_root_path(plan: ExecutionPlanV2) -> Path:
+    return Path(tempfile.gettempdir()).resolve() / runtime_root_name(plan)
+
+
 def execute_ruff_docker(
     *,
     plan: ExecutionPlanV2,
@@ -81,6 +92,9 @@ def execute_ruff_docker(
     started = datetime.now(UTC)
     command: list[str] = []
     docker: Path | None = None
+    outcome: dict[str, Any] | None = None
+    errors: list[str] = []
+    runtime_root: Path | None = None
     docker_host = str(plan.runtime.get("docker_host", "unknown"))
     try:
         _validate_plan_binding(plan, receipt)
@@ -92,50 +106,57 @@ def execute_ruff_docker(
         git = _trusted_git(receipt)
         _validate_evaluator(evaluator_root, receipt.evaluator, git)
         _verify_image(docker, docker_host, plan.runtime["image"])
-        with tempfile.TemporaryDirectory(prefix="governance-runtime-") as temporary:
-            runtime_root = Path(temporary)
-            workspace = runtime_root / "workspace"
-            toolchain_root = runtime_root / "toolchain"
-            _seal_toolchain(toolchain_binary, toolchain_root, plan)
-            _materialize_tree(target_root, plan.target, workspace, git)
-            container_name = f"governance-{plan.plan_id[:12]}-{uuid.uuid4().hex[:8]}"
-            command = docker_run_argv(
-                docker=docker,
-                docker_host=docker_host,
-                plan=plan,
-                workspace=workspace,
-                toolchain_root=toolchain_root,
-                container_name=container_name,
-            )
-            outcome = _run_bounded(
-                command,
-                docker=docker,
-                docker_host=docker_host,
-                container_name=container_name,
-                timeout_seconds=plan.step["timeout_seconds"],
-                output_limit=plan.step["output_limit_bytes"],
-            )
-        return _result(
-            plan,
-            receipt,
-            docker,
-            docker_host,
-            command,
-            started,
-            outcome=outcome,
-            errors=outcome["errors"],
+        candidate_root = runtime_root_path(plan)
+        candidate_root.mkdir(mode=0o700)
+        runtime_root = candidate_root
+        workspace = runtime_root / "workspace"
+        toolchain_root = runtime_root / "toolchain"
+        _seal_toolchain(toolchain_binary, toolchain_root, plan)
+        _materialize_tree(target_root, plan.target, workspace, git)
+        container_name = f"governance-{plan.plan_id[:12]}-{uuid.uuid4().hex[:8]}"
+        command = docker_run_argv(
+            docker=docker,
+            docker_host=docker_host,
+            plan=plan,
+            workspace=workspace,
+            toolchain_root=toolchain_root,
+            container_name=container_name,
         )
+        outcome = _run_bounded(
+            command,
+            docker=docker,
+            docker_host=docker_host,
+            container_name=container_name,
+            timeout_seconds=plan.step["timeout_seconds"],
+            output_limit=plan.step["output_limit_bytes"],
+        )
+        errors.extend(outcome["errors"])
     except (DockerRuntimeError, OSError, subprocess.SubprocessError) as exc:
-        return _result(
-            plan,
-            receipt,
-            docker,
-            docker_host,
-            command,
-            started,
-            outcome=None,
-            errors=[str(exc)],
-        )
+        errors.append(str(exc))
+    finally:
+        cleanup_error = _remove_runtime_root(runtime_root)
+        if cleanup_error is not None:
+            errors.append(cleanup_error)
+    return _result(
+        plan,
+        receipt,
+        docker,
+        docker_host,
+        command,
+        started,
+        outcome=outcome,
+        errors=errors,
+    )
+
+
+def _remove_runtime_root(runtime_root: Path | None) -> str | None:
+    if runtime_root is None:
+        return None
+    try:
+        shutil.rmtree(runtime_root)
+    except OSError:
+        return "disposable runtime root cleanup failed"
+    return None
 
 
 def _validate_plan_binding(plan: ExecutionPlanV2, receipt: CheckoutReceipt) -> None:

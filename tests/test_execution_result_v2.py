@@ -8,6 +8,7 @@ from os import chdir
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from governance_eval.docker_runtime import runtime_root_path
 from governance_eval.execution_plan_v2 import ExecutionPlanV2, compile_execution_plan_v2
 from governance_eval.execution_result_v2 import validate_execution_result_v2
 from governance_eval.hashing import sha256_json
@@ -28,6 +29,7 @@ def _result() -> tuple[dict[str, object], object, object]:
     plan = compile_execution_plan_v2(
         receipt, capability="lint", adapter_id="python.ruff-check.v1"
     )
+    runtime_root = runtime_root_path(plan)
     command = [
         plan.runtime["docker_path"],
         f"--host={plan.runtime['docker_host']}",
@@ -48,9 +50,9 @@ def _result() -> tuple[dict[str, object], object, object]:
         "--env=PYTHONDONTWRITEBYTECODE=1",
         "--workdir=/workspace",
         "--mount",
-        "type=bind,src=C:\\temp\\governance-target-1\\workspace,dst=/workspace",
+        f"type=bind,src={runtime_root / 'workspace'},dst=/workspace",
         "--mount",
-        "type=bind,src=C:\\temp\\sealed-toolchain,dst=/opt/governance-toolchain,readonly",
+        f"type=bind,src={runtime_root / 'toolchain'},dst=/opt/governance-toolchain,readonly",
         plan.runtime["image"],
         *plan.step["argv"],
     ]
@@ -93,7 +95,7 @@ class ExecutionResultV2Tests(unittest.TestCase):
         self.assertEqual(assessment["integrity_status"], "INTEGRITY_VALID")
 
     def test_rejects_rehashed_command_runtime_and_output_mutation(self) -> None:
-        for mutation in ("command", "image", "output"):
+        for mutation in ("command", "image", "output", "mounts"):
             with self.subTest(mutation=mutation):
                 payload, plan, receipt = _result()
                 hostile = deepcopy(payload)
@@ -102,7 +104,17 @@ class ExecutionResultV2Tests(unittest.TestCase):
                 elif mutation == "image":
                     hostile["runtime"]["image"] = "python@sha256:" + "0" * 64
                 else:
-                    hostile["stdout"]["captured_base64"] = "WA=="
+                    if mutation == "output":
+                        hostile["stdout"]["captured_base64"] = "WA=="
+                    else:
+                        trusted_root = runtime_root_path(plan)
+                        attacker_root = (
+                            Path("C:/attacker-controlled") / trusted_root.name
+                        )
+                        hostile["command"] = [
+                            item.replace(str(trusted_root), str(attacker_root))
+                            for item in hostile["command"]
+                        ]
                 hostile["artifact_id"] = sha256_json({**hostile, "artifact_id": ""})
 
                 assessment = validate_execution_result_v2(hostile, plan, receipt)

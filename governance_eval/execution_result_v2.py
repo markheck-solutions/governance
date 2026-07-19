@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from governance_eval.checkout_receipt import CheckoutReceipt
-from governance_eval.docker_runtime import docker_run_argv
+from governance_eval.docker_runtime import docker_run_argv, runtime_root_path
 from governance_eval.execution_plan_v2 import ExecutionPlanV2, assess_execution_plan_v2
 from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
@@ -131,6 +131,9 @@ def _command_error(
         docker_host = command[1].removeprefix("--host=")
     except (StopIteration, IndexError):
         return "execution result v2 command shape is invalid"
+    mount_error = _mount_error(workspace, toolchain_root, plan)
+    if mount_error is not None:
+        return mount_error
     expected = docker_run_argv(
         docker=Path(docker_path),
         docker_host=docker_host,
@@ -141,6 +144,19 @@ def _command_error(
     )
     if command != expected:
         return "execution result v2 command mismatch"
+    return None
+
+
+def _mount_error(
+    workspace_value: str, toolchain_value: str, plan: ExecutionPlanV2
+) -> str | None:
+    workspace = Path(workspace_value)
+    toolchain = Path(toolchain_value)
+    expected_root = runtime_root_path(plan)
+    if workspace != expected_root / "workspace":
+        return "execution result v2 workspace mount is not plan-bound"
+    if toolchain != expected_root / "toolchain":
+        return "execution result v2 mounts are not plan-bound"
     return None
 
 

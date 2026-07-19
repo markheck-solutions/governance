@@ -10,7 +10,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from governance_eval.docker_runtime import docker_run_argv, execute_ruff_docker
+from governance_eval.docker_runtime import (
+    docker_run_argv,
+    execute_ruff_docker,
+    runtime_root_path,
+)
 import governance_eval.docker_runtime as docker_runtime
 from governance_eval.execution_plan_v2 import compile_execution_plan_v2
 from governance_eval.execution_result_v2 import validate_execution_result_v2
@@ -208,8 +212,9 @@ class DockerRuntimePolicyTests(unittest.TestCase):
             receipt, capability="lint", adapter_id="python.ruff-check.v1"
         )
         started = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
-        workspace = Path("C:/temp/disposable-target")
-        toolchain = Path("C:/temp/sealed-toolchain")
+        runtime_root = runtime_root_path(plan)
+        workspace = runtime_root / "workspace"
+        toolchain = runtime_root / "toolchain"
         command = docker_run_argv(
             docker=Path(plan.runtime["docker_path"]),
             docker_host=plan.runtime["docker_host"],

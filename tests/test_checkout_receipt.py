@@ -133,6 +133,16 @@ class CheckoutReceiptTests(unittest.TestCase):
         self.assertEqual(payload["standard_sha256"], sha256_file(self.standard))
         self.assertEqual(receipt.to_json(), self._bind().to_json())
 
+    def test_target_working_directory_cannot_control_receipt_schema(self) -> None:
+        original = Path.cwd()
+        try:
+            os.chdir(self.target)
+            receipt = self._bind()
+        finally:
+            os.chdir(original)
+
+        self.assertEqual(receipt.repository, self.repository)
+
     def test_rejects_event_api_and_workflow_identity_mismatches(self) -> None:
         cases: list[tuple[str, dict[str, object]]] = []
         event = deepcopy(self.event)
