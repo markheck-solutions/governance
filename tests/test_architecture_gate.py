@@ -31,6 +31,7 @@ class ArchitectureGateTests(unittest.TestCase):
         changed_files = [
             ".github/workflows/governance-shadow.yml",
             "governance_eval/codex_connector_collector.py",
+            "governance_eval/codex_connector_evidence.py",
             "governance_eval/structural.py",
             "governance_eval/supportability.py",
             "tests/test_architecture_gate.py",

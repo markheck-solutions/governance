@@ -912,7 +912,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 all(command["status"] == "SKIPPED" for command in result["commands"])
             )
 
-    def test_gate_accepts_review_checker_change_with_independent_regressions(
+    def test_gate_accepts_codex_checker_change_with_independent_regressions(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:

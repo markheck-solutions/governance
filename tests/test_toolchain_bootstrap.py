@@ -337,6 +337,18 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
 
         self.assertEqual(BOOTSTRAP._validated_evaluation_context(context), context)
 
+    def test_context_validation_preserves_copy_order_and_bool_pr(self) -> None:
+        context = self._evaluation_context()
+        validated = BOOTSTRAP._validated_evaluation_context(context)
+        self.assertEqual(validated, context)
+        self.assertIsNot(validated, context)
+        with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "context kind"):
+            BOOTSTRAP._validated_evaluation_context(
+                self._evaluation_context(context_kind="bad", repository="bad")
+            )
+        shadow = self._shadow_context(pull_request_number=True)
+        self.assertEqual(BOOTSTRAP._validated_shadow_context(shadow), shadow)
+
     def test_supportability_evaluation_failure_receipt_is_schema_valid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._provision_paths(Path(tmp))
@@ -466,8 +478,7 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                 commands.append(tuple(command))
                 environments.append(dict(kwargs["environment"]))
                 evidence = kwargs["command_evidence"]
-                if not isinstance(evidence, list):
-                    raise TypeError("command evidence must be a list")
+                self.assertIsInstance(evidence, list)
                 git_stdout = self._bound_git_stdout(command, paths["governance"])
                 if git_stdout is not None:
                     stdout = git_stdout
