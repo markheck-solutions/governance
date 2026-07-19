@@ -92,6 +92,12 @@ class ExecutionPlanV2Tests(unittest.TestCase):
                 _receipt(), capability="typecheck", adapter_id="python.mypy.v1"
             )
 
+    def test_malformed_step_fails_closed(self) -> None:
+        result = assess_execution_plan_v2({"step": []}, _receipt())
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertTrue(result["errors"])
+
     def test_compiles_only_from_authenticated_checkout_receipt(self) -> None:
         plan = compile_execution_plan_v2(
             _receipt(), capability="lint", adapter_id="python.ruff-check.v1"

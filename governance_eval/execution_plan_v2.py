@@ -106,6 +106,7 @@ def assess_execution_plan_v2(payload: Any, receipt: CheckoutReceipt) -> dict[str
     errors: list[str] = []
     try:
         step = payload.get("step", {}) if isinstance(payload, dict) else {}
+        step = step if isinstance(step, dict) else {}
         expected = compile_execution_plan_v2(
             receipt,
             capability=str(step.get("step_id", "")),

@@ -1001,6 +1001,7 @@ def _architecture_governance_change_errors(
         "schemas/v1/bootstrap_audit_receipt.schema.json",
         "schemas/v1/delivery_receipt.schema.json",
         "schemas/v1/supportability_config.schema.json",
+        "schemas/v2/supportability_config.schema.json",
         "schemas/v2/codex_connector_evidence_result.schema.json",
         "schemas/v3/codex_connector_evidence_result.schema.json",
         "schemas/v4/codex_connector_evidence_result.schema.json",
@@ -1550,9 +1551,8 @@ def _git_changed_files(target_repo: Path, base_sha: str, head_sha: str) -> list[
             timeout=60,
         )
     except subprocess.TimeoutExpired as exc:
-        raise SupportabilityError(
-            "git diff changed-file discovery timed out after 60 seconds"
-        ) from exc
+        message = "git diff changed-file discovery timed out after 60 seconds"
+        raise SupportabilityError(message) from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         message = "git diff changed-file discovery failed"
@@ -2081,9 +2081,9 @@ def _parse_yaml_list(
             index += 1
             if index < len(lines) and lines[index][0] > indent:
                 child, index = _parse_yaml_mapping(lines, index, lines[index][0])
-                duplicates = sorted(set(item) & set(child))
-                if duplicates:
-                    message = f"duplicate supportability config key: {duplicates[0]}"
+                duplicate = next(iter(set(item) & set(child)), None)
+                if duplicate:
+                    message = "duplicate supportability config key: %s" % duplicate
                     raise SupportabilityError(message)
                 item.update(child)
             items.append(item)

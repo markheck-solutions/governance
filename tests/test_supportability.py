@@ -868,49 +868,26 @@ class SupportabilityGateTests(unittest.TestCase):
                 any("known_debt added" in error for error in result["errors"])
             )
 
-    def test_gate_blocks_architecture_checker_file_change(self) -> None:
+    def test_gate_protects_checker_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
-
-            result = run_supportability_gate(
-                repo / ".github/governance/supportability.yml",
-                repo,
-                "a" * 40,
-                "b" * 40,
-                changed_files=["governance_eval/architecture_gate.py"],
-                command_runner=_passing_runner,
+            protected = (
+                "governance_eval/architecture_gate.py",
+                "schemas/v4/codex_connector_evidence_result.schema.json",
+                "schemas/v2/supportability_config.schema.json",
             )
-
-            self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(
-                any("protected checker change" in error for error in result["errors"])
-            )
-            self.assertTrue(
-                all(command["status"] == "SKIPPED" for command in result["commands"])
-            )
-
-    def test_gate_protects_active_codex_result_schema(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _synthetic_repo(Path(tmp), self.root)
-            active_schema = "schemas/v4/codex_connector_evidence_result.schema.json"
-
-            result = run_supportability_gate(
-                repo / ".github/governance/supportability.yml",
-                repo,
-                "a" * 40,
-                "b" * 40,
-                changed_files=[active_schema],
-                command_runner=_passing_runner,
-            )
-
-            self.assertEqual(result["owner_status"], STATUS_RED)
-            self.assertTrue(
-                any(active_schema in error for error in result["errors"]),
-                result["errors"],
-            )
-            self.assertTrue(
-                all(command["status"] == "SKIPPED" for command in result["commands"])
-            )
+            for path in protected:
+                with self.subTest(path=path):
+                    result = run_supportability_gate(
+                        repo / ".github/governance/supportability.yml",
+                        repo,
+                        "a" * 40,
+                        "b" * 40,
+                        changed_files=[path],
+                        command_runner=_passing_runner,
+                    )
+                    self.assertEqual(result["owner_status"], STATUS_RED)
+                    self.assertTrue(any(path in error for error in result["errors"]))
 
     def test_gate_accepts_typed_checker_changes_with_independent_regressions(
         self,
