@@ -1299,7 +1299,8 @@ class CodexConnectorReviewReconciliationTests(unittest.TestCase):
         for changes in invalid_receipts:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 workflow_request_receipt(**changes)
-
+        with self.assertRaisesRegex(ValueError, "workflow request ref"):
+            workflow_request_receipt(workflow_ref="bad", workflow_sha="bad")
         with self.assertRaises(ValueError):
             workflow_request_receipt(
                 "TRANSPORT_UNAVAILABLE",

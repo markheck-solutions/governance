@@ -502,13 +502,11 @@ def _validated_evaluation_context(
     )
     if any(not isinstance(context.get(key), str) for key in strings):
         raise BootstrapError("authoritative evaluation context types invalid")
-    if context["context_kind"] != "SUPPORTABILITY_EVALUATION":
-        raise BootstrapError("authoritative evaluation context kind invalid")
-    if not _REPOSITORY_RE.fullmatch(str(context["repository"])):
-        raise BootstrapError("authoritative evaluation repository invalid")
-    for key in ("repository_id", "head_repository_id", "run_id", "run_attempt"):
-        if not _POSITIVE_ID_RE.fullmatch(str(context[key])):
-            raise BootstrapError(f"authoritative evaluation {key} invalid")
+    _validate_context_identity(
+        context,
+        expected_kind="SUPPORTABILITY_EVALUATION",
+        label="evaluation",
+    )
     if context["event_name"] != "pull_request_target":
         raise BootstrapError("authoritative evaluation event invalid")
     if context["event_action"] not in _EVALUATION_ACTIONS:
@@ -543,43 +541,50 @@ def _validated_shadow_context(value: Mapping[str, object]) -> dict[str, object]:
     )
     if any(not isinstance(context.get(key), str) for key in strings):
         raise BootstrapError("authoritative shadow context types invalid")
-    if context["context_kind"] != "PHASE1_SHADOW":
-        raise BootstrapError("authoritative shadow context kind invalid")
-    if not _REPOSITORY_RE.fullmatch(str(context["repository"])):
-        raise BootstrapError("authoritative shadow repository invalid")
-    for key in ("repository_id", "head_repository_id", "run_id", "run_attempt"):
-        if not _POSITIVE_ID_RE.fullmatch(str(context[key])):
-            raise BootstrapError(f"authoritative shadow {key} invalid")
+    _validate_context_identity(context, expected_kind="PHASE1_SHADOW", label="shadow")
     for key in ("base_sha", "head_sha", "workflow_sha"):
         _validate_sha(f"authoritative shadow {key}", str(context[key]))
     workflow_ref = str(context["workflow_ref"])
     marker = "/.github/workflows/governance-shadow.yml@"
     if marker not in workflow_ref or "\n" in workflow_ref or len(workflow_ref) > 500:
         raise BootstrapError("authoritative shadow workflow ref invalid")
+    _validate_shadow_event(context, workflow_ref)
+    if context["expected_artifact_name"] != "governance-benchmark-json":
+        raise BootstrapError("authoritative shadow artifact name invalid")
+    return context
+
+
+def _validate_context_identity(
+    context: Mapping[str, object], *, expected_kind: str, label: str
+) -> None:
+    if context["context_kind"] != expected_kind:
+        raise BootstrapError(f"authoritative {label} context kind invalid")
+    if not _REPOSITORY_RE.fullmatch(str(context["repository"])):
+        raise BootstrapError(f"authoritative {label} repository invalid")
+    for key in ("repository_id", "head_repository_id", "run_id", "run_attempt"):
+        if not _POSITIVE_ID_RE.fullmatch(str(context[key])):
+            raise BootstrapError(f"authoritative {label} {key} invalid")
+
+
+def _validate_shadow_event(context: Mapping[str, object], workflow_ref: str) -> None:
     event_name = context["event_name"]
     pull_request_number = context["pull_request_number"]
     if event_name == "pull_request":
         if not isinstance(pull_request_number, int) or pull_request_number < 1:
             raise BootstrapError("pull request shadow requires a PR number")
-    elif event_name in {"push", "workflow_dispatch"}:
-        if pull_request_number is not None:
-            raise BootstrapError("non-PR shadow forbids a PR number")
-        if context["head_repository_id"] != context["repository_id"]:
-            raise BootstrapError("non-PR shadow repository identity mismatch")
-        if not workflow_ref.endswith("@refs/heads/main"):
-            raise BootstrapError("non-PR shadow requires the main workflow ref")
-        if (
-            event_name == "workflow_dispatch"
-            and context["base_sha"] != context["head_sha"]
-        ):
-            raise BootstrapError(
-                "workflow dispatch shadow requires identical base and head"
-            )
-    else:
+        return
+    if event_name not in {"push", "workflow_dispatch"}:
         raise BootstrapError("authoritative shadow event invalid")
-    if context["expected_artifact_name"] != "governance-benchmark-json":
-        raise BootstrapError("authoritative shadow artifact name invalid")
-    return context
+    if pull_request_number is not None:
+        raise BootstrapError("non-PR shadow forbids a PR number")
+    if context["head_repository_id"] != context["repository_id"]:
+        raise BootstrapError("non-PR shadow repository identity mismatch")
+    if not workflow_ref.endswith("@refs/heads/main"):
+        raise BootstrapError("non-PR shadow requires the main workflow ref")
+    if event_name == "workflow_dispatch" and context["base_sha"] != context["head_sha"]:
+        raise BootstrapError(
+            "workflow dispatch shadow requires identical base and head"
+        )
 
 
 def _validated_context(
@@ -1228,14 +1233,7 @@ def provision(
     _validate_python_version()
     _validate_sha("base SHA", base_sha)
     _validate_sha("evaluator SHA", evaluator_sha)
-    if context_kind in {"PUBLICATION", "PHASE1_SHADOW"}:
-        identity_matches = (
-            base_sha == expected["base_sha"] and evaluator_sha == expected["head_sha"]
-        )
-    else:
-        identity_matches = base_sha == evaluator_sha == expected["evaluator_sha"]
-    if not identity_matches:
-        raise BootstrapError("toolchain inputs differ from authoritative context")
+    _validate_provision_identity(expected, context_kind, base_sha, evaluator_sha)
     command_evidence = _evidence_buffer(command_evidence)
     governance_root = governance_root.resolve(strict=True)
     workspace_root = workspace_root.resolve(strict=True)
@@ -1360,6 +1358,22 @@ def provision(
     _attach_payload_sha256(receipt)
     _write_validated_receipt(governance_root, receipt_path, receipt, expected)
     return receipt
+
+
+def _validate_provision_identity(
+    expected: Mapping[str, object],
+    context_kind: str,
+    base_sha: str,
+    evaluator_sha: str,
+) -> None:
+    if context_kind in {"PUBLICATION", "PHASE1_SHADOW"}:
+        identity_matches = (
+            base_sha == expected["base_sha"] and evaluator_sha == expected["head_sha"]
+        )
+    else:
+        identity_matches = base_sha == evaluator_sha == expected["evaluator_sha"]
+    if not identity_matches:
+        raise BootstrapError("toolchain inputs differ from authoritative context")
 
 
 def _normalized_sha(value: str) -> str:
