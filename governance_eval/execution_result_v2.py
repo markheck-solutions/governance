@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import math
+from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -50,7 +52,10 @@ def _integrity_error(
     output_error = _output_error(payload, plan)
     if output_error is not None:
         return output_error
-    return _outcome_error(payload)
+    outcome_error = _outcome_error(payload)
+    if outcome_error is not None:
+        return outcome_error
+    return _timing_error(payload)
 
 
 def _output_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
@@ -89,6 +94,8 @@ def _runtime_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None
             if payload["termination"] == "NOT_STARTED"
             else "execution result v2 command is missing"
         )
+    if len(payload["command"]) < 2:
+        return "execution result v2 command shape is invalid"
     if payload["command"][1] != f"--host={runtime['docker_host']}":
         return "execution result v2 Docker host mismatch"
     return _command_error(payload["command"], runtime["docker_path"], plan)
@@ -156,3 +163,26 @@ def _outcome_error(payload: dict[str, Any]) -> str | None:
     if payload["termination"] == "NOT_STARTED" and payload["exit_code"] is not None:
         return "execution result v2 not-started exit code is invalid"
     return None
+
+
+def _timing_error(payload: dict[str, Any]) -> str | None:
+    try:
+        duration = float(payload["duration_seconds"])
+        started = _timestamp(payload["started_at"])
+        completed = _timestamp(payload["completed_at"])
+    except (OverflowError, TypeError, ValueError):
+        return "execution result v2 timing is invalid"
+    if not math.isfinite(duration) or duration < 0:
+        return "execution result v2 duration is invalid"
+    if completed < started:
+        return "execution result v2 timestamps are out of order"
+    elapsed = (completed - started).total_seconds()
+    if abs(elapsed - duration) > 0.001:
+        return "execution result v2 duration does not match timestamps"
+    return None
+
+
+def _timestamp(value: str) -> datetime:
+    if not value.endswith("Z"):
+        raise ValueError("timestamp must use UTC Z suffix")
+    return datetime.fromisoformat(value.removesuffix("Z") + "+00:00")

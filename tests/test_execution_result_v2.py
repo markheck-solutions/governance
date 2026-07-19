@@ -116,6 +116,22 @@ class ExecutionResultV2Tests(unittest.TestCase):
             "INTEGRITY_INVALID",
         )
 
+    def test_rejects_short_command_and_invalid_timing(self) -> None:
+        mutations = (
+            ("short command", {"command": ["docker"]}),
+            ("reversed time", {"completed_at": "2026-07-19T11:59:59Z"}),
+            ("bad duration", {"duration_seconds": 9.0}),
+        )
+        for name, mutation in mutations:
+            with self.subTest(name=name):
+                payload, plan, receipt = _result()
+                payload.update(mutation)
+                payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
+
+                result = validate_execution_result_v2(payload, plan, receipt)
+
+                self.assertEqual(result["integrity_status"], "INTEGRITY_INVALID")
+
         payload, plan, receipt = _result()
         payload["stdout"]["truncated"] = True
         payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
