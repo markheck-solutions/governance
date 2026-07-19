@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "required": ["schema_version", "artifact_id", "plan_id", "checkout_receipt_id", "capability_status", "runtime", "command", "started_at", "completed_at", "duration_seconds", "timeout_seconds", "termination", "exit_code", "stdout", "stderr", "errors"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["2.0"]},
+    "artifact_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "checkout_receipt_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "capability_status": {"type": "string", "enum": ["PASS", "BLOCK_TECHNICAL"]},
+    "runtime": {
+      "type": "object",
+      "required": ["image", "policy_id", "docker_path", "docker_sha256", "docker_host", "toolchain", "toolchain_sha256"],
+      "properties": {
+        "image": {"type": "string", "pattern": "^python@sha256:[0-9a-f]{64}$"},
+        "policy_id": {"type": "string", "enum": ["docker.lockdown.v1"]},
+        "docker_path": {"type": "string"},
+        "docker_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "docker_host": {"type": "string", "minLength": 1},
+        "toolchain": {"type": "string", "enum": ["ruff==0.15.21"]},
+        "toolchain_sha256": {"type": "string", "enum": ["68971e86ff2a4bd44f45dc2dd28e590e785fea12dc966410ae269173ce6d64db"]}
+      },
+      "additionalProperties": false
+    },
+    "command": {"type": "array", "maxItems": 64, "items": {"type": "string"}},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
+    "termination": {"type": "string", "enum": ["NOT_STARTED", "EXITED", "TIMED_OUT", "OUTPUT_LIMIT"]},
+    "exit_code": {"type": ["integer", "null"]},
+    "stdout": {"$ref": "#/$defs/stream"},
+    "stderr": {"$ref": "#/$defs/stream"},
+    "errors": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "stream": {
+      "type": "object",
+      "required": ["captured_base64", "captured_bytes", "sha256", "truncated"],
+      "properties": {
+        "captured_base64": {"type": "string"},
+        "captured_bytes": {"type": "integer", "minimum": 0, "maximum": 65536},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "truncated": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

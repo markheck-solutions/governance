@@ -51,6 +51,38 @@ jobs:
           "${{ steps.toolchain.outputs.python-path }}"
           -m governance_eval verify
           --artifacts-dir artifacts/phase1
+      - name: Bind trusted runner Docker CLI identity
+        id: docker-runtime
+        shell: bash
+        run: |
+          "${{ steps.setup-python.outputs.python-path }}" -I - <<'PY'
+          import hashlib
+          import os
+          import shutil
+          from pathlib import Path
+
+          docker = shutil.which("docker")
+          if docker is None:
+              raise SystemExit("trusted runner Docker CLI is unavailable")
+          path = Path(docker).resolve()
+          digest = hashlib.sha256(path.read_bytes()).hexdigest()
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"path={path}\n")
+              output.write(f"sha256={digest}\n")
+              output.write("host=unix:///var/run/docker.sock\n")
+          PY
+      - name: Run authenticated Docker boundary controls
+        env:
+          GOVERNANCE_LIVE_DOCKER: "1"
+          GOVERNANCE_RUFF_LINUX_BINARY: ${{ steps.toolchain.outputs.bin-path }}/ruff
+          GOVERNANCE_TRUSTED_DOCKER_HOST: ${{ steps.docker-runtime.outputs.host }}
+          GOVERNANCE_TRUSTED_DOCKER_PATH: ${{ steps.docker-runtime.outputs.path }}
+          GOVERNANCE_TRUSTED_DOCKER_SHA256: ${{ steps.docker-runtime.outputs.sha256 }}
+        run: >-
+          "${{ steps.toolchain.outputs.python-path }}"
+          -m unittest discover
+          -s tests
+          -p "test_ruff_docker_live.py"
       - name: Validate and preserve shadow toolchain receipt
         id: receipt
         if: always()

@@ -27,7 +27,10 @@ SCHEMA_FILES = {
     "codex_connector_evidence_result_v3": "codex_connector_evidence_result.schema.json",
     "codex_connector_evidence_result_v4": "codex_connector_evidence_result.schema.json",
     "execution_plan": "execution_plan.schema.json",
+    "execution_plan_v2": "execution_plan.schema.json",
+    "checkout_receipt": "checkout_receipt.schema.json",
     "execution_result": "execution_result.schema.json",
+    "execution_result_v2": "execution_result.schema.json",
     "governance_toolchain_receipt": "governance_toolchain_receipt.schema.json",
     "governance_toolchain_evaluation_receipt": "governance_toolchain_evaluation_receipt.schema.json",
     "governance_toolchain_shadow_receipt": "governance_toolchain_shadow_receipt.schema.json",
@@ -35,6 +38,8 @@ SCHEMA_FILES = {
 }
 
 SCHEMA_VERSIONS = {
+    "execution_plan_v2": "v2",
+    "execution_result_v2": "v2",
     "codex_connector_snapshot_v2": "v2",
     "codex_connector_evidence_result_v2": "v2",
     "codex_connector_evidence_result_v3": "v3",

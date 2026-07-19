@@ -37,7 +37,7 @@ governance-eval = "governance_eval.cli:main"
 include = ["governance_eval*"]
 
 [tool.setuptools.package-data]
-governance_eval = ["schema_data/v1/*.json"]
+governance_eval = ["schema_data/v1/*.json", "schema_data/v2/*.json"]
 
 [build-system]
 requires = ["setuptools==83.0.0"]

@@ -1,0 +1,67 @@
+{
+  "type": "object",
+  "required": ["schema_version", "receipt_id", "repository", "pull_request", "evaluator", "workflow", "git_path", "git_sha256", "docker", "config_sha256", "standard_sha256"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "receipt_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "repository": {
+      "type": "object",
+      "required": ["id", "full_name"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}
+      },
+      "additionalProperties": false
+    },
+    "pull_request": {
+      "type": "object",
+      "required": ["number", "url", "base_sha", "head_sha", "base_tree_sha", "head_tree_sha"],
+      "properties": {
+        "number": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "url": {"type": "string", "pattern": "^https://github\\.com/"},
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "base_tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      },
+      "additionalProperties": false
+    },
+    "evaluator": {
+      "type": "object",
+      "required": ["commit_sha", "tree_sha"],
+      "properties": {
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      },
+      "additionalProperties": false
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["workflow_ref", "run_id", "run_attempt", "server_url", "api_url", "observed_at"],
+      "properties": {
+        "workflow_ref": {"type": "string", "minLength": 1},
+        "run_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "run_attempt": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "server_url": {"type": "string", "enum": ["https://github.com"]},
+        "api_url": {"type": "string", "enum": ["https://api.github.com"]},
+        "observed_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "git_path": {"type": "string", "minLength": 1},
+    "git_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "docker": {
+      "type": "object",
+      "required": ["path", "sha256", "host"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "host": {"type": "string", "enum": ["unix:///var/run/docker.sock", "npipe:////./pipe/docker_engine"]}
+      },
+      "additionalProperties": false
+    },
+    "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "standard_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}
