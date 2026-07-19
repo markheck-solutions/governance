@@ -4,14 +4,13 @@ import base64
 import os
 import shutil
 import subprocess
-import tarfile
 import tempfile
 import threading
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from governance_eval.checkout_receipt import CheckoutReceipt
@@ -264,20 +263,44 @@ def _materialize_tree(
     if _git(root, git, "rev-parse", "HEAD^{tree}") != target["tree_sha"]:
         raise DockerRuntimeError("target tree changed after receipt")
     workspace.mkdir()
-    archive = workspace.parent / "target.tar"
-    _git(
-        root,
-        git,
-        "archive",
-        "--format=tar",
-        f"--output={archive}",
-        target["commit_sha"],
+    entries = _git_bytes(
+        root, git, "ls-tree", "-r", "-z", "--full-tree", target["commit_sha"]
     )
-    with tarfile.open(archive, "r") as tar:
-        tar.extractall(workspace, filter="data")
+    for entry in entries.split(b"\0"):
+        if entry:
+            _materialize_entry(root, git, workspace, entry)
     (workspace / ".home").mkdir()
     (workspace / ".tmp").mkdir()
     _make_writable(workspace)
+
+
+def _materialize_entry(root: Path, git: Path, workspace: Path, entry: bytes) -> None:
+    try:
+        header, raw_path = entry.split(b"\t", 1)
+        mode, object_type, object_id = header.decode("ascii").split(" ")
+        path_text = raw_path.decode("utf-8")
+        relative = PurePosixPath(path_text)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise DockerRuntimeError("target tree entry is malformed") from exc
+    if object_type != "blob" or mode not in {"100644", "100755"}:
+        raise DockerRuntimeError("target tree contains an unsupported entry")
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or not relative.parts
+        or "\\" in path_text
+        or any(":" in part for part in relative.parts)
+    ):
+        raise DockerRuntimeError("target tree path is unsafe")
+    destination = workspace.joinpath(*relative.parts).resolve()
+    try:
+        destination.relative_to(workspace.resolve())
+    except ValueError as exc:
+        raise DockerRuntimeError("target tree path escapes workspace") from exc
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(_git_bytes(root, git, "cat-file", "blob", object_id))
+    if mode == "100755" and os.name != "nt":
+        destination.chmod(0o755)
 
 
 def _make_writable(root: Path) -> None:
@@ -502,6 +525,24 @@ def _git(root: Path, executable: Path, *arguments: str) -> str:
     return _command(
         command, timeout=10, env=_git_environment(executable)
     ).stdout.strip()
+
+
+def _git_bytes(root: Path, executable: Path, *arguments: str) -> bytes:
+    command = [
+        str(executable),
+        f"--git-dir={root / '.git'}",
+        f"--work-tree={root}",
+        *arguments,
+    ]
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        timeout=10,
+        env=_git_environment(executable),
+    )
+    if completed.returncode != 0:
+        raise DockerRuntimeError(f"Git object command failed: {arguments[0]}")
+    return completed.stdout
 
 
 def _command(

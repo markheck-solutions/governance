@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import shutil
 import subprocess
 import unittest
 import os
@@ -8,6 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 from governance_eval.docker_runtime import (
@@ -214,6 +216,76 @@ class DockerRuntimePolicyTests(unittest.TestCase):
             )
 
         self.assertEqual(errors, ["Docker container cleanup failed"])
+
+    def test_materialization_ignores_export_ignore_attributes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "target"
+            workspace = Path(directory) / "workspace"
+            root.mkdir()
+            commands = (
+                ("init", "-q"),
+                ("config", "user.email", "governance@example.invalid"),
+                ("config", "user.name", "Governance Test"),
+            )
+            for arguments in commands:
+                subprocess.run(["git", *arguments], cwd=root, check=True, timeout=10)
+            (root / ".gitattributes").write_text(
+                "hidden.py export-ignore\n", encoding="utf-8"
+            )
+            (root / "hidden.py").write_text("import os\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True, timeout=10)
+            subprocess.run(
+                ["git", "commit", "-qm", "tree"],
+                cwd=root,
+                check=True,
+                timeout=10,
+            )
+            commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+            tree = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+            git = Path(shutil.which("git") or "missing-git").resolve()
+
+            docker_runtime._materialize_tree(
+                root,
+                {"commit_sha": commit, "tree_sha": tree},
+                workspace,
+                git,
+            )
+
+            self.assertEqual(
+                (workspace / "hidden.py").read_text(encoding="utf-8"),
+                "import os\n",
+            )
+
+    def test_materialization_rejects_windows_path_escapes(self) -> None:
+        for path in (r"..\escaped.py", r"C:\attacker\owned.py"):
+            with self.subTest(path=path), TemporaryDirectory() as directory:
+                workspace = Path(directory) / "workspace"
+                workspace.mkdir()
+                entry = f"100644 blob {'a' * 40}\t{path}".encode("utf-8")
+
+                with self.assertRaisesRegex(
+                    docker_runtime.DockerRuntimeError, "path is unsafe"
+                ):
+                    docker_runtime._materialize_entry(
+                        Path(directory),
+                        Path("C:/trusted/git.exe"),
+                        workspace,
+                        entry,
+                    )
 
     def _host_result(
         self,

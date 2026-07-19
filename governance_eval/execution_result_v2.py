@@ -71,6 +71,9 @@ def _output_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
     captured = payload["stdout"]["captured_bytes"] + payload["stderr"]["captured_bytes"]
     if captured > plan.step["output_limit_bytes"]:
         return "execution result v2 combined output exceeds plan limit"
+    truncated = any(payload[name]["truncated"] for name in ("stdout", "stderr"))
+    if truncated and captured != plan.step["output_limit_bytes"]:
+        return "execution result v2 truncated output does not equal plan limit"
     if payload["capability_status"] == "PASS" and any(
         payload[name]["truncated"] for name in ("stdout", "stderr")
     ):
