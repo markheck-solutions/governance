@@ -40,17 +40,19 @@ class DockerRuntimePolicyTests(unittest.TestCase):
             _receipt(), capability="lint", adapter_id="python.ruff-check.v1"
         )
         workspace = Path("C:/temp/disposable-target")
+        docker = Path("C:/Program Files/Docker/docker.exe")
+        toolchain_root = Path("C:/temp/sealed-toolchain")
 
         argv = docker_run_argv(
-            docker=Path("C:/Program Files/Docker/docker.exe"),
+            docker=docker,
             docker_host="npipe:////./pipe/docker_engine",
             plan=plan,
             workspace=workspace,
-            toolchain_root=Path("C:/temp/sealed-toolchain"),
+            toolchain_root=toolchain_root,
             container_name="governance-test-container",
         )
 
-        self.assertEqual(argv[0], "C:\\Program Files\\Docker\\docker.exe")
+        self.assertEqual(argv[0], str(docker))
         self.assertEqual(argv[1], "--host=npipe:////./pipe/docker_engine")
         for required in (
             "--read-only",
@@ -64,11 +66,11 @@ class DockerRuntimePolicyTests(unittest.TestCase):
         ):
             self.assertIn(required, argv)
         self.assertIn(
-            "type=bind,src=C:\\temp\\disposable-target,dst=/workspace",
+            f"type=bind,src={workspace},dst=/workspace",
             argv,
         )
         self.assertIn(
-            "type=bind,src=C:\\temp\\sealed-toolchain,dst=/opt/governance-toolchain,readonly",
+            f"type=bind,src={toolchain_root},dst=/opt/governance-toolchain,readonly",
             argv,
         )
         self.assertNotIn("-v", argv)
