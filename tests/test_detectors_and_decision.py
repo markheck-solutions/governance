@@ -8,8 +8,7 @@ from pathlib import Path
 
 from governance_eval.cases import load_cases
 from governance_eval.decision import decide
-from governance_eval.detectors import run_detectors
-from governance_eval.detectors import _covered_by_any_gate
+from governance_eval.detectors import _covered_by_any_gate, _import_graph, run_detectors
 from governance_eval.models import Decision
 from governance_eval.paths import repo_root
 
@@ -137,6 +136,51 @@ class DetectorDecisionTests(unittest.TestCase):
     def test_business_ambiguity_returns_ask_business(self) -> None:
         decision = self.decision_for("ASK-BUSINESS-ROUTE-ORDER")
         self.assertEqual(decision, "ASK_BUSINESS")
+
+    def test_import_graph_preserves_exact_import_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "app"
+            package.mkdir()
+            (package / "__init__.py").write_text(
+                "import app.ignored\n", encoding="utf-8"
+            )
+            (package / "routes.py").write_text(
+                "\n".join(
+                    [
+                        "from app.foo.bar import item",
+                        "from .relative.deep import item",
+                        "from ..ignored import item",
+                        "from app import ignored",
+                        "import app.alpha.beta, app.gamma, external",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            nested = package / "nested"
+            nested.mkdir()
+            (nested / "mod.py").write_text(
+                "from .sibling.deep import item\n", encoding="utf-8"
+            )
+
+            first = _import_graph(package)
+            second = _import_graph(package)
+
+        self.assertEqual(
+            first,
+            {
+                "nested.mod": ["sibling"],
+                "routes": ["alpha.beta", "foo.bar", "gamma", "relative"],
+            },
+        )
+        self.assertEqual(second, first)
+        self.assertIsNot(second, first)
+        self.assertIsNot(second["routes"], first["routes"])
+
+    def test_import_graph_missing_root_preserves_path_error(self) -> None:
+        missing = Path("missing-import-graph-root")
+        with self.assertRaises(FileNotFoundError) as raised:
+            _import_graph(missing)
+        self.assertEqual(raised.exception.args, (missing,))
 
 
 if __name__ == "__main__":

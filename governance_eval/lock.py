@@ -70,6 +70,10 @@ def validate_spaghetti_lock(path: Path) -> list[str]:
         lock = read_spaghetti_lock(path)
     except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
         return [f"malformed lock file: {exc}"]
+    return _lock_problems(raw, lock)
+
+
+def _lock_problems(raw: dict[str, Any], lock: SpaghettiLock) -> list[str]:
     problems: list[str] = []
     if raw.get("schema_version") != 1:
         problems.append("schema_version must be 1")

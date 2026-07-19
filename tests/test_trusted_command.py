@@ -11,6 +11,28 @@ from governance_eval import trusted_command
 
 
 class TrustedCommandModulePathTests(unittest.TestCase):
+    def test_shell_word_parser_preserves_boundaries_and_error_order(self) -> None:
+        with mock.patch.object(trusted_command.os, "name", "posix"):
+            self.assertEqual(
+                trusted_command._leading_static_shell_word(" \t'py'thon;next"),
+                (" \t", 10, "python"),
+            )
+            self.assertEqual(
+                trusted_command._leading_static_shell_word("python|next"),
+                ("", 6, "python"),
+            )
+            for command, message in (
+                ("python\\", "shell executable token ends with an escape"),
+                ('"python', "shell executable token has an unclosed quote"),
+                ("`python`", "dynamic shell executable token is not trusted"),
+                ("$(printf python)", "dynamic shell executable token is not trusted"),
+            ):
+                with self.subTest(command=command):
+                    with self.assertRaisesRegex(
+                        trusted_command.TrustedCommandError, message
+                    ):
+                        trusted_command._leading_static_shell_word(command)
+
     def test_protected_python_module_uses_safe_path(self) -> None:
         bound = trusted_command.bind_current_python("python -m ruff check .")
 

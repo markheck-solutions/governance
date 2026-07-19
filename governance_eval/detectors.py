@@ -489,10 +489,16 @@ def _import_graph(package_path: Path) -> dict[str, list[str]]:
                 elif node.level == 1 and node.module:
                     graph[module_name].add(node.module.split(".")[0])
             elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.startswith("app."):
-                        graph[module_name].add(".".join(alias.name.split(".")[1:]))
+                graph[module_name].update(_app_import_targets(node))
     return {key: sorted(value) for key, value in sorted(graph.items())}
+
+
+def _app_import_targets(node: ast.Import) -> set[str]:
+    return {
+        ".".join(alias.name.split(".")[1:])
+        for alias in node.names
+        if alias.name.startswith("app.")
+    }
 
 
 def _find_cycle(graph: dict[str, list[str]]) -> list[str]:

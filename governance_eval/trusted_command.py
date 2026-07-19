@@ -222,7 +222,6 @@ def _leading_static_shell_word(command: str) -> tuple[str, int, str]:
     word: list[str] = []
     quote = ""
     dynamic_seen = False
-    dynamic = "$`" + ("%!" if os.name == "nt" else "")
     controls = "&|;<>()"
     quote_chars = _shell_quote_chars()
     while index < len(command):
@@ -238,32 +237,10 @@ def _leading_static_shell_word(command: str) -> tuple[str, int, str]:
                 quote = ""
                 index += 1
                 continue
-        if char == "$" and quote != "'" and command[index : index + 2] == "$(":
-            raise TrustedCommandError("dynamic shell executable token is not trusted")
-        if char in dynamic and quote != "'":
-            if char == "`":
-                raise TrustedCommandError(
-                    "dynamic shell executable token is not trusted"
-                )
-            dynamic_seen = True
-        posix_escape = (
-            os.name != "nt"
-            and char == "\\"
-            and (
-                not quote
-                or (
-                    quote == '"'
-                    and index + 1 < len(command)
-                    and command[index + 1] in '$`"\\\n'
-                )
-            )
+        dynamic_seen = (
+            _shell_dynamic_marker(command, index, char, quote) or dynamic_seen
         )
-        escape = posix_escape or (os.name == "nt" and char == "^" and not quote)
-        if escape:
-            index += 1
-            if index >= len(command):
-                raise TrustedCommandError("shell executable token ends with an escape")
-            char = command[index]
+        index, char = _consume_shell_escape(command, index, char, quote)
         word.append(char)
         index += 1
     if quote:
@@ -274,3 +251,36 @@ def _leading_static_shell_word(command: str) -> tuple[str, int, str]:
     ):
         raise TrustedCommandError("dynamic shell executable token is not trusted")
     return leading, index, executable
+
+
+def _shell_dynamic_marker(command: str, index: int, char: str, quote: str) -> bool:
+    if char == "$" and quote != "'" and command[index : index + 2] == "$(":
+        raise TrustedCommandError("dynamic shell executable token is not trusted")
+    dynamic = "$`" + ("%!" if os.name == "nt" else "")
+    if char == "`" and quote != "'":
+        raise TrustedCommandError("dynamic shell executable token is not trusted")
+    return char in dynamic and quote != "'"
+
+
+def _consume_shell_escape(
+    command: str, index: int, char: str, quote: str
+) -> tuple[int, str]:
+    posix_escape = (
+        os.name != "nt"
+        and char == "\\"
+        and (
+            not quote
+            or (
+                quote == '"'
+                and index + 1 < len(command)
+                and command[index + 1] in '$`"\\\n'
+            )
+        )
+    )
+    escape = posix_escape or (os.name == "nt" and char == "^" and not quote)
+    if not escape:
+        return index, char
+    index += 1
+    if index >= len(command):
+        raise TrustedCommandError("shell executable token ends with an escape")
+    return index, command[index]

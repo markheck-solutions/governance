@@ -45,13 +45,9 @@ def scan_structural_metrics(
     module_sizes = _module_sizes(prod_files, root)
     fanout = {module: len(imports) for module, imports in graph.items()}
     return {
-        "cross_module_private_references": _private_imports(
-            prod_files, root, include_attribute_access=True
-        ),
+        "cross_module_private_references": _private_imports(prod_files, root),
         "private_helper_reexports": _private_reexports(prod_files, root),
-        "tests_private_production_internals": _private_imports(
-            test_files, root, include_attribute_access=True
-        ),
+        "tests_private_production_internals": _private_imports(test_files, root),
         "import_cycles": _cycles(graph),
         "weak_public_contracts": _weak_contracts(prod_files, root),
         "module_dependency_fanout": {
@@ -318,13 +314,7 @@ def _cycles(graph: dict[str, set[str]]) -> list[str]:
             elif target in on_stack:
                 lowlinks[node] = min(lowlinks[node], indexes[target])
         if lowlinks[node] == indexes[node]:
-            component: list[str] = []
-            while True:
-                item = stack.pop()
-                on_stack.remove(item)
-                component.append(item)
-                if item == node:
-                    break
+            component = _pop_cycle_component(stack, on_stack, node)
             if len(component) > 1 or node in graph.get(node, set()):
                 components.append(sorted(component))
 
@@ -334,9 +324,17 @@ def _cycles(graph: dict[str, set[str]]) -> list[str]:
     return sorted("->".join(component + [component[0]]) for component in components)
 
 
-def _private_imports(
-    files: list[Path], root: Path, include_attribute_access: bool
-) -> list[str]:
+def _pop_cycle_component(stack: list[str], on_stack: set[str], node: str) -> list[str]:
+    component: list[str] = []
+    while True:
+        item = stack.pop()
+        on_stack.remove(item)
+        component.append(item)
+        if item == node:
+            return component
+
+
+def _private_imports(files: list[Path], root: Path) -> list[str]:
     refs: set[str] = set()
     for path in files:
         rel = _rel(path, root)
@@ -344,7 +342,7 @@ def _private_imports(
             tree = _parse(path)
         except SyntaxError:
             continue
-        imported_aliases: dict[str, str] = {}
+        imported_aliases: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
@@ -352,29 +350,32 @@ def _private_imports(
                     part.startswith("_") for part in module.split(".") if part
                 )
                 for alias in node.names:
-                    local = alias.asname or alias.name
-                    imported_aliases[local] = ".".join(
-                        part for part in [module, alias.name] if part
-                    )
+                    imported_aliases.add(alias.asname or alias.name)
                     if module_private or alias.name.startswith("_"):
                         refs.add(f"{rel}:{module}:{alias.name}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    local = alias.asname or alias.name.split(".")[0]
-                    imported_aliases[local] = alias.name
+                    imported_aliases.add(alias.asname or alias.name.split(".")[0])
                     if any(part.startswith("_") for part in alias.name.split(".")):
                         refs.add(f"{rel}:{alias.name}")
-        if include_attribute_access:
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Attribute):
-                    chain = _attribute_chain(node)
-                    if (
-                        len(chain) >= 2
-                        and chain[0] in imported_aliases
-                        and any(part.startswith("_") for part in chain[1:])
-                    ):
-                        refs.add(f"{rel}:{'.'.join(chain)}")
+        refs.update(_private_attribute_references(tree, rel, imported_aliases))
     return sorted(refs)
+
+
+def _private_attribute_references(
+    tree: ast.AST, rel: str, aliases: set[str]
+) -> set[str]:
+    refs: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            chain = _attribute_chain(node)
+            if (
+                len(chain) >= 2
+                and chain[0] in aliases
+                and any(part.startswith("_") for part in chain[1:])
+            ):
+                refs.add(f"{rel}:{'.'.join(chain)}")
+    return refs
 
 
 def _private_reexports(files: list[Path], root: Path) -> list[str]:
@@ -390,43 +391,53 @@ def _private_reexports(files: list[Path], root: Path) -> list[str]:
         private_names: set[str] = set()
         for node in tree.body:
             if isinstance(node, ast.ImportFrom):
-                module = node.module or ""
-                module_private = any(
-                    part.startswith("_") for part in module.split(".") if part
-                )
-                for alias in node.names:
-                    local = alias.asname or alias.name
-                    if module_private or alias.name.startswith("_"):
-                        private_names.add(local)
-                    if not local.startswith("_") and (
-                        module_private or alias.name.startswith("_")
-                    ):
-                        refs.add(f"{rel}:alias:{module}.{alias.name}->{local}")
-            elif isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets
-            ):
-                if isinstance(node.value, (ast.List, ast.Tuple)):
-                    for item in node.value.elts:
-                        if (
-                            isinstance(item, ast.Constant)
-                            and isinstance(item.value, str)
-                            and item.value.startswith("_")
-                        ):
-                            refs.add(f"{rel}:__all__:{item.value}")
+                refs.update(_private_import_reexports(node, rel, private_names))
             elif isinstance(node, ast.Assign):
-                value_name = _expr_name(node.value)
-                value_private = (
-                    value_name.startswith("_")
-                    or "._" in value_name
-                    or value_name in private_names
-                )
-                if value_private:
-                    for target in node.targets:
-                        if isinstance(target, ast.Name) and not target.id.startswith(
-                            "_"
-                        ):
-                            refs.add(f"{rel}:rebinding:{value_name}->{target.id}")
+                refs.update(_private_assignment_reexports(node, rel, private_names))
     return sorted(refs)
+
+
+def _private_import_reexports(
+    node: ast.ImportFrom, rel: str, private_names: set[str]
+) -> set[str]:
+    refs: set[str] = set()
+    module = node.module or ""
+    module_private = any(part.startswith("_") for part in module.split(".") if part)
+    for alias in node.names:
+        local = alias.asname or alias.name
+        if module_private or alias.name.startswith("_"):
+            private_names.add(local)
+        if not local.startswith("_") and (module_private or alias.name.startswith("_")):
+            refs.add(f"{rel}:alias:{module}.{alias.name}->{local}")
+    return refs
+
+
+def _private_assignment_reexports(
+    node: ast.Assign, rel: str, private_names: set[str]
+) -> set[str]:
+    if any(
+        isinstance(target, ast.Name) and target.id == "__all__"
+        for target in node.targets
+    ):
+        if isinstance(node.value, (ast.List, ast.Tuple)):
+            return {
+                f"{rel}:__all__:{item.value}"
+                for item in node.value.elts
+                if isinstance(item, ast.Constant)
+                and isinstance(item.value, str)
+                and item.value.startswith("_")
+            }
+        return set()
+    value_name = _expr_name(node.value)
+    if not (
+        value_name.startswith("_") or "._" in value_name or value_name in private_names
+    ):
+        return set()
+    return {
+        f"{rel}:rebinding:{value_name}->{target.id}"
+        for target in node.targets
+        if isinstance(target, ast.Name) and not target.id.startswith("_")
+    }
 
 
 def _weak_contracts(files: list[Path], root: Path) -> list[str]:
@@ -439,40 +450,59 @@ def _weak_contracts(files: list[Path], root: Path) -> list[str]:
         except SyntaxError:
             continue
         for node in tree.body:
-            if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                value = getattr(node, "value", None)
-                targets = (
-                    [node.target]
-                    if isinstance(node, ast.AnnAssign)
-                    else list(getattr(node, "targets", []))
-                )
-                text = ast.unparse(value) if value is not None else ""
-                if _is_weak_type_text(text):
-                    for target in targets:
-                        if isinstance(target, ast.Name):
-                            aliases.add(target.id)
-                            refs.add(f"{rel}:alias:{target.id}:{text}")
-            if isinstance(node, ast.ClassDef):
-                bases = {ast.unparse(base) for base in node.bases}
-                if any(
-                    base.endswith("TypedDict") or base == "TypedDict" for base in bases
-                ):
-                    for stmt in node.body:
-                        annotation = getattr(stmt, "annotation", None)
-                        if annotation is not None and "Any" in ast.unparse(annotation):
-                            refs.add(f"{rel}:{node.name}.Any")
-            if isinstance(
-                node, (ast.FunctionDef, ast.AsyncFunctionDef)
-            ) and not node.name.startswith("_"):
-                annotations = [
-                    node.returns,
-                    *(arg.annotation for arg in node.args.args),
-                ]
-                for annotation in annotations:
-                    text = ast.unparse(annotation) if annotation else ""
-                    if _is_weak_type_text(text) or text in aliases:
-                        refs.add(f"{rel}:{node.name}:{text}")
+            refs.update(_weak_contract_references(node, rel, aliases))
     return sorted(refs)
+
+
+def _weak_contract_references(node: ast.stmt, rel: str, aliases: set[str]) -> set[str]:
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return _weak_alias_references(node, rel, aliases)
+    if isinstance(node, ast.ClassDef):
+        return _weak_typed_dict_references(node, rel)
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return _weak_function_references(node, rel, aliases)
+    return set()
+
+
+def _weak_alias_references(
+    node: ast.Assign | ast.AnnAssign, rel: str, aliases: set[str]
+) -> set[str]:
+    value = getattr(node, "value", None)
+    text = ast.unparse(value) if value is not None else ""
+    if not _is_weak_type_text(text):
+        return set()
+    targets = [node.target] if isinstance(node, ast.AnnAssign) else list(node.targets)
+    names = {target.id for target in targets if isinstance(target, ast.Name)}
+    aliases.update(names)
+    return {f"{rel}:alias:{name}:{text}" for name in names}
+
+
+def _weak_typed_dict_references(node: ast.ClassDef, rel: str) -> set[str]:
+    bases = {ast.unparse(base) for base in node.bases}
+    if not any(base.endswith("TypedDict") or base == "TypedDict" for base in bases):
+        return set()
+    return {
+        f"{rel}:{node.name}.Any"
+        for stmt in node.body
+        if (annotation := getattr(stmt, "annotation", None)) is not None
+        and "Any" in ast.unparse(annotation)
+    }
+
+
+def _weak_function_references(
+    node: ast.FunctionDef | ast.AsyncFunctionDef, rel: str, aliases: set[str]
+) -> set[str]:
+    if node.name.startswith("_"):
+        return set()
+    annotations = [node.returns, *(arg.annotation for arg in node.args.args)]
+    texts = [
+        ast.unparse(annotation) if annotation else "" for annotation in annotations
+    ]
+    return {
+        f"{rel}:{node.name}:{text}"
+        for text in texts
+        if _is_weak_type_text(text) or text in aliases
+    }
 
 
 def _is_weak_type_text(text: str) -> bool:
@@ -653,13 +683,9 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
                 and "true" in semantic_line.lower()
             ):
                 continue_on_error.add(f"{file.name}:{current_job}")
-            match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", semantic_line)
-            if match:
-                key = match.group(1)
-                values = _workflow_path_values(lines, index, match.group(2))
-                target = paths_ignore if key == "paths-ignore" else paths
-                for value in values:
-                    target.add(f"{file.name}:{value}")
+            _record_workflow_paths(
+                paths, paths_ignore, file.name, lines, index, semantic_line
+            )
     return {
         "present": True,
         "jobs": jobs,
@@ -670,6 +696,22 @@ def _parse_workflows(path: Path) -> dict[str, Any]:
         "paths": paths,
         "paths_ignore": paths_ignore,
     }
+
+
+def _record_workflow_paths(
+    paths: set[str],
+    paths_ignore: set[str],
+    file_name: str,
+    lines: list[str],
+    index: int,
+    semantic_line: str,
+) -> None:
+    match = re.search(r"\b(paths-ignore|paths):\s*(.*)$", semantic_line)
+    if not match:
+        return
+    target = paths_ignore if match.group(1) == "paths-ignore" else paths
+    for value in _workflow_path_values(lines, index, match.group(2)):
+        target.add(f"{file_name}:{value}")
 
 
 def _workflow_disabled_jobs(file_name: str, lines: list[str]) -> set[str]:
@@ -783,17 +825,9 @@ def _workflow_semantic_line(line: str) -> str:
 
 
 def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]:
-    values: set[str] = set()
     if inline.strip():
-        text = inline.split("#", 1)[0].strip()
-        if not text:
-            return values
-        if text.startswith("[") and text.endswith("]"):
-            for item in text.strip("[]").split(","):
-                cleaned = item.strip().strip("'\"")
-                if cleaned:
-                    values.add(cleaned)
-        return values or {text.strip("'\"")}
+        return _inline_workflow_path_values(inline)
+    values: set[str] = set()
     base_indent = len(lines[index]) - len(lines[index].lstrip(" "))
     for line in lines[index + 1 :]:
         if not line.strip():
@@ -809,6 +843,20 @@ def _workflow_path_values(lines: list[str], index: int, inline: str) -> set[str]
         elif ":" in stripped and not stripped.startswith("#"):
             break
     return values
+
+
+def _inline_workflow_path_values(inline: str) -> set[str]:
+    text = inline.split("#", 1)[0].strip()
+    if not text:
+        return set()
+    if not (text.startswith("[") and text.endswith("]")):
+        return {text.strip("'\"")}
+    values = {
+        cleaned
+        for item in text.strip("[]").split(",")
+        if (cleaned := item.strip().strip("'\""))
+    }
+    return values or {text.strip("'\"")}
 
 
 def _gate_delta(

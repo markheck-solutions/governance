@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from governance_eval.structural import scan_structural_metrics, structural_delta
+from governance_eval.structural import (
+    _cycles,
+    _private_reexports,
+    _workflow_path_values,
+    scan_structural_metrics,
+    structural_delta,
+)
 
 
 class StructuralDeltaTests(unittest.TestCase):
@@ -58,6 +64,40 @@ class StructuralDeltaTests(unittest.TestCase):
             metrics = scan_structural_metrics(root)
 
         self.assertIn("demo.a->demo.b->demo.a", metrics["import_cycles"])
+
+    def test_cycle_order_and_input_identity_are_stable(self) -> None:
+        graph = {"d": set(), "c": {"b"}, "b": {"c"}, "a": {"a"}}
+        original = copy.deepcopy(graph)
+
+        self.assertEqual(_cycles(graph), ["a->a", "b->c->b"])
+        self.assertEqual(graph, original)
+
+    def test_private_reexport_formats_remain_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "src/pkg/__init__.py"
+            _write(
+                path,
+                "from pkg._hidden import _item as public\n"
+                "__all__ = ['_private']\n"
+                "visible = public\n",
+            )
+
+            refs = _private_reexports([path], root)
+
+        self.assertEqual(
+            refs,
+            [
+                "src/pkg/__init__.py:__all__:_private",
+                "src/pkg/__init__.py:alias:pkg._hidden._item->public",
+                "src/pkg/__init__.py:rebinding:public->visible",
+            ],
+        )
+
+    def test_workflow_empty_and_block_path_values_preserve_quirks(self) -> None:
+        self.assertEqual(_workflow_path_values(["paths: []"], 0, "[]"), {"[]"})
+        lines = ["paths-ignore:", "  # comment", "  - 'docs/**'", "next: true"]
+        self.assertEqual(_workflow_path_values(lines, 0, ""), {"docs/**"})
 
     def test_target_pack_roots_and_private_test_attribute_access(self) -> None:
         pack = _pack()
