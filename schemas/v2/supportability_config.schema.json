@@ -1,0 +1,118 @@
+{
+  "type": "object",
+  "required": ["schema_version", "standard", "capabilities", "coverage", "ai_review", "receipt", "architecture_policy"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["2.0"]},
+    "standard": {
+      "type": "object",
+      "required": ["name", "source", "hash"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "hash": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["lint", "format_check", "typecheck", "complexity", "architecture", "tests", "build", "package_audit", "benchmark", "diff_integrity"],
+      "properties": {
+        "lint": {"$ref": "#/$defs/ruff_lint"},
+        "format_check": {"$ref": "#/$defs/ruff_format"},
+        "typecheck": {"$ref": "#/$defs/mypy"},
+        "complexity": {"$ref": "#/$defs/complexity"},
+        "architecture": {"$ref": "#/$defs/architecture"},
+        "tests": {"$ref": "#/$defs/tests"},
+        "build": {"$ref": "#/$defs/build"},
+        "package_audit": {"$ref": "#/$defs/package_audit"},
+        "benchmark": {"$ref": "#/$defs/benchmark"},
+        "diff_integrity": {"$ref": "#/$defs/diff_integrity"}
+      },
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["changed_files", "high_risk_files", "forbid_gate_scope_narrowing", "forbid_threshold_weakening"],
+      "properties": {
+        "changed_files": {"type": "string", "enum": ["required"]},
+        "high_risk_files": {"type": "string", "enum": ["required"]},
+        "forbid_gate_scope_narrowing": {"type": "boolean", "enum": [true]},
+        "forbid_threshold_weakening": {"type": "boolean", "enum": [true]}
+      },
+      "additionalProperties": false
+    },
+    "ai_review": {
+      "type": "object",
+      "required": ["provider", "adapter", "review_window_seconds", "unavailable_after_cutoff", "unresolved_p0_p1_p2_blocks"],
+      "properties": {
+        "provider": {"type": "string", "enum": ["codex_connector"]},
+        "adapter": {"type": "string", "enum": ["codex_connector_pr_signal_v2"]},
+        "review_window_seconds": {"type": "integer", "enum": [300]},
+        "unavailable_after_cutoff": {"type": "string", "enum": ["non_blocking"]},
+        "unresolved_p0_p1_p2_blocks": {"type": "boolean", "enum": [true]}
+      },
+      "additionalProperties": false
+    },
+    "receipt": {
+      "type": "object",
+      "required": ["artifact_name", "retention_days"],
+      "properties": {
+        "artifact_name": {"type": "string", "minLength": 1},
+        "retention_days": {"type": "integer", "enum": [90]}
+      },
+      "additionalProperties": false
+    },
+    "architecture_policy": {"type": "object", "minProperties": 1}
+  },
+  "$defs": {
+    "ruff_lint": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_ruff_lint"}},
+    "ruff_format": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_ruff_format"}},
+    "mypy": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_mypy"}},
+    "architecture": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_architecture"}},
+    "tests": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_tests"}},
+    "build": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_build"}},
+    "package_audit": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_package_audit"}},
+    "benchmark": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_benchmark"}},
+    "diff_integrity": {"$ref": "#/$defs/python_full_scope", "items": {"$ref": "#/$defs/entry_diff_integrity"}},
+    "python_full_scope": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {"$ref": "#/$defs/entry"}
+    },
+    "entry": {
+      "type": "object",
+      "required": ["adapter", "root"],
+      "properties": {
+        "adapter": {"type": "string", "minLength": 1},
+        "root": {"type": "string", "enum": ["."]}
+      },
+      "additionalProperties": false
+    },
+    "entry_ruff_lint": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["python.ruff-check.v1"]}}},
+    "entry_ruff_format": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["python.ruff-format-check.v1"]}}},
+    "entry_mypy": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["python.mypy.v1"]}}},
+    "entry_architecture": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["governance.architecture.v1"]}}},
+    "entry_tests": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["python.unittest.v1"]}}},
+    "entry_build": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["python.pip-wheel-no-deps.v1"]}}},
+    "entry_package_audit": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["python.package-audit-isolated.v1"]}}},
+    "entry_benchmark": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["governance.phase1-benchmark.v1"]}}},
+    "entry_diff_integrity": {"$ref": "#/$defs/entry", "properties": {"adapter": {"type": "string", "enum": ["git.diff-check.v1"]}}},
+    "complexity": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["adapter", "root", "threshold"],
+        "properties": {
+          "adapter": {"type": "string", "enum": ["python.ruff-c901.v1"]},
+          "root": {"type": "string", "enum": ["."]},
+          "threshold": {"type": "integer", "enum": [10]}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

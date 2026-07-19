@@ -105,6 +105,10 @@ def compile_execution_plan(
     execution_id = _validate_protected_binding("execution_id", execution_id)
     capability = request["capability"]
     adapter_id = request["adapter_id"]
+    if (capability, adapter_id) != ("lint", "python.ruff-check.v1"):
+        raise ExecutionPlanError(
+            f"unsupported capability adapter: {capability}/{adapter_id}"
+        )
     try:
         adapter = get_capability_adapter(capability, adapter_id)
     except KeyError as exc:

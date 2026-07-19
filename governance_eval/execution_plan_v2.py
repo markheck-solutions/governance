@@ -58,8 +58,6 @@ def compile_execution_plan_v2(
         raise ExecutionPlanV2Error(
             f"unsupported capability adapter: {capability}/{adapter_id}"
         ) from exc
-    if (capability, adapter_id) != ("lint", "python.ruff-check.v1"):
-        raise ExecutionPlanV2Error("adapter has no authenticated Docker implementation")
     plan = ExecutionPlanV2(
         schema_version="2.0",
         plan_id="",
@@ -107,8 +105,11 @@ def compile_execution_plan_v2(
 def assess_execution_plan_v2(payload: Any, receipt: CheckoutReceipt) -> dict[str, Any]:
     errors: list[str] = []
     try:
+        step = payload.get("step", {}) if isinstance(payload, dict) else {}
         expected = compile_execution_plan_v2(
-            receipt, capability="lint", adapter_id="python.ruff-check.v1"
+            receipt,
+            capability=str(step.get("step_id", "")),
+            adapter_id=str(step.get("adapter_id", "")),
         ).to_json()
     except ExecutionPlanV2Error as exc:
         errors.append(str(exc))

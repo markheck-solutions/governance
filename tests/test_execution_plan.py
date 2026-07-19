@@ -149,6 +149,7 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
                         "--isolated",
                         "--no-cache",
                         "--no-respect-gitignore",
+                        "--exclude=",
                         ".",
                     ],
                     "working_directory": ".",
@@ -172,7 +173,14 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
         self.assertEqual(step.module, "ruff")
         self.assertEqual(
             step.arguments,
-            ("check", "--isolated", "--no-cache", "--no-respect-gitignore", "."),
+            (
+                "check",
+                "--isolated",
+                "--no-cache",
+                "--no-respect-gitignore",
+                "--exclude=",
+                ".",
+            ),
         )
 
     def test_rejects_unsupported_adapter(self) -> None:
@@ -181,6 +189,19 @@ class ExecutionPlanCompilationTests(unittest.TestCase):
         with self.assertRaisesRegex(
             ExecutionPlanError,
             "unsupported capability adapter: lint/python.unknown.v1",
+        ):
+            compile_plan(request)
+
+    def test_v1_rejects_v2_only_adapter(self) -> None:
+        request = {
+            **VALID_REQUEST,
+            "capability": "format_check",
+            "adapter_id": "python.ruff-format-check.v1",
+        }
+
+        with self.assertRaisesRegex(
+            ExecutionPlanError,
+            "unsupported capability adapter: format_check/python.ruff-format-check.v1",
         ):
             compile_plan(request)
 

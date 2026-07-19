@@ -18,6 +18,7 @@ SCHEMA_FILES = {
     "target_pack": "target_pack.schema.json",
     "target_evaluation_result": "target_evaluation_result.schema.json",
     "supportability_config": "supportability_config.schema.json",
+    "supportability_config_v2": "supportability_config.schema.json",
     "supportability_gate_result": "supportability_gate_result.schema.json",
     "architecture_gate_result": "architecture_gate_result.schema.json",
     "delivery_receipt": "delivery_receipt.schema.json",
@@ -40,6 +41,7 @@ SCHEMA_FILES = {
 }
 
 SCHEMA_VERSIONS = {
+    "supportability_config_v2": "v2",
     "execution_plan_v2": "v2",
     "execution_result_v2": "v2",
     "codex_connector_snapshot_v2": "v2",
@@ -50,7 +52,7 @@ SCHEMA_VERSIONS = {
 
 _PACKAGED_SCHEMA_SHA256 = {
     "checkout_receipt": "8856cd39a7093eafcfad0b8cfb509e74b33c17eb24985e8205aef4b1c7eed90a",
-    "execution_plan_v2": "22177474a601c4c6dcfa23399173099b47974a5f984dc7d2944269abcb0b6cd9",
+    "execution_plan_v2": "2916047d5cfe157ece96d7ec04dcf12fa0203862011677c85f7e4e6e83195f0e",
     "execution_result_v2": "b7418511e88fb99f541841bb4658e3bb10e3241e67631c275931ba3aa64fe1fd",
 }
 

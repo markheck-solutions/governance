@@ -24,6 +24,7 @@ from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
+from governance_eval import supportability_config_v2
 from governance_eval.trusted_command import run_bound_shell_command, split_command
 
 
@@ -138,7 +139,11 @@ def _parse_supportability_config_text(text: str, suffix: str = "") -> dict[str, 
     stripped = text.lstrip()
     if suffix == ".json" or stripped.startswith("{"):
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(
+                text, object_pairs_hook=supportability_config_v2.unique_json_object
+            )
+        except supportability_config_v2.DuplicateSupportabilityKey as exc:
+            raise SupportabilityError(str(exc)) from exc
         except json.JSONDecodeError as exc:
             raise SupportabilityError(
                 f"supportability config JSON invalid: {exc}"
@@ -152,12 +157,22 @@ def _parse_supportability_config_text(text: str, suffix: str = "") -> dict[str, 
 
 def validate_supportability_config(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    version = config["schema_version"] if "schema_version" in config else None
+    if version not in (None, "2.0"):
+        return [f"supportability config schema_version is unsupported: {version!r}"]
+    schema_v2 = version == "2.0"
+    schema_name = "supportability_config_v2" if schema_v2 else "supportability_config"
     try:
-        validate_named("supportability_config", config, root=_schema_root())
+        validate_named(schema_name, config, root=_schema_root())
     except SchemaValidationError as exc:
         errors.append(f"supportability config schema invalid: {exc}")
     errors.extend(_standard_errors(config.get("standard")))
-    errors.extend(_required_gate_errors(config.get("required_gates")))
+    if schema_v2:
+        errors.extend(
+            supportability_config_v2.capability_errors(config.get("capabilities"))
+        )
+    else:
+        errors.extend(_required_gate_errors(config.get("required_gates")))
     errors.extend(_coverage_errors(config.get("coverage")))
     errors.extend(_ai_review_errors(config.get("ai_review")))
     errors.extend(_receipt_config_errors(config.get("receipt")))
@@ -1117,13 +1132,8 @@ def _protected_enforcement_change_errors(
     head_text = path.read_text(encoding="utf-8")
     sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
     governance_ref = re.compile(r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)")
-
-    def normalized(text: str) -> str:
-        text = sha_ref.sub("<PIN>", text)
-        return governance_ref.sub(r"\1<PIN>\3", text)
-
-    base_normalized = normalized(base_text)
-    head_normalized = normalized(head_text)
+    base_normalized = governance_ref.sub(r"\1<PIN>\3", sha_ref.sub("<PIN>", base_text))
+    head_normalized = governance_ref.sub(r"\1<PIN>\3", sha_ref.sub("<PIN>", head_text))
     digests = (
         hashlib.sha256(base_normalized.encode()).hexdigest(),
         hashlib.sha256(head_normalized.encode()).hexdigest(),
@@ -2037,6 +2047,8 @@ def _parse_yaml_mapping(
         and not lines[index][1].startswith("- ")
     ):
         key, value = _split_yaml_key_value(lines[index][1])
+        if key in data:
+            raise SupportabilityError(f"duplicate supportability config key: {key}")
         if value == "":
             if index + 1 >= len(lines) or lines[index + 1][0] <= indent:
                 raise SupportabilityError(f"YAML key {key!r} is missing a nested block")
@@ -2069,6 +2081,10 @@ def _parse_yaml_list(
             index += 1
             if index < len(lines) and lines[index][0] > indent:
                 child, index = _parse_yaml_mapping(lines, index, lines[index][0])
+                duplicates = sorted(set(item) & set(child))
+                if duplicates:
+                    message = f"duplicate supportability config key: {duplicates[0]}"
+                    raise SupportabilityError(message)
                 item.update(child)
             items.append(item)
         else:

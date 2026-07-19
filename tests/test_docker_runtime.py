@@ -88,7 +88,7 @@ class DockerRuntimePolicyTests(unittest.TestCase):
         self.assertNotIn("--privileged", argv)
         self.assertNotIn("sh", argv)
         self.assertNotIn("bash", argv)
-        self.assertEqual(argv[-6:], plan.step["argv"])
+        self.assertEqual(argv[-len(plan.step["argv"]) :], plan.step["argv"])
 
     def test_missing_docker_emits_schema_valid_block(self) -> None:
         receipt = _receipt()

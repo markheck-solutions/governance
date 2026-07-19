@@ -59,6 +59,39 @@ def _receipt() -> CheckoutReceipt:
 
 
 class ExecutionPlanV2Tests(unittest.TestCase):
+    def test_compiles_each_authenticated_ruff_adapter(self) -> None:
+        cases = {
+            ("lint", "python.ruff-check.v1"): ["check", "--isolated"],
+            ("format_check", "python.ruff-format-check.v1"): [
+                "format",
+                "--check",
+            ],
+            ("complexity", "python.ruff-c901.v1"): ["check", "--isolated"],
+        }
+        for (capability, adapter_id), prefix in cases.items():
+            with self.subTest(capability=capability):
+                plan = compile_execution_plan_v2(
+                    _receipt(), capability=capability, adapter_id=adapter_id
+                )
+                validate_named("execution_plan_v2", plan.to_json())
+                self.assertEqual(plan.step["step_id"], capability)
+                self.assertEqual(plan.step["adapter_id"], adapter_id)
+                self.assertEqual(plan.step["argv"][1 : 1 + len(prefix)], prefix)
+                self.assertEqual(
+                    assess_execution_plan_v2(plan.to_json(), _receipt())[
+                        "capability_status"
+                    ],
+                    "PASS",
+                )
+
+    def test_unimplemented_adapter_fails_closed(self) -> None:
+        with self.assertRaisesRegex(
+            ExecutionPlanV2Error, "unsupported capability adapter"
+        ):
+            compile_execution_plan_v2(
+                _receipt(), capability="typecheck", adapter_id="python.mypy.v1"
+            )
+
     def test_compiles_only_from_authenticated_checkout_receipt(self) -> None:
         plan = compile_execution_plan_v2(
             _receipt(), capability="lint", adapter_id="python.ruff-check.v1"
@@ -82,6 +115,7 @@ class ExecutionPlanV2Tests(unittest.TestCase):
                 "--isolated",
                 "--no-cache",
                 "--no-respect-gitignore",
+                "--exclude=",
                 ".",
             ],
         )

@@ -27,9 +27,10 @@ class ArchitectureGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = repo_root(Path(__file__).resolve())
 
-    def test_ponytail_cleanup_slice_has_independent_architecture_coverage(self) -> None:
+    def test_typed_adapter_slice_has_independent_architecture_coverage(self) -> None:
         changed_files = [
             ".github/workflows/governance-shadow.yml",
+            "governance_eval/capability_catalog.py",
             "governance_eval/codex_connector_collector.py",
             "governance_eval/codex_connector_evidence.py",
             "governance_eval/detectors.py",
@@ -39,7 +40,9 @@ class ArchitectureGateTests(unittest.TestCase):
             "governance_eval/target_eval.py",
             "governance_eval/target_pack.py",
             "governance_eval/trusted_command.py",
+            "schemas/v2/supportability_config.schema.json",
             "tests/test_architecture_gate.py",
+            "tests/test_capability_adapters.py",
             "tests/test_detectors_and_decision.py",
             "tests/test_schemas_and_lock.py",
             "tests/test_supportability.py",
