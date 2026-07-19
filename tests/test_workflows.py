@@ -60,6 +60,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("run: python ", verification)
         self.assertIn('bootstrap["validate_receipt"]', workflow)
         self.assertIn('bootstrap["validate_live_receipt"]', workflow)
+        self.assertIn("Run authenticated Docker boundary controls", workflow)
+        self.assertIn("Bind trusted runner Docker CLI identity", workflow)
+        self.assertIn("Provision pinned Docker image", workflow)
+        self.assertIn(
+            "python@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d",
+            workflow,
+        )
+        self.assertIn('GOVERNANCE_LIVE_DOCKER: "1"', workflow)
+        self.assertIn(
+            "GOVERNANCE_RUFF_LINUX_BINARY: ${{ steps.toolchain.outputs.bin-path }}/ruff",
+            workflow,
+        )
+        self.assertIn(
+            "GOVERNANCE_TRUSTED_DOCKER_PATH: ${{ steps.docker-runtime.outputs.path }}",
+            workflow,
+        )
+        self.assertIn(
+            "GOVERNANCE_TRUSTED_DOCKER_SHA256: ${{ steps.docker-runtime.outputs.sha256 }}",
+            workflow,
+        )
+        self.assertIn(
+            "GOVERNANCE_TRUSTED_DOCKER_HOST: ${{ steps.docker-runtime.outputs.host }}",
+            workflow,
+        )
+        self.assertIn('-p "test_ruff_docker_live.py"', workflow)
         self.assertIn("hmac.compare_digest(actual, expected)", workflow)
         self.assertIn("governance-toolchain-receipt.json", workflow)
         self.assertIn("steps.receipt.outcome != 'success'", workflow)

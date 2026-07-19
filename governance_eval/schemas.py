@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 from governance_eval.paths import repo_root
-from governance_eval.schema_validator import validate
+from governance_eval.schema_validator import SchemaValidationError, validate
 
 SCHEMA_FILES = {
     "evaluation_case": "evaluation_case.schema.json",
@@ -27,7 +29,10 @@ SCHEMA_FILES = {
     "codex_connector_evidence_result_v3": "codex_connector_evidence_result.schema.json",
     "codex_connector_evidence_result_v4": "codex_connector_evidence_result.schema.json",
     "execution_plan": "execution_plan.schema.json",
+    "execution_plan_v2": "execution_plan.schema.json",
+    "checkout_receipt": "checkout_receipt.schema.json",
     "execution_result": "execution_result.schema.json",
+    "execution_result_v2": "execution_result.schema.json",
     "governance_toolchain_receipt": "governance_toolchain_receipt.schema.json",
     "governance_toolchain_evaluation_receipt": "governance_toolchain_evaluation_receipt.schema.json",
     "governance_toolchain_shadow_receipt": "governance_toolchain_shadow_receipt.schema.json",
@@ -35,10 +40,18 @@ SCHEMA_FILES = {
 }
 
 SCHEMA_VERSIONS = {
+    "execution_plan_v2": "v2",
+    "execution_result_v2": "v2",
     "codex_connector_snapshot_v2": "v2",
     "codex_connector_evidence_result_v2": "v2",
     "codex_connector_evidence_result_v3": "v3",
     "codex_connector_evidence_result_v4": "v4",
+}
+
+_PACKAGED_SCHEMA_SHA256 = {
+    "checkout_receipt": "8856cd39a7093eafcfad0b8cfb509e74b33c17eb24985e8205aef4b1c7eed90a",
+    "execution_plan_v2": "22177474a601c4c6dcfa23399173099b47974a5f984dc7d2944269abcb0b6cd9",
+    "execution_result_v2": "b7418511e88fb99f541841bb4658e3bb10e3241e67631c275931ba3aa64fe1fd",
 }
 
 
@@ -53,3 +66,29 @@ def load_schema(name: str, root: Path | None = None) -> dict[str, Any]:
 
 def validate_named(name: str, instance: Any, root: Path | None = None) -> None:
     validate(instance, load_schema(name, root))
+
+
+def validate_packaged_named(name: str, instance: Any) -> None:
+    if name not in _PACKAGED_SCHEMA_SHA256:
+        raise KeyError(f"schema {name!r} is not trusted package data")
+    version = SCHEMA_VERSIONS.get(name, "v1")
+    resource = files("governance_eval").joinpath(
+        "schema_data", version, SCHEMA_FILES[name]
+    )
+    try:
+        schema_bytes = resource.read_bytes()
+        schema_text = schema_bytes.decode("utf-8")
+    except (FileNotFoundError, OSError, UnicodeDecodeError) as exc:
+        raise SchemaValidationError(
+            "trusted schema is unavailable or malformed"
+        ) from exc
+    canonical = schema_text.replace("\r\n", "\n").encode("utf-8")
+    if sha256(canonical).hexdigest() != _PACKAGED_SCHEMA_SHA256[name]:
+        raise SchemaValidationError("trusted schema digest is invalid")
+    try:
+        schema = json.loads(schema_text)
+    except json.JSONDecodeError as exc:
+        raise SchemaValidationError("trusted schema is malformed") from exc
+    if not isinstance(schema, dict):
+        raise SchemaValidationError("trusted schema must be an object")
+    validate(instance, schema)

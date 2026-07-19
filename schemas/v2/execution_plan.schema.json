@@ -1,0 +1,72 @@
+{
+  "type": "object",
+  "required": ["schema_version", "plan_id", "checkout_receipt_id", "repository", "pull_request", "target", "evaluator", "runtime", "step"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["2.0"]},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "checkout_receipt_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "repository": {"type": "object", "required": ["id", "full_name"], "additionalProperties": true},
+    "pull_request": {"type": "integer", "minimum": 1},
+    "target": {"$ref": "#/$defs/git_object"},
+    "evaluator": {"$ref": "#/$defs/evaluator_object"},
+    "runtime": {
+      "type": "object",
+      "required": ["runtime_id", "policy_id", "image", "network", "user", "read_only_root", "cap_drop", "no_new_privileges", "pids_limit", "memory_bytes", "cpus", "toolchain_sha256", "docker_path", "docker_sha256", "docker_host"],
+      "properties": {
+        "runtime_id": {"type": "string", "enum": ["docker.python-toolchain.v1"]},
+        "policy_id": {"type": "string", "enum": ["docker.lockdown.v1"]},
+        "image": {"type": "string", "enum": ["python@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d"]},
+        "network": {"type": "string", "enum": ["none"]},
+        "user": {"type": "string", "enum": ["65532:65532"]},
+        "read_only_root": {"type": "boolean", "enum": [true]},
+        "cap_drop": {"type": "array", "items": {"type": "string", "enum": ["ALL"]}, "minItems": 1, "maxItems": 1},
+        "no_new_privileges": {"type": "boolean", "enum": [true]},
+        "pids_limit": {"type": "integer", "minimum": 1, "maximum": 128},
+        "memory_bytes": {"type": "integer", "minimum": 67108864, "maximum": 536870912},
+        "cpus": {"type": "string", "enum": ["1.0"]},
+        "toolchain_sha256": {"type": "string", "enum": ["68971e86ff2a4bd44f45dc2dd28e590e785fea12dc966410ae269173ce6d64db"]},
+        "docker_path": {"type": "string", "minLength": 1},
+        "docker_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "docker_host": {"type": "string", "enum": ["unix:///var/run/docker.sock", "npipe:////./pipe/docker_engine"]}
+      },
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object",
+      "required": ["step_id", "adapter_id", "toolchain", "argv", "working_directory", "timeout_seconds", "output_limit_bytes"],
+      "properties": {
+        "step_id": {"type": "string", "enum": ["lint"]},
+        "adapter_id": {"type": "string", "enum": ["python.ruff-check.v1"]},
+        "toolchain": {"type": "object", "required": ["ruff"], "properties": {"ruff": {"type": "string", "enum": ["0.15.21"]}}, "additionalProperties": false},
+        "argv": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "string", "minLength": 1}},
+        "working_directory": {"type": "string", "enum": ["/workspace"]},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
+        "output_limit_bytes": {"type": "integer", "minimum": 1, "maximum": 65536}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "git_object": {
+      "type": "object",
+      "required": ["commit_sha", "tree_sha"],
+      "properties": {
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      },
+      "additionalProperties": false
+    },
+    "evaluator_object": {
+      "type": "object",
+      "required": ["repository_id", "repository_full_name", "commit_sha", "tree_sha"],
+      "properties": {
+        "repository_id": {"type": "integer", "minimum": 1},
+        "repository_full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
