@@ -1,13 +1,16 @@
 # Governance evaluator toolchain lock.
-# Scope: Ruff and mypy bootstrap only.
+# Scope: typed Python gate runtime.
 # Runtime: CPython 3.12.13 on Ubuntu x86_64 or Windows x86_64.
-# Artifact hashes verified against PyPI release metadata on 2026-07-18.
+# Artifact hashes verified against PyPI release metadata on 2026-07-19.
 ruff==0.15.21 \
     --hash=sha256:bab0905d2f29e0d9fbc3c373ed23db0095edaa3f71f1f4f519ec15134d9e85c8 \
     --hash=sha256:d4b8d9a2f0f12b816b50447f6eccb9f4bb01a6b82c86b50fb3b5354b458dc6d3
 mypy==2.2.0 \
     --hash=sha256:511320b17467402e2906130e185abffffa3d7648aff1444fc2abb61f4c8a087d \
     --hash=sha256:b0179a3a0b833f724a65f22613607cf7ea941ab17ec34fa283f8d6dfe21d9fa9
+setuptools==83.0.0 \
+    --hash=sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef \
+    --hash=sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3
 ast-serialize==0.6.0 \
     --hash=sha256:113b58346f9ceb664352032770caca817d4a3c86f611c6088e6ef65ddaa70f0e \
     --hash=sha256:dcbed41e9386059fc0261d602445ede0976c2ecec2939688bcbcb9ed0b6f28b7
