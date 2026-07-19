@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 RUFF_VERSION = "0.15.21"
 MYPY_VERSION = "2.2.0"
+SETUPTOOLS_VERSION = "83.0.0"
 AST_SERIALIZE_VERSION = "0.6.0"
 LIBRT_VERSION = "0.13.0"
 MYPY_EXTENSIONS_VERSION = "1.1.0"
@@ -111,6 +112,12 @@ _MYPY_HASHES = frozenset(
         "sha256:b0179a3a0b833f724a65f22613607cf7ea941ab17ec34fa283f8d6dfe21d9fa9",
     }
 )
+_SETUPTOOLS_HASHES = frozenset(
+    {
+        "sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef",
+        "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3",
+    }
+)
 _AST_SERIALIZE_HASHES = frozenset(
     {
         "sha256:113b58346f9ceb664352032770caca817d4a3c86f611c6088e6ef65ddaa70f0e",
@@ -141,6 +148,7 @@ _TYPING_EXTENSIONS_HASHES = frozenset(
 _APPROVED_LOCK_REQUIREMENTS = (
     (f"ruff=={RUFF_VERSION}", _RUFF_HASHES),
     (f"mypy=={MYPY_VERSION}", _MYPY_HASHES),
+    (f"setuptools=={SETUPTOOLS_VERSION}", _SETUPTOOLS_HASHES),
     (f"ast-serialize=={AST_SERIALIZE_VERSION}", _AST_SERIALIZE_HASHES),
     (f"librt=={LIBRT_VERSION}", _LIBRT_HASHES),
     (f"mypy-extensions=={MYPY_EXTENSIONS_VERSION}", _MYPY_EXTENSIONS_HASHES),
@@ -150,6 +158,7 @@ _APPROVED_LOCK_REQUIREMENTS = (
 _TOOLCHAIN_PACKAGES = (
     {"name": "ruff", "version": RUFF_VERSION},
     {"name": "mypy", "version": MYPY_VERSION},
+    {"name": "setuptools", "version": SETUPTOOLS_VERSION},
     {"name": "ast-serialize", "version": AST_SERIALIZE_VERSION},
     {"name": "librt", "version": LIBRT_VERSION},
     {"name": "mypy-extensions", "version": MYPY_EXTENSIONS_VERSION},

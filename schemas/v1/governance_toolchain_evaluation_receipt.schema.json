@@ -229,14 +229,17 @@
           "maxItems": 0
         },
         {
-          "minItems": 7,
-          "maxItems": 7,
+          "minItems": 8,
+          "maxItems": 8,
           "prefixItems": [
             {
               "$ref": "#/definitions/ruff_package"
             },
             {
               "$ref": "#/definitions/mypy_package"
+            },
+            {
+              "$ref": "#/definitions/setuptools_package"
             },
             {
               "$ref": "#/definitions/ast_serialize_package"
@@ -389,6 +392,15 @@
           "type": "string",
           "const": "0.6.0"
         }
+      },
+      "additionalProperties": false
+    },
+    "setuptools_package": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string", "const": "setuptools"},
+        "version": {"type": "string", "const": "83.0.0"}
       },
       "additionalProperties": false
     },
