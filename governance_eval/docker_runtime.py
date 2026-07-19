@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -275,6 +275,8 @@ def _run_bounded(
     timeout_seconds: int,
     output_limit: int,
 ) -> dict[str, Any]:
+    command_started = datetime.now(UTC)
+    command_started_monotonic = time.monotonic()
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -283,8 +285,11 @@ def _run_bounded(
     )
     output = _BoundedOutput(output_limit)
     threads = output.start(process)
-    deadline = time.monotonic() + timeout_seconds
+    deadline = command_started_monotonic + timeout_seconds
     termination = _wait_reason(process, output, deadline)
+    command_completed = datetime.now(UTC)
+    if termination == "TIMED_OUT":
+        command_completed = command_started + timedelta(seconds=timeout_seconds)
     if termination != "EXITED":
         _command(
             [str(docker), f"--host={docker_host}", "kill", container_name],
@@ -323,6 +328,8 @@ def _run_bounded(
         "exit_code": exit_code,
         "stdout": output.stream("stdout"),
         "stderr": output.stream("stderr"),
+        "started_at": command_started,
+        "completed_at": command_completed,
     }
 
 
@@ -389,6 +396,9 @@ def _result(
     errors: list[str],
 ) -> dict[str, Any]:
     completed = datetime.now(UTC)
+    if outcome:
+        started = outcome["started_at"]
+        completed = outcome["completed_at"]
     empty = _empty_stream()
     payload: dict[str, Any] = {
         "schema_version": "2.0",

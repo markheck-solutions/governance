@@ -4,8 +4,11 @@ import base64
 import unittest
 from copy import deepcopy
 from hashlib import sha256
+from os import chdir
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from governance_eval.execution_plan_v2 import compile_execution_plan_v2
+from governance_eval.execution_plan_v2 import ExecutionPlanV2, compile_execution_plan_v2
 from governance_eval.execution_result_v2 import validate_execution_result_v2
 from governance_eval.hashing import sha256_json
 from test_execution_plan_v2 import _receipt
@@ -131,6 +134,71 @@ class ExecutionResultV2Tests(unittest.TestCase):
                 result = validate_execution_result_v2(payload, plan, receipt)
 
                 self.assertEqual(result["integrity_status"], "INTEGRITY_INVALID")
+
+    def test_rejects_result_that_matches_rehashed_mutated_plan(self) -> None:
+        payload, plan, receipt = _result()
+        plan_payload = deepcopy(plan.to_json())
+        plan_payload["runtime"]["network"] = "bridge"
+        plan_payload["plan_id"] = sha256_json(
+            {key: value for key, value in plan_payload.items() if key != "plan_id"}
+        )
+        hostile_plan = ExecutionPlanV2(**plan_payload)
+        payload["plan_id"] = hostile_plan.plan_id
+        payload["command"][6] = "--network=bridge"
+        payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
+
+        result = validate_execution_result_v2(payload, hostile_plan, receipt)
+
+        self.assertEqual(result["integrity_status"], "INTEGRITY_INVALID")
+
+    def test_rejects_execution_longer_than_plan_timeout(self) -> None:
+        payload, plan, receipt = _result()
+        payload["completed_at"] = "2026-07-19T12:02:01Z"
+        payload["duration_seconds"] = 121.0
+        payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
+
+        result = validate_execution_result_v2(payload, plan, receipt)
+
+        self.assertEqual(result["integrity_status"], "INTEGRITY_INVALID")
+
+    def test_accepts_only_exact_timeout_deadline(self) -> None:
+        for duration, completed_at, expected in (
+            (119.999, "2026-07-19T12:01:59.999000Z", "INTEGRITY_INVALID"),
+            (120.0, "2026-07-19T12:02:00Z", "INTEGRITY_VALID"),
+            (120.001, "2026-07-19T12:02:00.001000Z", "INTEGRITY_INVALID"),
+        ):
+            with self.subTest(duration=duration):
+                payload, plan, receipt = _result()
+                payload["capability_status"] = "BLOCK_TECHNICAL"
+                payload["termination"] = "TIMED_OUT"
+                payload["exit_code"] = 137
+                payload["completed_at"] = completed_at
+                payload["duration_seconds"] = duration
+                payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
+
+                result = validate_execution_result_v2(payload, plan, receipt)
+
+                self.assertEqual(result["integrity_status"], expected)
+
+    def test_result_schema_cannot_be_replaced_by_target_checkout(self) -> None:
+        _, plan, receipt = _result()
+        original = Path.cwd()
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "TASK.md").write_text("target", encoding="utf-8")
+            (root / "AGENTS.md").write_text("target", encoding="utf-8")
+            schema = root / "schemas" / "v2" / "execution_result.schema.json"
+            schema.parent.mkdir(parents=True)
+            schema.write_text("{}", encoding="utf-8")
+            try:
+                chdir(root)
+                result = validate_execution_result_v2(
+                    {"artifact_id": "0" * 64}, plan, receipt
+                )
+            finally:
+                chdir(original)
+
+        self.assertEqual(result["integrity_status"], "INTEGRITY_INVALID")
 
     def test_rejects_exited_result_without_exit_code(self) -> None:
         payload, plan, receipt = _result()

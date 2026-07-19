@@ -8,7 +8,7 @@ from governance_eval.capability_catalog import get_capability_adapter
 from governance_eval.checkout_receipt import CheckoutReceipt
 from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
-from governance_eval.schemas import validate_named
+from governance_eval.schemas import validate_packaged_named
 
 _IMAGE = (
     "python@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d"
@@ -129,7 +129,7 @@ def _validate_receipt(receipt: CheckoutReceipt) -> None:
         raise ExecutionPlanV2Error("checkout receipt is invalid")
     payload = receipt.to_json()
     try:
-        validate_named("checkout_receipt", payload)
+        validate_packaged_named("checkout_receipt", payload)
     except (KeyError, OSError, SchemaValidationError, ValueError) as exc:
         raise ExecutionPlanV2Error("checkout receipt schema is invalid") from exc
     receipt_id = payload.pop("receipt_id", None)

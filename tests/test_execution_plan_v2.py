@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 from copy import deepcopy
+from os import chdir
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from governance_eval.checkout_receipt import CheckoutReceipt
 from governance_eval.execution_plan_v2 import (
@@ -129,6 +131,41 @@ class ExecutionPlanV2Tests(unittest.TestCase):
                         capability="lint",
                         adapter_id="python.ruff-check.v1",
                     )
+
+    def test_receipt_schema_cannot_be_replaced_by_target_checkout(self) -> None:
+        receipt = _receipt()
+        hostile = CheckoutReceipt(
+            **{
+                **receipt.__dict__,
+                "workflow": {**receipt.workflow, "run_id": "not-an-integer"},
+                "receipt_id": "",
+            }
+        )
+        unsigned = hostile.to_json()
+        unsigned.pop("receipt_id")
+        hostile = CheckoutReceipt(
+            **{**hostile.__dict__, "receipt_id": sha256_json(unsigned)}
+        )
+        original = Path.cwd()
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "TASK.md").write_text("target", encoding="utf-8")
+            (root / "AGENTS.md").write_text("target", encoding="utf-8")
+            schema = root / "schemas" / "v1" / "checkout_receipt.schema.json"
+            schema.parent.mkdir(parents=True)
+            schema.write_text("{}", encoding="utf-8")
+            try:
+                chdir(root)
+                with self.assertRaisesRegex(
+                    ExecutionPlanV2Error, "checkout receipt schema is invalid"
+                ):
+                    compile_execution_plan_v2(
+                        hostile,
+                        capability="lint",
+                        adapter_id="python.ruff-check.v1",
+                    )
+            finally:
+                chdir(original)
 
     def test_blocks_rehashed_runtime_or_command_mutation(self) -> None:
         plan = compile_execution_plan_v2(

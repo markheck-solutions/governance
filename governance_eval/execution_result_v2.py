@@ -10,10 +10,12 @@ from typing import Any
 
 from governance_eval.checkout_receipt import CheckoutReceipt
 from governance_eval.docker_runtime import docker_run_argv
-from governance_eval.execution_plan_v2 import ExecutionPlanV2
+from governance_eval.execution_plan_v2 import ExecutionPlanV2, assess_execution_plan_v2
 from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
-from governance_eval.schemas import validate_named
+from governance_eval.schemas import validate_packaged_named
+
+_TIMING_TOLERANCE_SECONDS = 0.001
 
 
 def validate_execution_result_v2(
@@ -34,10 +36,13 @@ def validate_execution_result_v2(
 def _integrity_error(
     payload: Any, plan: ExecutionPlanV2, receipt: CheckoutReceipt
 ) -> str | None:
+    plan_assessment = assess_execution_plan_v2(plan.to_json(), receipt)
+    if plan_assessment["capability_status"] != "PASS":
+        return "execution result v2 plan is not evaluator-owned"
     if not isinstance(payload, dict):
         return "execution result v2 must be an object"
     try:
-        validate_named("execution_result_v2", payload)
+        validate_packaged_named("execution_result_v2", payload)
     except (KeyError, OSError, SchemaValidationError, ValueError) as exc:
         return f"execution result v2 schema invalid: {exc}"
     if payload["artifact_id"] != sha256_json({**payload, "artifact_id": ""}):
@@ -55,7 +60,7 @@ def _integrity_error(
     outcome_error = _outcome_error(payload)
     if outcome_error is not None:
         return outcome_error
-    return _timing_error(payload)
+    return _timing_error(payload, plan.step["timeout_seconds"])
 
 
 def _output_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
@@ -170,7 +175,7 @@ def _outcome_error(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def _timing_error(payload: dict[str, Any]) -> str | None:
+def _timing_error(payload: dict[str, Any], timeout_seconds: int) -> str | None:
     try:
         duration = float(payload["duration_seconds"])
         started = _timestamp(payload["started_at"])
@@ -182,8 +187,15 @@ def _timing_error(payload: dict[str, Any]) -> str | None:
     if completed < started:
         return "execution result v2 timestamps are out of order"
     elapsed = (completed - started).total_seconds()
-    if abs(elapsed - duration) > 0.001:
+    if abs(elapsed - duration) > _TIMING_TOLERANCE_SECONDS:
         return "execution result v2 duration does not match timestamps"
+    if payload["termination"] == "TIMED_OUT":
+        if duration < timeout_seconds:
+            return "execution result v2 timeout occurred before plan deadline"
+        if duration > timeout_seconds:
+            return "execution result v2 timeout exceeded plan deadline"
+    elif duration > timeout_seconds:
+        return "execution result v2 duration exceeds plan timeout"
     return None
 
 
