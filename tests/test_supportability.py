@@ -50,14 +50,49 @@ class SupportabilityConfigTests(unittest.TestCase):
         config["required_gates"].pop("tests")
         config["required_gates"]["lint"] = []
         config["required_gates"]["typecheck"] = ["python -m pyright"]
-
         errors = validate_supportability_config(config)
-
         self.assertTrue(any("standard.hash" in error for error in errors))
         self.assertTrue(any("required_gates.tests" in error for error in errors))
         self.assertTrue(any("required_gates.lint" in error for error in errors))
         self.assertTrue(
             any("required_gates.typecheck lacks" in error for error in errors)
+        )
+
+    def test_extracted_validation_order_is_stable(self) -> None:
+        base = _valid_config(self.root)
+        _set_semantic_gate_commands(base)
+        head = json.loads(json.dumps(base))
+        head["required_gates"]["lint"] = ["python -m mypy ."]
+        self.assertEqual(
+            supportability_module._required_gate_change_errors(base, head),
+            [
+                "required gate command duplicated across capabilities: python -m mypy .",
+                "required_gates.lint lacks required capability semantics",
+            ],
+        )
+        gate = _gate_result()
+        review = _copilot_result()
+        architecture = _architecture_result()
+        gate.update(owner_status=STATUS_RED, errors=["failed"])
+        review.update(owner_status=STATUS_RED, approval_provided=True)
+        architecture["enforcement_mode"] = "shadow"
+        gate["required_judges"]["candidate_judge_ran"] = False
+        receipt = dict(
+            supportability_gate=gate,
+            ai_review=review,
+            architecture=architecture,
+            required_judges=gate["required_judges"],
+            bootstrap={"reason": "active"},
+        )
+        self.assertEqual(
+            "\n".join(supportability_module._embedded_receipt_status_errors(receipt)),
+            "receipt supportability_gate.owner_status must be GREEN\n"
+            "receipt supportability_gate.errors must be empty\n"
+            "receipt ai_review.owner_status must be GREEN\n"
+            "receipt ai_review.approval_provided must be false\n"
+            "receipt architecture.enforcement_mode must be block_all\n"
+            "required judge proof missing: candidate_judge_ran\n"
+            "receipt bootstrap must not indicate active bootstrap RED state",
         )
 
     def test_config_accepts_typed_codex_policy_and_rejects_legacy_copilot(self) -> None:
@@ -75,9 +110,7 @@ class SupportabilityConfigTests(unittest.TestCase):
             "unavailable_after_cutoff": "non_blocking",
             "unresolved_p0_p1_p2_blocks": True,
         }
-
         self.assertEqual(validate_supportability_config(config), [])
-
         config["ai_review"] = legacy
         errors = validate_supportability_config(config)
         self.assertTrue(any("legacy Copilot" in error for error in errors), errors)
@@ -86,7 +119,6 @@ class SupportabilityConfigTests(unittest.TestCase):
         config = _valid_config(self.root)
         config["ai_review"]["unavailable_after_cutoff"] = "non_blocking"
         self.assertEqual(validate_supportability_config(config), [])
-
         for policy in (
             "blocking",
             "ignore",
@@ -134,9 +166,7 @@ class SupportabilityConfigTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 config = _valid_config(self.root)
                 config["architecture_policy"]["enforcement_mode"] = mode
-
                 errors = validate_supportability_config(config)
-
                 self.assertTrue(
                     any(
                         "architecture_policy.enforcement_mode" in error
@@ -147,17 +177,13 @@ class SupportabilityConfigTests(unittest.TestCase):
     def test_config_validation_rejects_deleted_architecture_policy(self) -> None:
         config = _valid_config(self.root)
         config.pop("architecture_policy")
-
         errors = validate_supportability_config(config)
-
         self.assertTrue(any("architecture_policy" in error for error in errors))
 
     def test_config_schema_rejects_legacy_debt_field(self) -> None:
         config = _valid_config(self.root)
         config["architecture_policy"][LEGACY_POLICY_DEBT_FIELD] = []
-
         errors = validate_supportability_config(config)
-
         self.assertTrue(
             any("legacy architecture debt field" in error for error in errors)
         )
@@ -168,11 +194,9 @@ class SupportabilityConfigTests(unittest.TestCase):
         self,
     ) -> None:
         config = _valid_config(self.root)
-
         with tempfile.TemporaryDirectory() as tmp:
             with contextlib.chdir(tmp):
                 errors = validate_supportability_config(config)
-
         self.assertEqual(errors, [])
 
     def test_yaml_config_contract_loads_without_third_party_dependency(self) -> None:

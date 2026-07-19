@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+import governance_eval.architecture_gate as architecture_gate_module
 from governance_eval.architecture_policy import architecture_policy_weakening_errors
 from governance_eval.architecture_gate import (
     EXIT_BLOCKED,
@@ -65,6 +66,62 @@ class ArchitectureGateTests(unittest.TestCase):
         errors = architecture_policy_weakening_errors(base, head)
 
         self.assertTrue(any("max_file_lines increased" in error for error in errors))
+
+    def test_module_registry_validation_preserves_grouped_error_order(self) -> None:
+        modules = {
+            "core": {
+                "path": "",
+                "owner": "owner",
+                "purpose": "purpose",
+                "classification": "unsupported",
+                "domain": "domain",
+                "test_strategy": "tests",
+                "allowed_dependencies": "shared",
+                "forbidden_dependencies": [],
+                "limits": {
+                    "max_file_lines": -1,
+                    "max_function_lines": 10,
+                    "max_class_lines": 10,
+                    "max_functions_per_file": 10,
+                    "max_classes_per_file": 10,
+                },
+            }
+        }
+
+        errors = architecture_gate_module._module_registry_errors(modules)
+
+        self.assertEqual(
+            errors,
+            [
+                "architecture_policy.modules.core.path must be a non-empty string",
+                "architecture_policy.modules.core.classification is unsupported",
+                "architecture_policy.modules.core.allowed_dependencies must be a list of strings",
+                "architecture_policy.modules.core.limits.max_file_lines must be a non-negative integer",
+            ],
+        )
+
+    def test_known_debt_validation_preserves_item_and_field_order(self) -> None:
+        errors = architecture_gate_module._known_debt_shape_errors(
+            {"known_debt": ["bad", {}]}
+        )
+
+        self.assertEqual(
+            errors,
+            [
+                "architecture_policy.known_debt[0] must be an object",
+                "architecture_policy.known_debt[1].rule must be a non-empty string",
+                "architecture_policy.known_debt[1].path must be a non-empty string",
+                "architecture_policy.known_debt[1].owner must be a non-empty string",
+                "architecture_policy.known_debt[1].reason must be a non-empty string",
+                "architecture_policy.known_debt[1].expires_on must be a non-empty string",
+                "architecture_policy.known_debt[1].source_module must be a string",
+                "architecture_policy.known_debt[1].target_module must be a string",
+                "architecture_policy.known_debt[1].symbol_name must be a string",
+                "architecture_policy.known_debt[1].detail must be a string",
+                "architecture_policy.known_debt[1].fingerprint must be a 64-character SHA-256",
+                "architecture_policy.known_debt[1].expires_on must be YYYY-MM-DD",
+            ],
+        )
 
     def test_codex_connector_test_classes_respect_architecture_limits(self) -> None:
         result, code = run_architecture_gate(
