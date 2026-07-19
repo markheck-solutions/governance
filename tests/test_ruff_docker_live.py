@@ -85,7 +85,9 @@ class RuffDockerLiveTests(unittest.TestCase):
 
             clean = self._execute(root)
 
-            self.assertEqual(clean["capability_status"], "PASS")
+            self.assertEqual(
+                clean["capability_status"], "PASS", clean.get("errors", [])
+            )
             self.assertEqual(source.read_bytes(), clean_bytes)
             source.write_text("import os\nanswer = 42\n", encoding="utf-8")
             _git(root, "commit", "-qam", "defective")

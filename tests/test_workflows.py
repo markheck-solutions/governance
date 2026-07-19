@@ -62,6 +62,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('bootstrap["validate_live_receipt"]', workflow)
         self.assertIn("Run authenticated Docker boundary controls", workflow)
         self.assertIn("Bind trusted runner Docker CLI identity", workflow)
+        self.assertIn("Provision pinned Docker image", workflow)
+        self.assertIn(
+            "python@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d",
+            workflow,
+        )
         self.assertIn('GOVERNANCE_LIVE_DOCKER: "1"', workflow)
         self.assertIn(
             "GOVERNANCE_RUFF_LINUX_BINARY: ${{ steps.toolchain.outputs.bin-path }}/ruff",
