@@ -812,18 +812,8 @@ def _required_gate_change_errors(
     errors = _required_gate_errors(gates)
     if not isinstance(gates, dict):
         return errors
-    commands = [
-        command
-        for gate in ALL_COMMAND_GATES
-        for command in _command_list(gates.get(gate))
-    ]
-    duplicates = sorted(
-        {command for command in commands if commands.count(command) > 1}
-    )
-    errors.extend(
-        f"required gate command duplicated across capabilities: {command}"
-        for command in duplicates
-    )
+    commands = _all_required_gate_commands(gates)
+    errors.extend(_duplicate_required_gate_errors(commands))
     js_runner = r"(?:npx\s+|pnpm\s+(?:exec\s+)?|yarn\s+)?"
     required_semantics = {
         "lint": (
@@ -900,32 +890,54 @@ def _required_gate_change_errors(
             "required_gates.package_audit lacks required capability semantics"
         )
     for command in commands:
-        lowered = command.lower()
-        tokens = {token.lower() for token in split_command(command)}
-        if any(
-            marker in command
-            for marker in (";", "|", ">", "<", "&", "`", "$(", "\n", "\r")
-        ):
-            errors.append(
-                f"required gate command contains shell control syntax: {command}"
-            )
-        if tokens & {
-            "--help",
-            "-h",
-            "--version",
-            "--collect-only",
-            "--list",
-            "--list-tests",
-            "--dry-run",
-            "--no-run",
-        }:
-            errors.append(f"required gate command uses non-execution mode: {command}")
-        if any(marker in lowered for marker in NON_BLOCKING_MARKERS):
-            errors.append(f"required gate command is non-blocking: {command}")
-        if any(marker in lowered for marker in SCOPE_NARROWING_MARKERS):
-            errors.append(f"required gate command narrows scope: {command}")
-        if any(marker in lowered for marker in THRESHOLD_WEAKENING_MARKERS):
-            errors.append(f"required gate command weakens thresholds: {command}")
+        errors.extend(_required_command_safety_errors(command))
+    return errors
+
+
+def _all_required_gate_commands(gates: dict[str, Any]) -> list[str]:
+    return [
+        command
+        for gate in ALL_COMMAND_GATES
+        for command in _command_list(gates.get(gate))
+    ]
+
+
+def _duplicate_required_gate_errors(commands: list[str]) -> list[str]:
+    duplicates = sorted(
+        {command for command in commands if commands.count(command) > 1}
+    )
+    return [
+        f"required gate command duplicated across capabilities: {command}"
+        for command in duplicates
+    ]
+
+
+def _required_command_safety_errors(command: str) -> list[str]:
+    errors: list[str] = []
+    lowered = command.lower()
+    tokens = {token.lower() for token in split_command(command)}
+    if any(
+        marker in command for marker in (";", "|", ">", "<", "&", "`", "$(", "\n", "\r")
+    ):
+        errors.append(f"required gate command contains shell control syntax: {command}")
+    non_execution = {
+        "--help",
+        "-h",
+        "--version",
+        "--collect-only",
+        "--list",
+        "--list-tests",
+        "--dry-run",
+        "--no-run",
+    }
+    if tokens & non_execution:
+        errors.append(f"required gate command uses non-execution mode: {command}")
+    if any(marker in lowered for marker in NON_BLOCKING_MARKERS):
+        errors.append(f"required gate command is non-blocking: {command}")
+    if any(marker in lowered for marker in SCOPE_NARROWING_MARKERS):
+        errors.append(f"required gate command narrows scope: {command}")
+    if any(marker in lowered for marker in THRESHOLD_WEAKENING_MARKERS):
+        errors.append(f"required gate command weakens thresholds: {command}")
     return errors
 
 
@@ -1758,12 +1770,27 @@ def _receipt_identity_errors(receipt: dict[str, Any]) -> list[str]:
 
 
 def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
     supportability_gate = _dict_or_empty(receipt.get("supportability_gate"))
     ai_review = _dict_or_empty(receipt.get("ai_review"))
     architecture = _dict_or_empty(receipt.get("architecture"))
     required_judges = _bool_dict_or_empty(receipt.get("required_judges"))
     bootstrap = _dict_or_empty(receipt.get("bootstrap"))
+    errors = _embedded_gate_and_review_errors(supportability_gate, ai_review)
+    errors.extend(_embedded_architecture_errors(architecture))
+    errors.extend(_required_judge_errors(required_judges))
+    if (
+        bootstrap.get("governance_pass") is False
+        or bootstrap.get("gate_result") == STATUS_RED
+        or bootstrap.get("reason")
+    ):
+        errors.append("receipt bootstrap must not indicate active bootstrap RED state")
+    return errors
+
+
+def _embedded_gate_and_review_errors(
+    supportability_gate: dict[str, Any], ai_review: dict[str, Any]
+) -> list[str]:
+    errors: list[str] = []
     if supportability_gate.get("owner_status") != STATUS_GREEN:
         errors.append("receipt supportability_gate.owner_status must be GREEN")
     if supportability_gate.get("errors"):
@@ -1772,6 +1799,11 @@ def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
         errors.append("receipt ai_review.owner_status must be GREEN")
     if ai_review.get("approval_provided") is not False:
         errors.append("receipt ai_review.approval_provided must be false")
+    return errors
+
+
+def _embedded_architecture_errors(architecture: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
     expected_architecture = {
         "owner_status": STATUS_GREEN,
         "gate_implementation": "PASS",
@@ -1802,13 +1834,6 @@ def _embedded_receipt_status_errors(receipt: dict[str, Any]) -> list[str]:
             errors.append(f"receipt architecture.{key} must be empty")
     if architecture.get("errors"):
         errors.append("receipt architecture.errors must be empty")
-    errors.extend(_required_judge_errors(required_judges))
-    if (
-        bootstrap.get("governance_pass") is False
-        or bootstrap.get("gate_result") == STATUS_RED
-        or bootstrap.get("reason")
-    ):
-        errors.append("receipt bootstrap must not indicate active bootstrap RED state")
     return errors
 
 
