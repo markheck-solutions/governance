@@ -21,7 +21,6 @@ from governance_eval.architecture_policy import (
     architecture_policy_weakening_errors as _architecture_policy_weakening_errors,
 )
 from governance_eval.hashing import sha256_file
-from governance_eval.legacy_copilot_gate import evaluate_copilot_review_gate
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
@@ -528,7 +527,6 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_config_parser(subparsers)
     _add_gate_parser(subparsers)
-    _add_copilot_parser(subparsers)
     _add_receipt_parser(subparsers)
     _add_bootstrap_parser(subparsers)
     _add_verify_parser(subparsers)
@@ -537,8 +535,6 @@ def main(argv: list[str] | None = None) -> int:
         return _cli_config(args)
     if args.command == "supportability-gate":
         return _cli_gate(args)
-    if args.command == "copilot-review-gate":
-        return _cli_copilot(args)
     if args.command == "delivery-receipt":
         return _cli_receipt(args)
     if args.command == "bootstrap-receipt":
@@ -982,15 +978,7 @@ def _architecture_governance_change_errors(
         "schemas/v3/codex_connector_evidence_result.schema.json",
         "schemas/v4/codex_connector_evidence_result.schema.json",
     }
-    future_checker_paths = {
-        "governance_eval/copilot_review_evidence.py",
-    }
-    existing_future_checkers = {
-        path
-        for path in changed_set & future_checker_paths
-        if _git_show_text(target_repo, base_sha, path) is not None
-    }
-    touched_checkers = sorted((changed_set & checker_paths) | existing_future_checkers)
+    touched_checkers = sorted(changed_set & checker_paths)
     enforcement_path = ".github/workflows/supportability-enforcement.yml"
     if touched_checkers:
         required_tests = {
@@ -2151,16 +2139,6 @@ def _add_receipt_parser(
     parser.add_argument("--governance-weakening-detected", action="store_true")
 
 
-def _add_copilot_parser(
-    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
-) -> None:
-    parser = subparsers.add_parser("copilot-review-gate")
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--head-sha", required=True)
-    parser.add_argument("--payload", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-
-
 def _add_bootstrap_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
@@ -2251,24 +2229,6 @@ def _cli_receipt(args: argparse.Namespace) -> int:
     )
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0 if receipt["owner_status"] == STATUS_GREEN else 1
-
-
-def _cli_copilot(args: argparse.Namespace) -> int:
-    errors: list[str] = []
-    try:
-        payload = json.loads(args.payload.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        payload = None
-        errors.append(f"review payload load failed: {type(exc).__name__}: {exc}")
-    result = evaluate_copilot_review_gate(
-        args.config,
-        args.head_sha,
-        payload=payload,
-        payload_errors=errors,
-        output_dir=args.output_dir,
-    )
-    print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result["owner_status"] == STATUS_GREEN else 1
 
 
 def _cli_bootstrap_receipt(args: argparse.Namespace) -> int:

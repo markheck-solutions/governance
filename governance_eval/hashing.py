@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -22,9 +23,10 @@ def sha256_json(data: Any) -> str:
     return sha256_text(json.dumps(data, sort_keys=True, separators=(",", ":")))
 
 
-def hash_paths(root: Path, relative_paths: list[str]) -> dict[str, str]:
-    hashes: dict[str, str] = {}
-    for relative in relative_paths:
-        path = root / relative
-        hashes[relative] = sha256_file(path) if path.exists() else "MISSING"
-    return hashes
+def git_sha(root: Path) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+    except Exception:
+        return "UNKNOWN"

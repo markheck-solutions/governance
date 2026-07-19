@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,17 +19,7 @@ class SpaghettiLock:
     evidence_source: str
 
     def to_json(self) -> dict[str, Any]:
-        return {
-            "repository_url": self.repository_url,
-            "pull_request": self.pull_request,
-            "base_sha": self.base_sha,
-            "head_sha": self.head_sha,
-            "merge_commit_sha": self.merge_commit_sha,
-            "approved_oracle_sha": self.approved_oracle_sha,
-            "observed_main_sha": self.observed_main_sha,
-            "generated_at": self.generated_at,
-            "evidence_source": self.evidence_source,
-        }
+        return asdict(self)
 
 
 PINNED_SPAGHETTI_LOCK = SpaghettiLock(

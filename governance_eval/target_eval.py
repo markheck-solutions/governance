@@ -13,11 +13,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from governance_eval.hashing import sha256_file, sha256_json, sha256_text
+from governance_eval.hashing import git_sha, sha256_file, sha256_json, sha256_text
 from governance_eval.paths import repo_root
 from governance_eval.schemas import validate_named
 from governance_eval.structural import scan_structural_metrics, structural_delta
 from governance_eval.target_pack import (
+    _validate_requested_repository,
+    _validate_requested_revisions,
     dependency_lock_hash,
     infer_revision_mode,
     load_target_pack,
@@ -63,9 +65,8 @@ def evaluate_target(
             root=root,
         )
     else:
-        _validate_requested_target(
-            pack, target_repository_url, base_sha, head_sha, merge_sha, mode
-        )
+        _validate_requested_repository(pack, target_repository_url, mode)
+        _validate_requested_revisions(pack, base_sha, head_sha, merge_sha, mode)
     started = (
         datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
@@ -139,7 +140,7 @@ def evaluate_target(
         "schema_version": "1.1",
         "generated_at": started,
         "governance_repository_url": GOVERNANCE_REPOSITORY_URL,
-        "governance_evaluator_git_sha": _git_sha(root),
+        "governance_evaluator_git_sha": git_sha(root),
         "governance_target_pack_hash": target_pack_hash(pack_path),
         "schema_hashes": schema_hashes(root),
         "dependency_lock_hash": dependency_lock_hash(root),
@@ -211,23 +212,6 @@ def evaluate_target(
         )
         result["artifact_path"] = str(artifacts_dir / name)
     return result
-
-
-def _validate_requested_target(
-    pack: dict[str, Any],
-    repository_url: str,
-    base_sha: str,
-    head_sha: str,
-    merge_sha: str | None,
-    revision_mode: str,
-) -> None:
-    from governance_eval.target_pack import (
-        _validate_requested_repository,
-        _validate_requested_revisions,
-    )
-
-    _validate_requested_repository(pack, repository_url, revision_mode)
-    _validate_requested_revisions(pack, base_sha, head_sha, merge_sha, revision_mode)
 
 
 def _run_setup_commands(pack: dict[str, Any], target_dir: Path) -> list[dict[str, Any]]:
@@ -845,12 +829,3 @@ def _validate_expected_artifact_fields(
     ]
     if missing:
         raise ValueError(f"{pack['id']}: expected artifact fields missing: {missing}")
-
-
-def _git_sha(root: Path) -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=root, text=True
-        ).strip()
-    except Exception:
-        return "UNKNOWN"

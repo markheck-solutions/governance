@@ -6,15 +6,6 @@ on:
       - main
   pull_request:
   workflow_dispatch:
-    inputs:
-      review-quorum-json:
-        description: Optional fallback review quorum JSON to upload with this run.
-        required: false
-        type: string
-      trusted-reviewer-agents:
-        description: Comma-separated trusted fallback reviewer agent IDs.
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -169,49 +160,6 @@ jobs:
           name: governance-benchmark-json
           path: artifacts/phase1/*.json
           retention-days: 90
-      - name: Write fallback review quorum input
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.review-quorum-json != ''
-        shell: bash
-        env:
-          REVIEW_QUORUM_JSON: ${{ inputs.review-quorum-json }}
-        run: |
-          mkdir -p artifacts/review-quorum
-          "${{ steps.toolchain.outputs.python-path }}" -I - <<'PY'
-          import os
-          from pathlib import Path
-
-          Path("artifacts/review-quorum/review-quorum.json").write_text(
-              os.environ["REVIEW_QUORUM_JSON"],
-              encoding="utf-8",
-          )
-          PY
-      - name: Validate fallback review quorum input
-        id: validate_quorum
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.review-quorum-json != ''
-        shell: bash
-        env:
-          TRUSTED_REVIEWER_AGENTS: ${{ inputs.trusted-reviewer-agents }}
-        run: |
-          args=()
-          IFS=',' read -ra agents <<< "$TRUSTED_REVIEWER_AGENTS"
-          for agent in "${agents[@]}"; do
-            agent="$(echo "$agent" | xargs)"
-            if [ -n "$agent" ]; then
-              args+=(--trusted-reviewer-agent "$agent")
-            fi
-          done
-          "${{ steps.toolchain.outputs.python-path }}" -m governance_eval validate-review-quorum \
-            --path artifacts/review-quorum/review-quorum.json \
-            --head-sha "$GITHUB_SHA" \
-            "${args[@]}"
-      - name: Upload fallback review quorum JSON
-        id: upload_quorum
-        if: success() && steps.validate_quorum.conclusion == 'success' && hashFiles('artifacts/review-quorum/*.json') != ''
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        with:
-          name: governance-review-quorum-json
-          path: artifacts/review-quorum/*.json
-          retention-days: 90
       - name: Write job summary
         if: always()
         shell: bash
@@ -234,8 +182,6 @@ jobs:
             echo "| Toolchain status | \`${{ steps.receipt.outputs.status || 'MISSING' }}\` |"
             echo "| Toolchain lock SHA-256 | \`${{ steps.toolchain.outputs.lock-sha256 || 'MISSING' }}\` |"
             echo "| Toolchain receipt SHA-256 | \`${{ steps.receipt.outputs.file_sha256 || 'MISSING' }}\` |"
-            echo "| Review quorum artifact | \`${{ steps.upload_quorum.outputs.artifact-id || 'not uploaded' }}\` |"
-            echo "| Review quorum digest | \`${{ steps.upload_quorum.outputs.artifact-digest || 'not uploaded' }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Fail closed on shadow evidence
         if: always() && (steps.toolchain.outcome != 'success' || steps.receipt.outcome != 'success' || steps.benchmark.outputs.result != 'BENCHMARK_PASS')
