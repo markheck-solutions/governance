@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import io
+import subprocess
 import unittest
 import os
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from governance_eval.docker_runtime import docker_run_argv, execute_ruff_docker
@@ -133,6 +137,106 @@ class DockerRuntimePolicyTests(unittest.TestCase):
             result["errors"],
             ["execution plan differs from evaluator-owned plan"],
         )
+
+    def test_non_exited_zero_code_cannot_pass(self) -> None:
+        result, plan, receipt = self._host_result(
+            termination="TIMED_OUT", exit_code=0, duration=120, errors=[]
+        )
+
+        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
+        self.assertEqual(
+            validate_execution_result_v2(result, plan, receipt)["integrity_status"],
+            "INTEGRITY_VALID",
+        )
+
+    def test_cleanup_error_preserves_launched_outcome(self) -> None:
+        result, plan, receipt = self._host_result(
+            termination="EXITED",
+            exit_code=0,
+            duration=1,
+            errors=["Docker container cleanup failed"],
+        )
+
+        self.assertEqual(result["termination"], "EXITED")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["errors"], ["Docker container cleanup failed"])
+        self.assertEqual(
+            validate_execution_result_v2(result, plan, receipt)["integrity_status"],
+            "INTEGRITY_VALID",
+        )
+
+    def test_run_boundary_captures_cleanup_timeout(self) -> None:
+        process = mock.Mock()
+        process.stdout = io.BytesIO(b"captured stdout")
+        process.stderr = io.BytesIO(b"")
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+        with (
+            mock.patch("subprocess.Popen", return_value=process),
+            mock.patch(
+                "governance_eval.docker_runtime._command",
+                side_effect=(
+                    subprocess.TimeoutExpired("docker inspect", 10),
+                    SimpleNamespace(returncode=0),
+                ),
+            ),
+        ):
+            outcome = docker_runtime._run_bounded(
+                ["docker", "run"],
+                docker=Path("C:/trusted/docker.exe"),
+                docker_host="npipe:////./pipe/docker_engine",
+                container_name="governance-test-container",
+                timeout_seconds=120,
+                output_limit=65536,
+            )
+
+        self.assertEqual(outcome["termination"], "EXITED")
+        self.assertEqual(outcome["exit_code"], 0)
+        self.assertEqual(outcome["errors"], ["Docker container cleanup failed"])
+        self.assertGreater(outcome["stdout"]["captured_bytes"], 0)
+
+    def _host_result(
+        self,
+        *,
+        termination: str,
+        exit_code: int,
+        duration: int,
+        errors: list[str],
+    ) -> tuple[dict[str, object], object, object]:
+        receipt = _receipt()
+        plan = compile_execution_plan_v2(
+            receipt, capability="lint", adapter_id="python.ruff-check.v1"
+        )
+        started = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+        workspace = Path("C:/temp/disposable-target")
+        toolchain = Path("C:/temp/sealed-toolchain")
+        command = docker_run_argv(
+            docker=Path(plan.runtime["docker_path"]),
+            docker_host=plan.runtime["docker_host"],
+            plan=plan,
+            workspace=workspace,
+            toolchain_root=toolchain,
+            container_name="governance-test-container",
+        )
+        outcome = {
+            "termination": termination,
+            "exit_code": exit_code,
+            "stdout": docker_runtime._empty_stream(),
+            "stderr": docker_runtime._empty_stream(),
+            "started_at": started,
+            "completed_at": started + timedelta(seconds=duration),
+        }
+        result = docker_runtime._result(
+            plan,
+            receipt,
+            None,
+            plan.runtime["docker_host"],
+            command,
+            started,
+            outcome=outcome,
+            errors=errors,
+        )
+        return result, plan, receipt
 
 
 if __name__ == "__main__":

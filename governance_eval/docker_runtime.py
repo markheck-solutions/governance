@@ -123,7 +123,7 @@ def execute_ruff_docker(
             command,
             started,
             outcome=outcome,
-            errors=[],
+            errors=outcome["errors"],
         )
     except (DockerRuntimeError, OSError, subprocess.SubprocessError) as exc:
         return _result(
@@ -303,26 +303,7 @@ def _run_bounded(
     for pipe in (process.stdout, process.stderr):
         if pipe is not None:
             pipe.close()
-    cleanup = _command(
-        [
-            str(docker),
-            f"--host={docker_host}",
-            "container",
-            "inspect",
-            container_name,
-        ],
-        timeout=10,
-        check=False,
-        env=_docker_environment(docker),
-    )
-    if cleanup.returncode == 0:
-        _command(
-            [str(docker), f"--host={docker_host}", "rm", "-f", container_name],
-            timeout=10,
-            check=False,
-            env=_docker_environment(docker),
-        )
-        raise DockerRuntimeError("Docker container cleanup failed")
+    cleanup_errors = _cleanup_errors(docker, docker_host, container_name)
     return {
         "termination": termination,
         "exit_code": exit_code,
@@ -330,7 +311,46 @@ def _run_bounded(
         "stderr": output.stream("stderr"),
         "started_at": command_started,
         "completed_at": command_completed,
+        "errors": cleanup_errors,
     }
+
+
+def _cleanup_errors(docker: Path, docker_host: str, container_name: str) -> list[str]:
+    environment = _docker_environment(docker)
+    inspect_command = [
+        str(docker),
+        f"--host={docker_host}",
+        "container",
+        "inspect",
+        container_name,
+    ]
+    try:
+        cleanup = _command(inspect_command, timeout=10, check=False, env=environment)
+    except (OSError, subprocess.SubprocessError):
+        return _remove_after_cleanup_error(
+            docker, docker_host, container_name, environment
+        )
+    if cleanup.returncode != 0:
+        return []
+    return _remove_after_cleanup_error(docker, docker_host, container_name, environment)
+
+
+def _remove_after_cleanup_error(
+    docker: Path, docker_host: str, container_name: str, environment: dict[str, str]
+) -> list[str]:
+    errors = ["Docker container cleanup failed"]
+    try:
+        removed = _command(
+            [str(docker), f"--host={docker_host}", "rm", "-f", container_name],
+            timeout=10,
+            check=False,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return [*errors, "Docker forced container removal failed"]
+    if removed.returncode != 0:
+        errors.append("Docker forced container removal failed")
+    return errors
 
 
 def _wait_reason(
@@ -406,7 +426,10 @@ def _result(
         "plan_id": plan.plan_id,
         "checkout_receipt_id": receipt.receipt_id,
         "capability_status": "PASS"
-        if outcome and outcome["exit_code"] == 0 and not errors
+        if outcome
+        and outcome["termination"] == "EXITED"
+        and outcome["exit_code"] == 0
+        and not errors
         else "BLOCK_TECHNICAL",
         "runtime": {
             "image": plan.runtime["image"],
