@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 from governance_eval.hashing import sha256_file, sha256_json
 from governance_eval.schema_validator import SchemaValidationError
@@ -58,6 +59,7 @@ def bind_checkout(
     event: Mapping[str, Any],
     pull_request: Mapping[str, Any],
     repository: Mapping[str, Any],
+    evaluator_repository: Mapping[str, Any],
     workflow: Mapping[str, Any],
     config_path: Path,
     standard_path: Path,
@@ -66,12 +68,15 @@ def bind_checkout(
     target_root = target_root.resolve()
     evaluator_root = evaluator_root.resolve()
     trusted_repository = _repository_identity(repository)
+    trusted_evaluator_repository = _repository_identity(evaluator_repository)
     _match_event(event, trusted_repository, pull_request)
     pr_identity = _pull_request_identity(pull_request)
     _validate_checkout(target_root, "target")
     _validate_checkout(evaluator_root, "evaluator")
     _match_target(target_root, trusted_repository, pr_identity)
-    evaluator_identity = _match_evaluator(evaluator_root, trusted_repository, workflow)
+    evaluator_identity = _match_evaluator(
+        evaluator_root, trusted_evaluator_repository, workflow
+    )
     config_path = _trusted_input(target_root, config_path, "config")
     standard_path = _trusted_input(target_root, standard_path, "standard")
     receipt = CheckoutReceipt(
@@ -206,6 +211,8 @@ def _match_evaluator(
     if _origin_repository(root) != repository["full_name"].lower():
         raise CheckoutReceiptError("evaluator origin does not match GitHub repository")
     return {
+        "repository_id": repository["id"],
+        "repository_full_name": repository["full_name"],
         "commit_sha": sha,
         "tree_sha": _git(root, "rev-parse", f"{sha}^{{tree}}"),
     }
@@ -268,9 +275,9 @@ def _origin_repository(root: Path) -> str:
     remote = _git(root, "remote", "get-url", "origin").removesuffix(".git")
     if remote.startswith("git@github.com:"):
         return remote.removeprefix("git@github.com:").lower()
-    marker = "github.com/"
-    if marker in remote:
-        return remote.split(marker, 1)[1].lower()
+    parsed = urlparse(remote)
+    if parsed.hostname == "github.com" and parsed.path.strip("/"):
+        return parsed.path.strip("/").lower()
     raise CheckoutReceiptError("repository origin is not GitHub")
 
 

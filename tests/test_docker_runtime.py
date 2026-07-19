@@ -9,6 +9,7 @@ from unittest import mock
 from governance_eval.docker_runtime import docker_run_argv, execute_ruff_docker
 import governance_eval.docker_runtime as docker_runtime
 from governance_eval.execution_plan_v2 import compile_execution_plan_v2
+from governance_eval.execution_result_v2 import validate_execution_result_v2
 from governance_eval.schemas import validate_named
 from test_execution_plan_v2 import _receipt
 
@@ -97,6 +98,10 @@ class DockerRuntimePolicyTests(unittest.TestCase):
         self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
         self.assertEqual(result["termination"], "NOT_STARTED")
         self.assertEqual(result["errors"], ["Docker CLI path is invalid"])
+        self.assertEqual(
+            validate_execution_result_v2(result, plan, receipt)["integrity_status"],
+            "INTEGRITY_VALID",
+        )
 
     def test_rehashed_mutated_plan_blocks_before_docker_resolution(self) -> None:
         receipt = _receipt()

@@ -152,6 +152,13 @@ def _stream_error(name: str, stream: dict[str, Any]) -> str | None:
 
 
 def _outcome_error(payload: dict[str, Any]) -> str | None:
+    termination = payload["termination"]
+    exit_code = payload["exit_code"]
+    if termination == "NOT_STARTED":
+        if exit_code is not None:
+            return "execution result v2 not-started exit code is invalid"
+    elif not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        return "execution result v2 terminated exit code is invalid"
     passed = payload["capability_status"] == "PASS"
     clean_exit = (
         payload["termination"] == "EXITED"
@@ -160,8 +167,6 @@ def _outcome_error(payload: dict[str, Any]) -> str | None:
     )
     if passed != clean_exit:
         return "execution result v2 outcome is inconsistent"
-    if payload["termination"] == "NOT_STARTED" and payload["exit_code"] is not None:
-        return "execution result v2 not-started exit code is invalid"
     return None
 
 

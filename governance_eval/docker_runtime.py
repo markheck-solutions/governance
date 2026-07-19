@@ -380,7 +380,7 @@ class _BoundedOutput:
 def _result(
     plan: ExecutionPlanV2,
     receipt: CheckoutReceipt,
-    docker: Path | None,
+    _docker: Path | None,
     docker_host: str,
     command: list[str],
     started: datetime,
@@ -401,8 +401,8 @@ def _result(
         "runtime": {
             "image": plan.runtime["image"],
             "policy_id": plan.runtime["policy_id"],
-            "docker_path": str(docker) if docker else "",
-            "docker_sha256": sha256_file(docker) if docker else "0" * 64,
+            "docker_path": plan.runtime["docker_path"],
+            "docker_sha256": plan.runtime["docker_sha256"],
             "toolchain": "ruff==0.15.21",
             "toolchain_sha256": plan.runtime["toolchain_sha256"],
             "docker_host": docker_host,

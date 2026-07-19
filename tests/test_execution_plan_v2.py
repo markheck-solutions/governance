@@ -27,7 +27,12 @@ def _receipt() -> CheckoutReceipt:
             "base_tree_sha": "c" * 40,
             "head_tree_sha": "d" * 40,
         },
-        evaluator={"commit_sha": "e" * 40, "tree_sha": "f" * 40},
+        evaluator={
+            "repository_id": 123,
+            "repository_full_name": "markheck-solutions/governance",
+            "commit_sha": "e" * 40,
+            "tree_sha": "f" * 40,
+        },
         workflow={
             "workflow_ref": "markheck-solutions/governance/.github/workflows/governance.yml@refs/heads/main",
             "run_id": 999,

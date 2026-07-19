@@ -8,7 +8,7 @@
     "repository": {"type": "object", "required": ["id", "full_name"], "additionalProperties": true},
     "pull_request": {"type": "integer", "minimum": 1},
     "target": {"$ref": "#/$defs/git_object"},
-    "evaluator": {"$ref": "#/$defs/git_object"},
+    "evaluator": {"$ref": "#/$defs/evaluator_object"},
     "runtime": {
       "type": "object",
       "required": ["runtime_id", "policy_id", "image", "network", "user", "read_only_root", "cap_drop", "no_new_privileges", "pids_limit", "memory_bytes", "cpus", "toolchain_sha256", "docker_path", "docker_sha256", "docker_host"],
@@ -51,6 +51,17 @@
       "type": "object",
       "required": ["commit_sha", "tree_sha"],
       "properties": {
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      },
+      "additionalProperties": false
+    },
+    "evaluator_object": {
+      "type": "object",
+      "required": ["repository_id", "repository_full_name", "commit_sha", "tree_sha"],
+      "properties": {
+        "repository_id": {"type": "integer", "minimum": 1},
+        "repository_full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
         "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
         "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
       },

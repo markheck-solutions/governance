@@ -132,6 +132,16 @@ class ExecutionResultV2Tests(unittest.TestCase):
 
                 self.assertEqual(result["integrity_status"], "INTEGRITY_INVALID")
 
+    def test_rejects_exited_result_without_exit_code(self) -> None:
+        payload, plan, receipt = _result()
+        payload["capability_status"] = "BLOCK_TECHNICAL"
+        payload["exit_code"] = None
+        payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
+
+        result = validate_execution_result_v2(payload, plan, receipt)
+
+        self.assertEqual(result["integrity_status"], "INTEGRITY_INVALID")
+
         payload, plan, receipt = _result()
         payload["stdout"]["truncated"] = True
         payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})

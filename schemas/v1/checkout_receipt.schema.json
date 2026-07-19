@@ -28,8 +28,10 @@
     },
     "evaluator": {
       "type": "object",
-      "required": ["commit_sha", "tree_sha"],
+      "required": ["repository_id", "repository_full_name", "commit_sha", "tree_sha"],
       "properties": {
+        "repository_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "repository_full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
         "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
         "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
       },

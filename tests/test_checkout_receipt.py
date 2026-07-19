@@ -76,6 +76,7 @@ class CheckoutReceiptTests(unittest.TestCase):
         }
         self.event = {
             "repository": self.repository,
+            "evaluator_repository": self.repository,
             "pull_request": self.pull_request,
         }
         self.workflow = {
@@ -104,6 +105,7 @@ class CheckoutReceiptTests(unittest.TestCase):
             "event": self.event,
             "pull_request": self.pull_request,
             "repository": self.repository,
+            "evaluator_repository": self.repository,
             "workflow": self.workflow,
             "config_path": self.config,
             "standard_path": self.standard,
@@ -224,6 +226,49 @@ class CheckoutReceiptTests(unittest.TestCase):
 
         with self.assertRaisesRegex(CheckoutReceiptError, "config path"):
             self._bind(config_path=self.root / "outside.yml")
+
+    def test_binds_evaluator_repository_independently_from_target(self) -> None:
+        target_repository = {"id": 222, "full_name": "example/target"}
+        target_pr = {
+            **self.pull_request,
+            "html_url": "https://github.com/example/target/pull/81",
+        }
+        target_event = {
+            "repository": target_repository,
+            "pull_request": target_pr,
+        }
+        _git(
+            self.target,
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/example/target.git",
+        )
+
+        receipt = self._bind(
+            repository=target_repository,
+            event=target_event,
+            pull_request=target_pr,
+            evaluator_repository=self.repository,
+        )
+
+        self.assertEqual(receipt.repository, target_repository)
+        self.assertEqual(
+            receipt.evaluator["repository_full_name"],
+            "markheck-solutions/governance",
+        )
+
+    def test_rejects_non_github_hostname_containing_github_text(self) -> None:
+        _git(
+            self.target,
+            "remote",
+            "set-url",
+            "origin",
+            "https://notgithub.com/markheck-solutions/governance.git",
+        )
+
+        with self.assertRaisesRegex(CheckoutReceiptError, "origin is not GitHub"):
+            self._bind()
 
 
 if __name__ == "__main__":
