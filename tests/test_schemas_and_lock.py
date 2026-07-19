@@ -139,6 +139,59 @@ class SchemaAndLockTests(unittest.TestCase):
             )
             self.assertNotEqual(validate_spaghetti_lock(path), [])
 
+    def test_lock_validator_preserves_complete_problem_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "spaghetti.lock.toml"
+            path.write_text(
+                "\n".join(
+                    [
+                        "schema_version = 2",
+                        'generated_at = "x"',
+                        'evidence_source = "x"',
+                        'repository_url = "https://example.invalid/fake"',
+                        "[pull_request_141]",
+                        "number = 999",
+                        'historical_case_id = "wrong"',
+                        'base_sha = "BASE"',
+                        'head_sha = "HEAD"',
+                        'merge_commit_sha = "MERGE"',
+                        'approved_oracle_sha = "ORACLE"',
+                        'observed_main_sha = "MAIN"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            problems = validate_spaghetti_lock(path)
+
+        sha_names = (
+            "base_sha",
+            "head_sha",
+            "merge_commit_sha",
+            "approved_oracle_sha",
+            "observed_main_sha",
+        )
+        self.assertEqual(
+            problems,
+            [
+                "schema_version must be 1",
+                "repository_url does not match targets/spaghetti.toml",
+                "historical_case_id mismatch",
+                *[
+                    f"{name} is not a full immutable SHA: {value!r}"
+                    for name, value in zip(
+                        sha_names, ("BASE", "HEAD", "MERGE", "ORACLE", "MAIN")
+                    )
+                ],
+                *[
+                    f"{name} does not match resolved PR #141 evidence"
+                    for name in sha_names
+                ],
+                "unexpected pull request: 999",
+                "approved oracle SHA must equal PR base SHA for Phase 1 historical oracle",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

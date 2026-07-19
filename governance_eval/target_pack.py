@@ -225,11 +225,10 @@ def _validate_requested_revisions(
         raise ValueError(
             f"revision mode is not supported by pack {pack['id']}: {revision_mode}"
         )
-    for label, value in (("base", base_sha), ("head", head_sha)):
-        if not SHA_RE.fullmatch(value):
-            raise ValueError(f"invalid target {label} SHA: {value}")
-    if merge_sha and not SHA_RE.fullmatch(merge_sha):
-        raise ValueError(f"invalid target merge SHA: {merge_sha}")
+    _validate_target_sha("base", base_sha)
+    _validate_target_sha("head", head_sha)
+    if merge_sha:
+        _validate_target_sha("merge", merge_sha)
     revisions = pack["immutable_revisions"]
     if revision_mode == "HISTORICAL_FIXED":
         if base_sha != revisions["base_sha"] or head_sha != revisions["head_sha"]:
@@ -259,6 +258,11 @@ def _validate_requested_revisions(
             )
         return
     raise ValueError(f"unknown revision mode: {revision_mode}")
+
+
+def _validate_target_sha(label: str, value: str) -> None:
+    if not SHA_RE.fullmatch(value):
+        raise ValueError(f"invalid target {label} SHA: {value}")
 
 
 def infer_revision_mode(

@@ -912,7 +912,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 all(command["status"] == "SKIPPED" for command in result["commands"])
             )
 
-    def test_gate_accepts_codex_checker_change_with_independent_regressions(
+    def test_gate_accepts_checker_changes_with_independent_regressions(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -931,6 +931,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 "governance_eval/codex_review_gate.py",
                 "governance_eval/schemas.py",
                 "governance_eval/supportability.py",
+                "governance_eval/trusted_command.py",
                 "schemas/v4/codex_connector_evidence_result.schema.json",
                 "tests/test_ai_review_gate.py",
                 "tests/test_architecture_gate.py",
@@ -939,9 +940,9 @@ class SupportabilityGateTests(unittest.TestCase):
                 "tests/test_codex_review_gate.py",
                 "tests/test_self_update_policy.py",
                 "tests/test_supportability.py",
+                "tests/test_trusted_command.py",
                 "tests/test_workflows.py",
             ]
-
             for required_test in (
                 "tests/test_architecture_gate.py",
                 "tests/test_supportability.py",
@@ -961,7 +962,6 @@ class SupportabilityGateTests(unittest.TestCase):
                     self.assertTrue(
                         any(required_test in error for error in blocked["errors"])
                     )
-
             result = run_supportability_gate(
                 repo / ".github/governance/supportability.yml",
                 repo,

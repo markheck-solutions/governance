@@ -17,10 +17,15 @@ from governance_eval.target_eval import (
     SHADOW_ASK_BUSINESS,
     SHADOW_BLOCK_TECHNICAL,
     SHADOW_MERGE,
+    _source_hash_validation,
     evaluate_target,
     _parse_github_repository,
 )
-from governance_eval.target_pack import load_target_pack, validate_target_request
+from governance_eval.target_pack import (
+    _validate_requested_revisions,
+    load_target_pack,
+    validate_target_request,
+)
 
 
 class TargetPackAndShadowTests(unittest.TestCase):
@@ -562,6 +567,78 @@ class TargetPackAndShadowTests(unittest.TestCase):
             delta["publicized_private_helper_renames"]["status"], "MEASURED"
         )
         self.assertTrue(delta["publicized_private_helper_renames"]["introduced"])
+
+    def test_source_hash_validation_preserves_exact_field_contract(self) -> None:
+        sha = "a" * 40
+        files = [{"path": "a.py", "file_sha256": "file", "git_blob_sha": "blob"}]
+        symbols = [
+            {
+                "path": "a.py",
+                "symbol": "run",
+                "status": "PASS",
+                "symbol_sha256": "symbol",
+                "line_start": 1,
+                "line_end": 2,
+            }
+        ]
+        case = {
+            "pull_request": 1,
+            "expected_source_hashes": {
+                sha: {
+                    "files": {"a.py": {"file_sha256": "file", "git_blob_sha": "blob"}},
+                    "symbols": {
+                        "a.py::run": {
+                            "symbol_sha256": "symbol",
+                            "line_start": 1,
+                            "line_end": 2,
+                        }
+                    },
+                }
+            },
+        }
+
+        self.assertEqual(
+            _source_hash_validation(case, sha, files, symbols, "PINNED_EXPECTED"),
+            "PASS",
+        )
+        files[0]["git_blob_sha"] = "wrong"
+        self.assertEqual(
+            _source_hash_validation(case, sha, files, symbols, "PINNED_EXPECTED"),
+            "FAIL",
+        )
+
+    def test_revision_validation_preserves_mode_and_sha_error_precedence(self) -> None:
+        pack = {
+            "id": "target",
+            "revision_modes": [
+                "HISTORICAL_FIXED",
+                "SAFE_FIXED",
+                "CANDIDATE_DYNAMIC",
+            ],
+            "immutable_revisions": {
+                "base_sha": "a" * 40,
+                "head_sha": "b" * 40,
+                "merge_sha": "c" * 40,
+                "safe_base_sha": "d" * 40,
+                "safe_head_sha": "e" * 40,
+            },
+        }
+        cases = (
+            ("OTHER", "bad", "bad", None, "revision mode is not supported"),
+            ("CANDIDATE_DYNAMIC", "bad", "b" * 40, None, "invalid target base SHA"),
+            ("CANDIDATE_DYNAMIC", "a" * 40, "bad", None, "invalid target head SHA"),
+            (
+                "CANDIDATE_DYNAMIC",
+                "a" * 40,
+                "b" * 40,
+                "bad",
+                "invalid target merge SHA",
+            ),
+        )
+        for mode, base, head, merge, message in cases:
+            with self.subTest(mode=mode, message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    _validate_requested_revisions(pack, base, head, merge, mode)
 
 
 def _mutable_pack(source: Path) -> dict:

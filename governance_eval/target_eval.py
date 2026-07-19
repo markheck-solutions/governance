@@ -590,9 +590,9 @@ def _source_hash_validation(
         expected_file = expected.get("files", {}).get(item["path"])
         if not expected_file:
             return "FAIL"
-        if item["file_sha256"] != expected_file.get("file_sha256"):
-            return "FAIL"
-        if item["git_blob_sha"] != expected_file.get("git_blob_sha"):
+        if item["file_sha256"] != expected_file.get("file_sha256") or item[
+            "git_blob_sha"
+        ] != expected_file.get("git_blob_sha"):
             return "FAIL"
     expected_symbols = expected.get("symbols", {})
     for actual in source_symbols:
@@ -600,11 +600,11 @@ def _source_hash_validation(
         expected_symbol = expected_symbols.get(key)
         if not expected_symbol:
             return "FAIL"
-        if actual["symbol_sha256"] != expected_symbol.get("symbol_sha256"):
-            return "FAIL"
-        if actual["line_start"] != expected_symbol.get("line_start"):
-            return "FAIL"
-        if actual["line_end"] != expected_symbol.get("line_end"):
+        if (
+            actual["symbol_sha256"] != expected_symbol.get("symbol_sha256")
+            or actual["line_start"] != expected_symbol.get("line_start")
+            or actual["line_end"] != expected_symbol.get("line_end")
+        ):
             return "FAIL"
     return "PASS"
 
@@ -707,11 +707,7 @@ def _target_acceptance_errors(
     revision_mode: str,
 ) -> tuple[list[str], list[str]]:
     errors: list[str] = []
-    business: list[str] = []
-    required_behavior = [
-        item for item in behavior if item.get("required_behavior_evidence", True)
-    ]
-    if not required_behavior:
+    if not any(item.get("required_behavior_evidence", True) for item in behavior):
         errors.append(f"no applicable behavior cases for revision mode {revision_mode}")
     if revision_validation.get("status") != "PASS":
         errors.append("revision validation failed")
@@ -724,10 +720,23 @@ def _target_acceptance_errors(
         errors.append(
             f"candidate pull request validation failed: {pr_validation.get('reason', '')}"
         )
-    for side, results in setup_results.items():
-        for result in results:
-            if result["exit_code"] != 0:
-                errors.append(f"{side} setup failed: {result['command']}")
+    errors.extend(
+        f"{side} setup failed: {result['command']}"
+        for side, results in setup_results.items()
+        for result in results
+        if result["exit_code"] != 0
+    )
+    behavior_errors, business = _behavior_acceptance_errors(behavior)
+    errors.extend(behavior_errors)
+    errors.extend(_detector_acceptance_errors(delta, _detector_policies(pack)))
+    return errors, business
+
+
+def _behavior_acceptance_errors(
+    behavior: list[dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    business: list[str] = []
     for item in behavior:
         if not item.get("required_behavior_evidence", True):
             continue
@@ -745,7 +754,13 @@ def _target_acceptance_errors(
             errors.append(
                 f"{item['case_id']}: behavior evidence failed under {item['behavior_comparison_policy']}"
             )
-    policies = _detector_policies(pack)
+    return errors, business
+
+
+def _detector_acceptance_errors(
+    delta: dict[str, Any], policies: dict[str, dict[str, Any]]
+) -> list[str]:
+    errors: list[str] = []
     for name, policy in policies.items():
         metric = delta.get(name)
         if not isinstance(metric, dict):
@@ -769,7 +784,7 @@ def _target_acceptance_errors(
         introduced = metric.get("introduced") or []
         if policy["blocking"] and introduced:
             errors.append(f"{name}: new structural violation(s): {len(introduced)}")
-    return errors, business
+    return errors
 
 
 def _detector_policies(pack: dict[str, Any]) -> dict[str, dict[str, Any]]:
