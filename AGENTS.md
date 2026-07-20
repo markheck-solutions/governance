@@ -38,6 +38,7 @@ Reference documents describe the current system and prior reasoning. They are in
 
 - Every change merges through the normal protected pull-request path. Direct push, admin bypass, branch-protection or ruleset weakening, required-context deletion or rename, default-branch change, force push, and permission changes are forbidden.
 - Preserve the existing required context names unless a demonstrated GitHub limitation makes that impossible. Never make a candidate-controlled check authoritative.
+- Artifacts from a pull request that changes its own `pull_request` execution caller, pinned wrapper, permissions, or result-upload path are non-authoritative for that pull request. Ordinary changes to those protected surfaces fail closed. A bounded pin-only activation is authorized only by the previously active protected evaluator using the exact qualified publication merge and transition evidence, never by the candidate-controlled run.
 - Publish the complete evaluator without changing live pins or live configuration. Qualify the exact publication merge. Then use a pin-only activation pull request followed by a config-only migration pull request.
 - Use merge-commit strategy for publication so candidate ancestry and tree equality remain auditable. Do not exploit a spoofed context, false-green result, stale artifact, or unrelated administrative change.
 - A contract-reset merge is not Governance readiness. Completion still requires architecture review, implementation, exact-merge qualification, activation, migration, and live canaries.

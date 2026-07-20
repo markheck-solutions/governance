@@ -111,6 +111,7 @@ Practical Tamper-Resistant Governance v1 is the product release. Its typed confi
 - Provisioning is separate from offline gate execution. Candidate processes run non-root with a read-only root filesystem, dropped capabilities, no privilege escalation, bounded CPU, memory, PIDs, output, step time, and total time, and only a disposable target copy writable.
 - Candidate code cannot access the Docker socket, evaluator checkout, toolchain source, or authoritative artifact directory.
 - A host wrapper outside the target checkout owns result paths and records exact identities, timing, timeout and termination, exit status, bounded stream counts and digests, truncation, cleanup, and artifact name and content digest.
+- The trusted verifier authenticates the `pull_request` workflow path and file hash against the previously published version. If the head changes that caller, its pinned wrapper, permissions, conditions, dependencies, or result-upload path, artifacts from that run are non-authoritative and cannot authorize the change.
 - The base-branch `pull_request_target` workflow performs only trusted verification and GitHub reconciliation. It never checks out candidate code for execution, imports candidate Python, runs candidate scripts, tests, builds, package hooks, or configuration, or executes artifact contents.
 - The trusted verifier downloads artifacts as hostile data, safely inspects archive structure and bounds, validates schemas, recomputes digests and decisions, rejects identity mismatch or replay, reconciles the unchanged exact head and current protection, and alone emits the authoritative required context.
 - Execution plans bind repository, pull request, base SHA and tree, head SHA and tree, evaluator and workflow identities, adapter version and assurance, configuration and standard hashes, toolchain and image identities, working directory, and bounded steps.
@@ -146,9 +147,9 @@ Branch protection, rulesets, required contexts, and permissions may only be insp
 
 ### Protected three-PR release
 
-1. **Publication:** merge the complete evaluator, adapters, schemas, workflows, evidence contracts, and adoption tooling without changing live pins, live config, required contexts, or protection. Use merge-commit strategy and record publication merge `M`; require `tree(M) == tree(C)` for the frozen qualified candidate `C`.
+1. **Publication:** merge the complete evaluator, adapters, schemas, workflows, evidence contracts, and adoption tooling without changing the live execution caller, live pins, live config, required contexts, or protection. The previously active protected evaluator judges this pull request; artifacts emitted by candidate-changed workflow files are not authorization evidence. Use merge-commit strategy and record publication merge `M`; require `tree(M) == tree(C)` for the frozen qualified candidate `C`.
 2. **Exact-`M` qualification:** rerun complete qualification against the publication merge while the old evaluator remains active. A failure requires a replacement publication pull request, not weakened criteria.
-3. **Pin-only activation:** change only exact reusable workflow or action pins, `governance-ref` values, and literal pin fixtures. The old evaluator judges the transition. Verify every live pin equals `M` after merge.
+3. **Pin-only activation:** change only exact reusable workflow or action pins, `governance-ref` values, and literal pin fixtures. The previously active evaluator judges the transition using the exact-`M` qualification receipt and static transition policy; artifacts from the candidate-modified caller cannot authorize it. Verify every live pin equals `M` after merge.
 4. **Config-only migration:** change only `.github/governance/supportability.yml` and exact migration fixtures from known v1 to typed v2. Require the protected baseline, candidate, and delivery checks GREEN.
 5. Keep `main` frozen from publication-candidate freeze through activation and config migration. Preserve required-context names and protection throughout.
 
@@ -199,6 +200,7 @@ Positive, negative, and evasion controls must cover at least:
 - candidate-only GREEN with protected baseline RED;
 - wildcard, similar-looking, or stale-head AI reviewer evidence;
 - workflow pin substitution, floating ref, disabled job, changed condition, removed dependency, broadened permissions, or renamed required context;
+- candidate modification of the `pull_request` caller or upload wrapper cannot make that run's artifact authoritative, including during publication or pin activation;
 - protected-context spoof attempt from candidate-controlled workflow;
 - replay or mutation of a previously authorized protected-workflow update.
 

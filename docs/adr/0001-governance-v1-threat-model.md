@@ -59,6 +59,7 @@ Governance prevents candidate control of protected assets and authoritative merg
 - candidate processes receive only a disposable target copy and cannot access the evaluator checkout, toolchain source, Docker socket, or authoritative artifact directory;
 - containment is non-root, read-only-root, capability-dropped, no-new-privileges, offline during gate execution, and bounded for CPU, memory, PIDs, output, step time, total time, and cleanup;
 - a host wrapper outside the target checkout owns result paths and records exact identities, timing, termination, exit, bounded stream digests, truncation, cleanup, and artifact digests;
+- the trusted verifier authenticates the `pull_request` workflow path and file hash against the previously published version; a head that changes the caller, pinned wrapper, permissions, conditions, dependencies, or result-upload path makes every artifact from that run non-authoritative for that change;
 - a base-branch `pull_request_target` workflow performs trusted verification and GitHub reconciliation only; it never executes or imports candidate code, runs candidate configuration or package hooks, or executes artifact contents;
 - hostile archives are rejected for traversal, links, duplicate or unexpected entries, decompression abuse, oversize content, malformed schemas, digest mismatch, replay, mutation, stale head, wrong repository, wrong workflow, wrong evaluator, wrong config, wrong standard, wrong toolchain, or wrong artifact;
 - deterministic trusted code recomputes the final decision and alone emits the authoritative required context;
@@ -98,6 +99,8 @@ The host records the exact adapter and assurance class; repository and pull-requ
 ## Release and transition consequence
 
 The former controlled-bootstrap and branch-protection-mutation authority is revoked. Publication, pin activation, and config migration use separate normal protected pull requests. No direct push, administrative bypass, protection weakening, ruleset mutation, required-context mutation, or permission mutation is authorized.
+
+The publication pull request does not change the live execution caller or pins. The previously active protected evaluator judges it; candidate-changed workflow artifacts are not authorization evidence. After the exact publication merge is qualified, the previously active evaluator authorizes the bounded pin-only activation from static transition evidence and the exact-merge qualification receipt, not from artifacts emitted by the candidate-modified caller. Any other caller or wrapper change fails closed.
 
 The current transitional workflow is not certified by this ADR. A docs-only contract reset may traverse the existing protected path, but Governance readiness remains `FAIL` until the split execution/verifier design is implemented, qualified at the publication merge, activated, migrated, and proven by live canaries.
 
