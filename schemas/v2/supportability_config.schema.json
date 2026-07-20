@@ -1,0 +1,85 @@
+{
+  "type": "object",
+  "required": ["schema_version", "standard", "capabilities", "coverage", "ai_review", "receipt", "architecture_policy"],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "standard": {
+      "type": "object",
+      "required": ["name", "source", "hash"],
+      "properties": {
+        "name": {"const": "supportability-standard"},
+        "source": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$", "minLength": 1, "maxLength": 240},
+        "hash": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["lint", "format_check", "typecheck", "complexity", "architecture", "tests", "build", "package_audit", "benchmark", "diff_integrity", "sql_supportability"],
+      "properties": {
+        "lint": {"const": "python.ruff-check.v1"},
+        "format_check": {"const": "python.ruff-format-check.v1"},
+        "typecheck": {"const": "python.mypy.v1"},
+        "complexity": {"const": "python.ruff-c901.v1"},
+        "architecture": {"const": "governance.architecture.v1"},
+        "tests": {"const": "python.unittest.v1"},
+        "build": {"const": "python.pip-wheel-no-deps.v1"},
+        "package_audit": {"const": "python.package-audit-isolated.v1"},
+        "benchmark": {"const": "governance.phase1-benchmark.v1"},
+        "diff_integrity": {"const": "git.diff-check.v1"},
+        "sql_supportability": {"const": "auto"}
+      },
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["changed_files", "high_risk_files", "forbid_gate_scope_narrowing", "forbid_threshold_weakening"],
+      "properties": {
+        "changed_files": {"const": "required"},
+        "high_risk_files": {"const": "required"},
+        "forbid_gate_scope_narrowing": {"type": "boolean", "const": true},
+        "forbid_threshold_weakening": {"type": "boolean", "const": true}
+      },
+      "additionalProperties": false
+    },
+    "ai_review": {
+      "type": "object",
+      "required": ["provider", "adapter", "review_window_seconds", "unavailable_after_cutoff", "unresolved_p0_p1_p2_blocks"],
+      "properties": {
+        "provider": {"const": "codex_connector"},
+        "adapter": {"const": "codex_connector_pr_signal_v2"},
+        "review_window_seconds": {"type": "integer", "const": 300},
+        "unavailable_after_cutoff": {"const": "non_blocking"},
+        "unresolved_p0_p1_p2_blocks": {"type": "boolean", "const": true}
+      },
+      "additionalProperties": false
+    },
+    "receipt": {
+      "type": "object",
+      "required": ["artifact_name", "retention_days"],
+      "properties": {
+        "artifact_name": {"const": "supportability-delivery-receipt"},
+        "retention_days": {"type": "integer", "const": 90}
+      },
+      "additionalProperties": false
+    },
+    "architecture_policy": {
+      "type": "object",
+      "required": ["version", "enforcement_mode", "governed_roots", "runtime_relevance", "vague_names", "modules", "known_debt"],
+      "properties": {
+        "version": {"type": "integer", "const": 1},
+        "enforcement_mode": {"const": "block_all"},
+        "governed_roots": {"type": "array", "minItems": 1},
+        "runtime_relevance": {"type": "object"},
+        "vague_names": {"type": "object"},
+        "modules": {"type": "object", "minProperties": 1},
+        "known_debt": {"type": "array"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

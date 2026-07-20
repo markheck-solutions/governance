@@ -24,6 +24,19 @@ from governance_eval.hashing import sha256_file
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
+from governance_eval.self_update_policy import (
+    canonical_changed_files as _canonical_changed_files,
+)
+from governance_eval.self_update_policy import (
+    is_protected_judge_path as _is_protected_judge_path,
+)
+from governance_eval.supportability_config_parser import (
+    SupportabilityError,
+    parse_supportability_config_bytes,
+)
+from governance_eval.supportability_config_parser import (
+    parse_supportability_config_text as _parse_supportability_config_text,
+)
 from governance_eval.trusted_command import run_bound_shell_command, split_command
 
 
@@ -106,10 +119,6 @@ THRESHOLD_WEAKENING_MARKERS = (
 )
 
 
-class SupportabilityError(ValueError):
-    pass
-
-
 def _dict_or_empty(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -122,32 +131,6 @@ def _bool_dict_or_empty(value: Any) -> dict[str, bool]:
 
 def load_supportability_config(path: Path) -> dict[str, Any]:
     return parse_supportability_config_bytes(path.read_bytes(), suffix=path.suffix)
-
-
-def parse_supportability_config_bytes(
-    raw: bytes, *, suffix: str = ""
-) -> dict[str, Any]:
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise SupportabilityError("supportability config must be UTF-8") from exc
-    return _parse_supportability_config_text(text, suffix)
-
-
-def _parse_supportability_config_text(text: str, suffix: str = "") -> dict[str, Any]:
-    stripped = text.lstrip()
-    if suffix == ".json" or stripped.startswith("{"):
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise SupportabilityError(
-                f"supportability config JSON invalid: {exc}"
-            ) from exc
-    else:
-        parsed = _parse_simple_yaml(text)
-    if not isinstance(parsed, dict):
-        raise SupportabilityError("supportability config must be an object")
-    return parsed
 
 
 def validate_supportability_config(config: dict[str, Any]) -> list[str]:
@@ -193,7 +176,7 @@ def run_supportability_gate(
     )
     errors.extend(config_change_errors)
     architecture_governance_errors = _architecture_governance_change_errors(
-        target_repo, changed, base_sha, config_path
+        target_repo, changed, base_sha
     )
     errors.extend(architecture_governance_errors)
     errors.extend(_standard_hash_errors(config, target_repo))
@@ -718,13 +701,13 @@ def _changed_files_or_empty(
     changed_files: list[str] | None,
     errors: list[str],
 ) -> list[str]:
-    if changed_files is not None:
-        return changed_files
-    if not _diff_sha_inputs_are_valid(base_sha, head_sha):
-        return []
     try:
+        if changed_files is not None:
+            return _canonical_changed_files(changed_files)
+        if not _diff_sha_inputs_are_valid(base_sha, head_sha):
+            return []
         return _git_changed_files(target_repo, base_sha, head_sha)
-    except SupportabilityError as exc:
+    except (SupportabilityError, ValueError) as exc:
         errors.append(str(exc))
         return []
 
@@ -968,44 +951,22 @@ def _architecture_governance_change_errors(
     target_repo: Path,
     changed: list[str],
     base_sha: str,
-    config_path: Path,
 ) -> list[str]:
-    changed_set = {path.replace("\\", "/") for path in changed}
+    changed_set = set(changed)
     errors: list[str] = []
-    checker_paths = {
-        "governance_eval/supportability.py",
-        "governance_eval/trusted_command.py",
-        "governance_eval/architecture_policy.py",
-        "governance_eval/architecture_gate.py",
-        "governance_eval/ai_review_gate.py",
-        "governance_eval/bootstrap_audit.py",
-        "governance_eval/codex_connector_collector.py",
-        "governance_eval/codex_connector_evidence.py",
-        "governance_eval/codex_review_gate.py",
-        "schemas/v1/architecture_gate_result.schema.json",
-        "schemas/v1/bootstrap_audit_receipt.schema.json",
-        "schemas/v1/delivery_receipt.schema.json",
-        "schemas/v1/supportability_config.schema.json",
-        "schemas/v2/codex_connector_evidence_result.schema.json",
-        "schemas/v3/codex_connector_evidence_result.schema.json",
-        "schemas/v4/codex_connector_evidence_result.schema.json",
-    }
-    touched_checkers = sorted(changed_set & checker_paths)
+    touched_checkers = sorted(
+        path for path in changed_set if _is_protected_judge_path(path)
+    )
     enforcement_path = ".github/workflows/supportability-enforcement.yml"
     if touched_checkers:
-        required_tests = {
-            "tests/test_architecture_gate.py",
-            "tests/test_supportability.py",
-        }
-        if not required_tests.issubset(changed_set):
-            missing = sorted(required_tests - changed_set)
+        delivery_errors = _protected_delivery_chain_errors(target_repo)
+        if delivery_errors:
             errors.append(
                 "protected checker change "
                 + ", ".join(touched_checkers)
-                + " missing independent regression tests: "
-                + ", ".join(missing)
+                + " lacks a valid protected delivery chain"
             )
-        errors.extend(_protected_delivery_chain_errors(target_repo))
+            errors.extend(delivery_errors)
         if enforcement_path in changed_set:
             errors.append(
                 "protected checker and enforcement workflow cannot change in the same PR"
@@ -1530,12 +1491,19 @@ def _run_shell_command(command: str, cwd: Path) -> subprocess.CompletedProcess[s
 def _git_changed_files(target_repo: Path, base_sha: str, head_sha: str) -> list[str]:
     try:
         completed = subprocess.run(
-            ["git", "diff", "--name-only", base_sha, head_sha],
+            [
+                "git",
+                "diff",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                base_sha,
+                head_sha,
+                "--",
+            ],
             cwd=target_repo,
             check=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            text=False,
             capture_output=True,
             timeout=60,
         )
@@ -1544,16 +1512,27 @@ def _git_changed_files(target_repo: Path, base_sha: str, head_sha: str) -> list[
             "git diff changed-file discovery timed out after 60 seconds"
         ) from exc
     except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip()
+        raw_detail = exc.stderr or exc.stdout or b""
+        detail = (
+            raw_detail.decode("utf-8", errors="replace")
+            if isinstance(raw_detail, bytes)
+            else str(raw_detail)
+        ).strip()
         message = "git diff changed-file discovery failed"
         if detail:
             message = f"{message}: {detail}"
         raise SupportabilityError(message) from exc
-    return [
-        line.strip().replace("\\", "/")
-        for line in completed.stdout.splitlines()
-        if line.strip()
-    ]
+    try:
+        paths = [
+            raw_path.decode("utf-8")
+            for raw_path in completed.stdout.split(b"\0")
+            if raw_path
+        ]
+    except (AttributeError, UnicodeDecodeError) as exc:
+        raise SupportabilityError(
+            "git diff changed-file discovery returned invalid UTF-8 paths"
+        ) from exc
+    return _canonical_changed_files(paths)
 
 
 def _high_risk_files(target_repo: Path, changed: list[str]) -> list[str]:
@@ -1982,131 +1961,6 @@ def _receipt_markdown(receipt: dict[str, Any]) -> str:
             "",
         ]
     )
-
-
-def _parse_simple_yaml(text: str) -> dict[str, Any]:
-    lines = _yaml_lines(text)
-    if not lines:
-        return {}
-    result, index = _parse_yaml_block(lines, 0, lines[0][0])
-    if index != len(lines):
-        raise SupportabilityError("unsupported YAML structure")
-    if not isinstance(result, dict):
-        raise SupportabilityError("supportability YAML root must be a mapping")
-    return result
-
-
-def _yaml_lines(text: str) -> list[tuple[int, str]]:
-    lines = []
-    for raw in text.splitlines():
-        stripped = _strip_yaml_comment(raw).rstrip()
-        if not stripped.strip() or stripped.lstrip().startswith("---"):
-            continue
-        lines.append((len(stripped) - len(stripped.lstrip(" ")), stripped.lstrip(" ")))
-    return lines
-
-
-def _strip_yaml_comment(line: str) -> str:
-    in_single = False
-    in_double = False
-    for index, char in enumerate(line):
-        if char == "'" and not in_double:
-            in_single = not in_single
-        if char == '"' and not in_single:
-            in_double = not in_double
-        if char == "#" and not in_single and not in_double:
-            return line[:index]
-    return line
-
-
-def _parse_yaml_block(
-    lines: list[tuple[int, str]], index: int, indent: int
-) -> tuple[Any, int]:
-    if lines[index][1].startswith("- "):
-        return _parse_yaml_list(lines, index, indent)
-    return _parse_yaml_mapping(lines, index, indent)
-
-
-def _parse_yaml_mapping(
-    lines: list[tuple[int, str]], index: int, indent: int
-) -> tuple[dict[str, Any], int]:
-    data: dict[str, Any] = {}
-    while (
-        index < len(lines)
-        and lines[index][0] == indent
-        and not lines[index][1].startswith("- ")
-    ):
-        key, value = _split_yaml_key_value(lines[index][1])
-        if value == "":
-            if index + 1 >= len(lines) or lines[index + 1][0] <= indent:
-                raise SupportabilityError(f"YAML key {key!r} is missing a nested block")
-            child, index = _parse_yaml_block(lines, index + 1, lines[index + 1][0])
-            data[key] = child
-        else:
-            data[key] = _parse_yaml_scalar(value)
-            index += 1
-    return data, index
-
-
-def _parse_yaml_list(
-    lines: list[tuple[int, str]], index: int, indent: int
-) -> tuple[list[Any], int]:
-    items: list[Any] = []
-    while (
-        index < len(lines)
-        and lines[index][0] == indent
-        and lines[index][1].startswith("- ")
-    ):
-        value = lines[index][1][2:].strip()
-        if value == "":
-            if index + 1 >= len(lines) or lines[index + 1][0] <= indent:
-                raise SupportabilityError("YAML list item is missing a nested block")
-            child, index = _parse_yaml_block(lines, index + 1, lines[index + 1][0])
-            items.append(child)
-        elif _looks_like_yaml_mapping_item(value):
-            key, scalar = _split_yaml_key_value(value)
-            item = {key: _parse_yaml_scalar(scalar)}
-            index += 1
-            if index < len(lines) and lines[index][0] > indent:
-                child, index = _parse_yaml_mapping(lines, index, lines[index][0])
-                item.update(child)
-            items.append(item)
-        else:
-            items.append(_parse_yaml_scalar(value))
-            index += 1
-    return items, index
-
-
-def _looks_like_yaml_mapping_item(value: str) -> bool:
-    return ":" in value and not value.startswith(("'", '"'))
-
-
-def _split_yaml_key_value(text: str) -> tuple[str, str]:
-    if ":" not in text:
-        raise SupportabilityError(f"unsupported YAML line: {text}")
-    key, value = text.split(":", 1)
-    return key.strip(), value.strip()
-
-
-def _parse_yaml_scalar(value: str) -> Any:
-    if value in {"true", "false"}:
-        return value == "true"
-    if value in {"null", "~"}:
-        return None
-    if value == "[]":
-        return []
-    if value.startswith("[") or value.startswith("{"):
-        raise SupportabilityError(f"unsupported YAML flow scalar: {value}")
-    if value.startswith('"'):
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise SupportabilityError(f"unsupported YAML scalar: {value}") from exc
-    if value.startswith("'") and value.endswith("'"):
-        return value[1:-1]
-    if re.fullmatch(r"-?[0-9]+", value):
-        return int(value)
-    return value
 
 
 def _add_config_parser(

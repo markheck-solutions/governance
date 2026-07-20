@@ -270,11 +270,11 @@ def _finalize_result(
     return result, exit_code
 
 
-def _architecture_policy_errors(policy: Any) -> list[str]:
+def architecture_policy_errors(policy: Any) -> list[str]:
     if not isinstance(policy, dict):
         return ["architecture_policy must be an object"]
     errors: list[str] = []
-    if policy.get("version") != 1:
+    if type(policy.get("version")) is not int or policy["version"] != 1:
         errors.append("architecture_policy.version must be 1")
     if policy.get("enforcement_mode") not in ENFORCEMENT_MODES:
         errors.append("architecture_policy.enforcement_mode must be block_all")
@@ -284,6 +284,9 @@ def _architecture_policy_errors(policy: Any) -> list[str]:
     errors.extend(_module_registry_errors(policy.get("modules")))
     errors.extend(_known_debt_shape_errors(policy))
     return errors
+
+
+_architecture_policy_errors = architecture_policy_errors
 
 
 def _governed_root_errors(value: Any) -> list[str]:
@@ -388,7 +391,7 @@ def _module_limit_errors(module_id: str, limits: Any) -> list[str]:
     return [
         f"architecture_policy.modules.{module_id}.limits.{key} must be a non-negative integer"
         for key in fields
-        if not isinstance(limits.get(key), int) or limits[key] < 0
+        if type(limits.get(key)) is not int or limits[key] < 0
     ]
 
 

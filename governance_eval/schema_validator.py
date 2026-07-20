@@ -47,11 +47,13 @@ def _validate_reference(
 def _validate_combinators(
     instance: Any, schema: dict[str, Any], path: str, root: dict[str, Any]
 ) -> None:
-    if "enum" in schema and instance not in schema["enum"]:
+    if "enum" in schema and not any(
+        _json_equal(instance, option) for option in schema["enum"]
+    ):
         raise SchemaValidationError(
             f"{path}: {instance!r} not in enum {schema['enum']!r}"
         )
-    if "const" in schema and instance != schema["const"]:
+    if "const" in schema and not _json_equal(instance, schema["const"]):
         raise SchemaValidationError(f"{path}: expected constant {schema['const']!r}")
     if "oneOf" not in schema:
         return
@@ -62,6 +64,25 @@ def _validate_combinators(
         raise SchemaValidationError(
             f"{path}: expected exactly one matching schema, got {matches}"
         )
+
+
+def _json_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left == right
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _json_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _json_equal(left[key], right[key]) for key in left
+        )
+    return left == right
 
 
 def _schema_matches(

@@ -1,49 +1,127 @@
 {
   "type": "object",
-  "required": ["schema_version", "artifact_id", "plan_id", "checkout_receipt_id", "capability_status", "runtime", "command", "started_at", "completed_at", "duration_seconds", "timeout_seconds", "termination", "exit_code", "stdout", "stderr", "errors"],
+  "required": ["schema_version", "receipt_kind", "artifact_id", "plan_id", "checkout_receipt_id", "capability", "adapter_id", "capability_status", "runtime", "command", "scope", "artifacts", "processes", "started_at", "completed_at", "duration_seconds", "timeout_seconds", "total_timeout_seconds", "termination", "exit_code", "stdout", "stderr", "errors"],
   "properties": {
-    "schema_version": {"type": "string", "enum": ["2.0"]},
-    "artifact_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "checkout_receipt_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "schema_version": {"const": "2.0"},
+    "receipt_kind": {"const": "execution_result.v2"},
+    "artifact_id": {"$ref": "#/$defs/sha256"},
+    "plan_id": {"$ref": "#/$defs/sha256"},
+    "checkout_receipt_id": {"$ref": "#/$defs/sha256"},
+    "capability": {"$ref": "#/$defs/capability"},
+    "adapter_id": {"$ref": "#/$defs/adapter_id"},
     "capability_status": {"type": "string", "enum": ["PASS", "BLOCK_TECHNICAL"]},
-    "runtime": {
+    "runtime": {"oneOf": [{"$ref": "#/$defs/docker_runtime"}, {"$ref": "#/$defs/trusted_runtime"}]},
+    "command": {"$ref": "#/$defs/command"},
+    "scope": {
       "type": "object",
-      "required": ["image", "policy_id", "docker_path", "docker_sha256", "docker_host", "toolchain", "toolchain_sha256"],
+      "required": ["rule_id", "manifest_id", "file_count"],
       "properties": {
-        "image": {"type": "string", "pattern": "^python@sha256:[0-9a-f]{64}$"},
-        "policy_id": {"type": "string", "enum": ["docker.lockdown.v1"]},
-        "docker_path": {"type": "string"},
-        "docker_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "docker_host": {"type": "string", "minLength": 1},
-        "toolchain": {"type": "string", "enum": ["ruff==0.15.21"]},
-        "toolchain_sha256": {"type": "string", "enum": ["68971e86ff2a4bd44f45dc2dd28e590e785fea12dc966410ae269173ce6d64db"]}
+        "rule_id": {"type": "string", "minLength": 1, "maxLength": 80},
+        "manifest_id": {"$ref": "#/$defs/sha256"},
+        "file_count": {"type": "integer", "minimum": 0, "maximum": 20000}
       },
       "additionalProperties": false
     },
-    "command": {"type": "array", "maxItems": 64, "items": {"type": "string"}},
-    "started_at": {"type": "string", "format": "date-time"},
-    "completed_at": {"type": "string", "format": "date-time"},
-    "duration_seconds": {"type": "number", "minimum": 0},
+    "artifacts": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/artifact"}},
+    "processes": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/process"}},
+    "started_at": {"$ref": "#/$defs/timestamp"},
+    "completed_at": {"$ref": "#/$defs/timestamp"},
+    "duration_seconds": {"type": "number", "minimum": 0, "maximum": 3600},
     "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
-    "termination": {"type": "string", "enum": ["NOT_STARTED", "EXITED", "TIMED_OUT", "OUTPUT_LIMIT"]},
+    "total_timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600},
+    "termination": {"$ref": "#/$defs/termination"},
     "exit_code": {"type": ["integer", "null"]},
     "stdout": {"$ref": "#/$defs/stream"},
     "stderr": {"$ref": "#/$defs/stream"},
-    "errors": {"type": "array", "items": {"type": "string", "minLength": 1}}
+    "errors": {"type": "array", "maxItems": 64, "items": {"type": "string", "minLength": 1, "maxLength": 2048}}
   },
+  "additionalProperties": false,
   "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"},
+    "image_reference": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$"},
+    "capability": {"type": "string", "enum": ["lint", "format_check", "typecheck", "complexity", "architecture", "tests", "build", "package_audit", "benchmark", "diff_integrity"]},
+    "adapter_id": {"type": "string", "enum": ["python.ruff-check.v1", "python.ruff-format-check.v1", "python.mypy.v1", "python.ruff-c901.v1", "governance.architecture.v1", "python.unittest.v1", "python.pip-wheel-no-deps.v1", "python.package-audit-isolated.v1", "governance.phase1-benchmark.v1", "git.diff-check.v1"]},
+    "command": {"type": "array", "maxItems": 20128, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+    "termination": {"type": "string", "enum": ["NOT_STARTED", "EXITED", "TIMED_OUT", "OUTPUT_LIMIT", "SUPERVISOR_ERROR"]},
     "stream": {
       "type": "object",
       "required": ["captured_base64", "captured_bytes", "sha256", "truncated"],
       "properties": {
-        "captured_base64": {"type": "string"},
-        "captured_bytes": {"type": "integer", "minimum": 0, "maximum": 65536},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "captured_base64": {"type": "string", "maxLength": 349528},
+        "captured_bytes": {"type": "integer", "minimum": 0, "maximum": 262144},
+        "sha256": {"$ref": "#/$defs/sha256"},
         "truncated": {"type": "boolean"}
       },
       "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["kind", "name", "filename", "sha256", "size_bytes"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1, "maxLength": 80},
+        "name": {"type": "string", "minLength": 1, "maxLength": 80},
+        "filename": {"type": "string", "pattern": "^[A-Za-z0-9_.+-]+$", "maxLength": 255},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 67108864}
+      },
+      "additionalProperties": false
+    },
+    "process": {
+      "type": "object",
+      "required": ["command", "termination", "exit_code", "stdout", "stderr", "started_at", "completed_at", "duration_seconds", "errors"],
+      "properties": {
+        "command": {"$ref": "#/$defs/command"},
+        "termination": {"$ref": "#/$defs/termination"},
+        "exit_code": {"type": ["integer", "null"]},
+        "stdout": {"$ref": "#/$defs/stream"},
+        "stderr": {"$ref": "#/$defs/stream"},
+        "started_at": {"$ref": "#/$defs/timestamp"},
+        "completed_at": {"$ref": "#/$defs/timestamp"},
+        "duration_seconds": {"type": "number", "minimum": 0, "maximum": 3600},
+        "errors": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 2048}}
+      },
+      "additionalProperties": false
+    },
+    "executable": {
+      "type": "object",
+      "required": ["path", "sha256", "version"],
+      "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 1024}, "sha256": {"$ref": "#/$defs/sha256"}, "version": {"type": "string", "minLength": 1, "maxLength": 160}},
+      "additionalProperties": false
+    },
+    "python_runtime": {
+      "type": "object",
+      "required": ["path", "sha256", "implementation", "version", "cache_tag"],
+      "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 1024}, "sha256": {"$ref": "#/$defs/sha256"}, "implementation": {"const": "CPython"}, "version": {"type": "string", "pattern": "^3\\.12\\.[0-9]+$"}, "cache_tag": {"const": "cpython-312"}},
+      "additionalProperties": false
+    },
+    "docker_identity": {
+      "type": "object",
+      "required": ["path", "sha256", "host", "client_version", "server_version", "server_api_version", "os", "architecture"],
+      "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 1024}, "sha256": {"$ref": "#/$defs/sha256"}, "host": {"type": "string", "enum": ["unix:///var/run/docker.sock", "npipe:////./pipe/docker_engine"]}, "client_version": {"type": "string", "minLength": 1, "maxLength": 80}, "server_version": {"type": "string", "minLength": 1, "maxLength": 80}, "server_api_version": {"type": "string", "minLength": 1, "maxLength": 80}, "os": {"const": "linux"}, "architecture": {"type": "string", "enum": ["amd64", "x86_64"]}},
+      "additionalProperties": false
+    },
+    "toolchain": {
+      "type": ["object", "null"],
+      "required": ["bundle_id", "manifest_sha256", "lock_sha256", "image"],
+      "properties": {"bundle_id": {"$ref": "#/$defs/sha256"}, "manifest_sha256": {"$ref": "#/$defs/sha256"}, "lock_sha256": {"$ref": "#/$defs/sha256"}, "image": {"$ref": "#/$defs/image_reference"}},
+      "additionalProperties": false
+    },
+    "docker_runtime": {
+      "type": "object",
+      "required": ["kind", "runtime_id", "policy_id", "image", "toolchain", "pull", "network", "user", "read_only_root", "cap_drop", "no_new_privileges", "pids_limit", "memory_bytes", "memory_swap_bytes", "cpus", "docker"],
+      "properties": {
+        "kind": {"const": "docker"}, "runtime_id": {"const": "docker.python-toolchain.v2"}, "policy_id": {"const": "docker.lockdown.v2"},
+        "image": {"type": "object", "required": ["reference", "image_id"], "properties": {"reference": {"$ref": "#/$defs/image_reference"}, "image_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}, "additionalProperties": false},
+        "toolchain": {"$ref": "#/$defs/toolchain"}, "pull": {"const": "never"}, "network": {"const": "none"}, "user": {"const": "65532:65532"}, "read_only_root": {"const": true}, "cap_drop": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"const": "ALL"}}, "no_new_privileges": {"const": true}, "pids_limit": {"const": 128}, "memory_bytes": {"const": 536870912}, "memory_swap_bytes": {"const": 536870912}, "cpus": {"const": "1.0"}, "docker": {"$ref": "#/$defs/docker_identity"}
+      },
+      "additionalProperties": false
+    },
+    "trusted_runtime": {
+      "type": "object",
+      "required": ["kind", "runtime_id", "python", "git"],
+      "properties": {"kind": {"const": "trusted_judge"}, "runtime_id": {"const": "trusted.python-git.v1"}, "python": {"$ref": "#/$defs/python_runtime"}, "git": {"$ref": "#/$defs/executable"}},
+      "additionalProperties": false
     }
-  },
-  "additionalProperties": false
+  }
 }

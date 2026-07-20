@@ -81,6 +81,20 @@ class SchemaAndLockTests(unittest.TestCase):
                 "prefix-def-suffix", {"type": "string", "pattern": "abc"}, "$.field"
             )
 
+    def test_schema_constant_and_enum_do_not_confuse_booleans_with_integers(
+        self,
+    ) -> None:
+        for value, schema in (
+            (1, {"const": True}),
+            (True, {"const": 1}),
+            (False, {"enum": [0]}),
+            ({"enabled": 1}, {"const": {"enabled": True}}),
+        ):
+            with self.subTest(value=value, schema=schema):
+                with self.assertRaises(SchemaValidationError):
+                    validate(value, schema)
+        validate(1.0, {"const": 1})
+
     def test_supportability_result_schemas_reject_malformed_shas(self) -> None:
         gate_result = {
             "schema_version": "1.0",

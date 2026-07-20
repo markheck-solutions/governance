@@ -62,23 +62,60 @@ class SelfUpdatePolicyTests(unittest.TestCase):
 
         self.assertTrue(any("non-execution mode" in error for error in errors))
 
-    def test_supportability_judge_is_a_protected_checker(self) -> None:
+    def test_structural_judge_surfaces_are_protected(self) -> None:
         for checker in (
             "governance_eval/supportability.py",
             "governance_eval/trusted_command.py",
             "governance_eval/architecture_policy.py",
+            "governance_eval/future/nested_evaluator.py",
+            "governance_eval/schema_data/v99/future.schema.json",
+            "schemas/v99/future.schema.json",
+            ".github/actions/future-toolchain/action.yml",
+            ".github/workflows/future-reusable.yml",
+            "pyproject.toml",
+            "requirements-governance.lock",
         ):
             with self.subTest(checker=checker), tempfile.TemporaryDirectory() as tmp:
                 errors = supportability._architecture_governance_change_errors(
                     Path(tmp),
                     [checker],
                     "a" * 40,
-                    Path(tmp) / ".github/governance/supportability.yml",
                 )
 
-                self.assertTrue(
-                    any("protected checker change" in error for error in errors)
-                )
+                self.assertTrue(supportability._is_protected_judge_path(checker))
+                self.assertTrue(errors)
+
+    def test_special_and_ordinary_paths_are_not_generic_judge_surfaces(self) -> None:
+        for path in (
+            ".github/governance/supportability.yml",
+            ".github/workflows/supportability-enforcement.yml",
+            "README.md",
+            "governance_eval_evil/future.py",
+            "schemas-old/future.json",
+            "tests/governance_eval/future.py",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(supportability._is_protected_judge_path(path))
+
+    def test_protected_judge_change_does_not_require_test_file_churn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workflow = repo / ".github/workflows/supportability-enforcement.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                (
+                    REPO_ROOT / ".github/workflows/supportability-enforcement.yml"
+                ).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+            errors = supportability._architecture_governance_change_errors(
+                repo,
+                ["governance_eval/future.py"],
+                "a" * 40,
+            )
+
+        self.assertEqual(errors, [])
 
     def test_architecture_runner_transition_is_exact_workflow_change(self) -> None:
         base = (REPO_ROOT / ".github/workflows/supportability-gate.yml").read_text(
@@ -126,7 +163,6 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                     repo,
                     [".github/workflows/supportability-gate.yml"],
                     "a" * 40,
-                    repo / ".github/governance/supportability.yml",
                 )
 
         self.assertTrue(

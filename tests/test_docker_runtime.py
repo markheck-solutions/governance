@@ -1,335 +1,240 @@
 from __future__ import annotations
 
-import io
-import shutil
-import subprocess
-import unittest
 import os
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+import json
+import tempfile
+import unittest
+from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
-from tempfile import TemporaryDirectory
 from unittest import mock
 
-from governance_eval.docker_runtime import (
-    docker_run_argv,
-    execute_ruff_docker,
-    runtime_root_path,
-)
 import governance_eval.docker_runtime as docker_runtime
+from governance_eval.capability_catalog import capability_adapters
+from governance_eval.docker_runtime import RuntimePaths, docker_gate_argv
 from governance_eval.execution_plan_v2 import compile_execution_plan_v2
-from governance_eval.execution_result_v2 import validate_execution_result_v2
-from governance_eval.schemas import validate_named
-from test_execution_plan_v2 import _receipt
+from receipt_fixture import scope_manifest, strict_receipt, toolchain_binding
 
 
 class DockerRuntimePolicyTests(unittest.TestCase):
-    def test_subprocess_environments_drop_host_injection_variables(self) -> None:
-        executable = Path("C:/trusted/tool.exe")
+    def test_subprocess_environments_drop_host_git_injection(self) -> None:
+        executable = Path("C:/trusted/git.exe")
         with mock.patch.dict(
             os.environ,
             {
-                "DOCKER_HOST": "tcp://attacker.invalid:2375",
-                "DOCKER_CONTEXT": "attacker",
-                "DOCKER_CONFIG": "C:/attacker",
                 "GIT_DIR": "C:/attacker/.git",
                 "GIT_WORK_TREE": "C:/attacker/worktree",
+                "GIT_CONFIG_GLOBAL": "C:/attacker/config",
             },
         ):
-            docker_environment = docker_runtime._docker_environment(executable)
-            git_environment = docker_runtime._git_environment(executable)
+            environment = docker_runtime._git_environment(executable)
 
-        self.assertNotIn("DOCKER_HOST", docker_environment)
-        self.assertNotIn("DOCKER_CONTEXT", docker_environment)
-        self.assertNotIn("DOCKER_CONFIG", docker_environment)
-        self.assertNotIn("GIT_DIR", git_environment)
-        self.assertNotIn("GIT_WORK_TREE", git_environment)
+        self.assertNotIn("GIT_DIR", environment)
+        self.assertNotIn("GIT_WORK_TREE", environment)
+        self.assertEqual(environment["GIT_CONFIG_GLOBAL"], os.devnull)
 
-    def test_run_command_has_exact_lockdown_and_only_disposable_mounts(self) -> None:
-        plan = compile_execution_plan_v2(
-            _receipt(), capability="lint", adapter_id="python.ruff-check.v1"
-        )
-        workspace = Path("C:/temp/disposable-target")
-        docker = Path("C:/Program Files/Docker/docker.exe")
-        toolchain_root = Path("C:/temp/sealed-toolchain")
-
-        argv = docker_run_argv(
-            docker=docker,
-            docker_host="npipe:////./pipe/docker_engine",
-            plan=plan,
-            workspace=workspace,
-            toolchain_root=toolchain_root,
-            container_name="governance-test-container",
-        )
-
-        self.assertEqual(argv[0], str(docker))
-        self.assertEqual(argv[1], "--host=npipe:////./pipe/docker_engine")
-        for required in (
-            "--read-only",
-            "--network=none",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges:true",
-            "--pids-limit=128",
-            "--memory=536870912",
-            "--cpus=1.0",
-            "--user=65532:65532",
-        ):
-            self.assertIn(required, argv)
-        self.assertIn(
-            f"type=bind,src={workspace},dst=/workspace",
-            argv,
-        )
-        self.assertIn(
-            f"type=bind,src={toolchain_root},dst=/opt/governance-toolchain,readonly",
-            argv,
-        )
-        self.assertNotIn("-v", argv)
-        self.assertNotIn("--privileged", argv)
-        self.assertNotIn("sh", argv)
-        self.assertNotIn("bash", argv)
-        self.assertEqual(argv[-6:], plan.step["argv"])
-
-    def test_missing_docker_emits_schema_valid_block(self) -> None:
-        receipt = _receipt()
-        plan = compile_execution_plan_v2(
-            receipt, capability="lint", adapter_id="python.ruff-check.v1"
-        )
-
-        result = execute_ruff_docker(
-            plan=plan,
-            receipt=receipt,
-            target_root=Path("C:/not-used"),
-            evaluator_root=Path("C:/not-used"),
-            toolchain_binary=Path("C:/not-used/ruff"),
-        )
-
-        validate_named("execution_result_v2", result)
-        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
-        self.assertEqual(result["termination"], "NOT_STARTED")
-        self.assertEqual(result["errors"], ["Docker CLI path is invalid"])
-        self.assertEqual(
-            validate_execution_result_v2(result, plan, receipt)["integrity_status"],
-            "INTEGRITY_VALID",
-        )
-
-    def test_rehashed_mutated_plan_blocks_before_docker_resolution(self) -> None:
-        receipt = _receipt()
-        plan = compile_execution_plan_v2(
-            receipt, capability="lint", adapter_id="python.ruff-check.v1"
-        )
-        runtime = {**plan.runtime, "network": "bridge"}
-        hostile = replace(plan, runtime=runtime, plan_id="")
-        payload = hostile.to_json()
-        payload.pop("plan_id")
-        from governance_eval.hashing import sha256_json
-
-        hostile = replace(hostile, plan_id=sha256_json(payload))
-
-        with mock.patch(
-            "governance_eval.docker_runtime._trusted_docker"
-        ) as docker_resolution:
-            result = execute_ruff_docker(
-                plan=hostile,
-                receipt=receipt,
-                target_root=Path("C:/not-used"),
-                evaluator_root=Path("C:/not-used"),
-                toolchain_binary=Path("C:/not-used/ruff"),
-            )
-
-        docker_resolution.assert_not_called()
-        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
-        self.assertEqual(
-            result["errors"],
-            ["execution plan differs from evaluator-owned plan"],
-        )
-
-    def test_non_exited_zero_code_cannot_pass(self) -> None:
-        result, plan, receipt = self._host_result(
-            termination="TIMED_OUT", exit_code=0, duration=120, errors=[]
-        )
-
-        self.assertEqual(result["capability_status"], "BLOCK_TECHNICAL")
-        self.assertEqual(
-            validate_execution_result_v2(result, plan, receipt)["integrity_status"],
-            "INTEGRITY_VALID",
-        )
-
-    def test_cleanup_error_preserves_launched_outcome(self) -> None:
-        result, plan, receipt = self._host_result(
-            termination="EXITED",
-            exit_code=0,
-            duration=1,
-            errors=["Docker container cleanup failed"],
-        )
-
-        self.assertEqual(result["termination"], "EXITED")
-        self.assertEqual(result["exit_code"], 0)
-        self.assertEqual(result["errors"], ["Docker container cleanup failed"])
-        self.assertEqual(
-            validate_execution_result_v2(result, plan, receipt)["integrity_status"],
-            "INTEGRITY_VALID",
-        )
-
-    def test_run_boundary_captures_cleanup_timeout(self) -> None:
-        process = mock.Mock()
-        process.stdout = io.BytesIO(b"captured stdout")
-        process.stderr = io.BytesIO(b"")
-        process.poll.return_value = 0
-        process.wait.return_value = 0
-        with (
-            mock.patch("subprocess.Popen", return_value=process),
-            mock.patch(
-                "governance_eval.docker_runtime._command",
-                side_effect=(
-                    subprocess.TimeoutExpired("docker inspect", 10),
-                    SimpleNamespace(returncode=0),
-                ),
-            ),
-        ):
-            outcome = docker_runtime._run_bounded(
-                ["docker", "run"],
-                docker=Path("C:/trusted/docker.exe"),
-                docker_host="npipe:////./pipe/docker_engine",
-                container_name="governance-test-container",
-                timeout_seconds=120,
-                output_limit=65536,
-            )
-
-        self.assertEqual(outcome["termination"], "EXITED")
-        self.assertEqual(outcome["exit_code"], 0)
-        self.assertEqual(outcome["errors"], ["Docker container cleanup failed"])
-        self.assertGreater(outcome["stdout"]["captured_bytes"], 0)
-
-    def test_cleanup_listing_transport_failure_blocks(self) -> None:
-        with mock.patch(
-            "governance_eval.docker_runtime._command",
-            side_effect=(
-                SimpleNamespace(returncode=1, stdout="", stderr="daemon unavailable"),
-                SimpleNamespace(returncode=0, stdout="", stderr=""),
-            ),
-        ):
-            errors = docker_runtime._cleanup_errors(
-                Path("C:/trusted/docker.exe"),
-                "npipe:////./pipe/docker_engine",
-                "governance-test-container",
-            )
-
-        self.assertEqual(errors, ["Docker container cleanup failed"])
-
-    def test_materialization_ignores_export_ignore_attributes(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory) / "target"
-            workspace = Path(directory) / "workspace"
-            root.mkdir()
-            commands = (
-                ("init", "-q"),
-                ("config", "user.email", "governance@example.invalid"),
-                ("config", "user.name", "Governance Test"),
-            )
-            for arguments in commands:
-                subprocess.run(["git", *arguments], cwd=root, check=True, timeout=10)
-            (root / ".gitattributes").write_text(
-                "hidden.py export-ignore\n", encoding="utf-8"
-            )
-            (root / "hidden.py").write_text("import os\n", encoding="utf-8")
-            subprocess.run(["git", "add", "."], cwd=root, check=True, timeout=10)
-            subprocess.run(
-                ["git", "commit", "-qm", "tree"],
-                cwd=root,
-                check=True,
-                timeout=10,
-            )
-            commit = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            ).stdout.strip()
-            tree = subprocess.run(
-                ["git", "rev-parse", "HEAD^{tree}"],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            ).stdout.strip()
-            git = Path(shutil.which("git") or "missing-git").resolve()
-
-            docker_runtime._materialize_tree(
-                root,
-                {"commit_sha": commit, "tree_sha": tree},
-                workspace,
-                git,
-            )
-
-            self.assertEqual(
-                (workspace / "hidden.py").read_text(encoding="utf-8"),
-                "import os\n",
-            )
-
-    def test_materialization_rejects_windows_path_escapes(self) -> None:
-        for path in (r"..\escaped.py", r"C:\attacker\owned.py"):
-            with self.subTest(path=path), TemporaryDirectory() as directory:
-                workspace = Path(directory) / "workspace"
-                workspace.mkdir()
-                entry = f"100644 blob {'a' * 40}\t{path}".encode("utf-8")
-
-                with self.assertRaisesRegex(
-                    docker_runtime.DockerRuntimeError, "path is unsafe"
-                ):
-                    docker_runtime._materialize_entry(
-                        Path(directory),
-                        Path("C:/trusted/git.exe"),
-                        workspace,
-                        entry,
+    def test_all_docker_adapters_use_only_exact_disposable_mounts(self) -> None:
+        for adapter in capability_adapters():
+            if adapter.execution != "docker":
+                continue
+            with self.subTest(adapter=adapter.adapter_id):
+                plan, paths, evaluator, toolchain, cleanup = _plan_paths(adapter)
+                with cleanup:
+                    argv = docker_gate_argv(
+                        plan=plan,
+                        docker=Path(plan.runtime["docker"]["path"]),
+                        paths=paths,
+                        evaluator_root=evaluator,
+                        toolchain_root=toolchain,
+                        container_name=f"governance-{plan.plan_id[:32]}",
                     )
 
-    def _host_result(
-        self,
-        *,
-        termination: str,
-        exit_code: int,
-        duration: int,
-        errors: list[str],
-    ) -> tuple[dict[str, object], object, object]:
-        receipt = _receipt()
+                joined = "\n".join(argv)
+                for required in (
+                    "--read-only",
+                    "--network=none",
+                    "--cap-drop=ALL",
+                    "--security-opt=no-new-privileges:true",
+                    "--pids-limit=128",
+                    "--memory=536870912",
+                    "--user=65532:65532",
+                ):
+                    self.assertIn(required, argv)
+                self.assertNotIn("docker.sock", joined.lower())
+                self.assertNotIn("docker_engine,dst", joined.lower())
+                self.assertNotIn("--privileged", argv)
+                self.assertNotIn("--rm", argv)
+                self.assertEqual(argv[-len(plan.step["argv"]) :], plan.step["argv"])
+                if adapter.capability in {"build", "benchmark"}:
+                    self.assertIn(f"src={paths.staging},dst=/governance-output", joined)
+                    self.assertNotIn(
+                        f"src={paths.output},dst=/governance-output", joined
+                    )
+                else:
+                    self.assertNotIn("dst=/governance-output", joined)
+                if adapter.capability == "tests":
+                    self.assertIn(
+                        f"src={paths.base_tests},dst=/workspace/tests,readonly",
+                        joined,
+                    )
+
+    def test_package_audit_has_no_workspace_or_toolchain_mount(self) -> None:
+        adapter = capability_adapters()[7]
+        plan, paths, evaluator, toolchain, cleanup = _plan_paths(adapter)
+        with cleanup:
+            argv = docker_gate_argv(
+                plan=plan,
+                docker=Path(plan.runtime["docker"]["path"]),
+                paths=paths,
+                evaluator_root=evaluator,
+                toolchain_root=toolchain,
+                container_name=f"governance-{plan.plan_id[:32]}",
+            )
+        joined = "\n".join(argv)
+        self.assertNotIn("dst=/workspace", joined)
+        self.assertNotIn("dst=/opt/governance-toolchain", joined)
+        self.assertIn(f"src={paths.input},dst=/input,readonly", joined)
+
+    def test_materialized_git_paths_reject_platform_escapes(self) -> None:
+        for path in (
+            r"..\escaped.py",
+            r"C:\attacker\owned.py",
+            "../escaped.py",
+            "/absolute.py",
+        ):
+            with (
+                self.subTest(path=path),
+                self.assertRaisesRegex(
+                    docker_runtime.DockerRuntimeError, "path is unsafe"
+                ),
+            ):
+                docker_runtime._canonical_path(path)
+
+    def test_staging_rejects_links_and_inventory_flood(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.write_text("data", encoding="utf-8")
+            link = root / "link"
+            try:
+                link.symlink_to(target)
+            except OSError:
+                self.skipTest("symlink creation unavailable")
+            with self.assertRaisesRegex(
+                docker_runtime.DockerRuntimeError, "staged artifact path"
+            ):
+                docker_runtime._safe_staged_files(root, allowed_directories=set())
+
+    def test_unittest_summary_requires_real_non_skipped_success(self) -> None:
+        adapter = capability_adapters()[5]
+        plan, _paths, _evaluator, _toolchain, cleanup = _plan_paths(adapter)
+        marker = b"GOVERNANCE_UNITTEST_SUMMARY="
+        payloads = (
+            {},
+            {
+                "tests_run": 0,
+                "failures": 0,
+                "errors": 0,
+                "skipped": 0,
+                "unexpected_successes": 0,
+            },
+            {
+                "tests_run": 1,
+                "failures": 0,
+                "errors": 0,
+                "skipped": 1,
+                "unexpected_successes": 0,
+            },
+        )
+        with cleanup:
+            for index, payload in enumerate(payloads):
+                output = Path(cleanup.name) / f"summary-{index}"
+                output.mkdir()
+                artifacts, errors = docker_runtime._capture_summary(
+                    output,
+                    plan,
+                    marker,
+                    marker + json.dumps(payload).encode("utf-8") + b"\n",
+                )
+                self.assertEqual(artifacts, [])
+                self.assertTrue(errors)
+
+    def test_unittest_adapter_blocks_before_candidate_interpreter(self) -> None:
+        adapter = capability_adapters()[5]
+        plan, _paths, _evaluator, _toolchain, cleanup = _plan_paths(adapter)
+        with (
+            cleanup,
+            self.assertRaisesRegex(
+                docker_runtime.DockerRuntimeError,
+                "cannot authenticate success",
+            ),
+        ):
+            docker_runtime._require_authoritative_adapter(plan)
+
+
+def _plan_paths(adapter):
+    receipt = strict_receipt()
+    scope = scope_manifest(receipt, adapter)
+    toolchain_manifest = (
+        toolchain_binding(receipt) if adapter.mount_profile != "wheel-only.v1" else None
+    )
+    input_artifacts = (
+        (_input_wheel(),) if adapter.mount_profile == "wheel-only.v1" else ()
+    )
+    with mock.patch(
+        "governance_eval.execution_plan_v2.build_scope_manifest",
+        return_value=deepcopy(scope),
+    ):
         plan = compile_execution_plan_v2(
-            receipt, capability="lint", adapter_id="python.ruff-check.v1"
-        )
-        started = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
-        runtime_root = runtime_root_path(plan)
-        workspace = runtime_root / "workspace"
-        toolchain = runtime_root / "toolchain"
-        command = docker_run_argv(
-            docker=Path(plan.runtime["docker_path"]),
-            docker_host=plan.runtime["docker_host"],
-            plan=plan,
-            workspace=workspace,
-            toolchain_root=toolchain,
-            container_name="governance-test-container",
-        )
-        outcome = {
-            "termination": termination,
-            "exit_code": exit_code,
-            "stdout": docker_runtime._empty_stream(),
-            "stderr": docker_runtime._empty_stream(),
-            "started_at": started,
-            "completed_at": started + timedelta(seconds=duration),
-        }
-        result = docker_runtime._result(
-            plan,
             receipt,
-            None,
-            plan.runtime["docker_host"],
-            command,
-            started,
-            outcome=outcome,
-            errors=errors,
+            capability=adapter.capability,
+            adapter_id=adapter.adapter_id,
+            scope_manifest=scope,
+            target_root=Path("C:/target"),
+            evaluator_root=Path("C:/evaluator"),
+            toolchain_manifest=toolchain_manifest,
+            input_artifacts=input_artifacts,
         )
-        return result, plan, receipt
+    cleanup = tempfile.TemporaryDirectory()
+    root = Path(cleanup.name).resolve()
+    children = {
+        name: root / name
+        for name in (
+            "workspace",
+            "base-tests",
+            "scope",
+            "input",
+            "staging",
+            "output",
+            "toolchain",
+        )
+    }
+    for path in children.values():
+        path.mkdir()
+    paths = RuntimePaths(
+        root=root,
+        workspace=children["workspace"],
+        base_tests=children["base-tests"],
+        scope=children["scope"],
+        input=children["input"],
+        staging=children["staging"],
+        output=children["output"],
+    )
+    toolchain = (
+        None if adapter.mount_profile == "wheel-only.v1" else children["toolchain"]
+    )
+    return plan, paths, Path.cwd(), toolchain, cleanup
+
+
+def _input_wheel():
+    return {
+        "kind": "python-wheel",
+        "name": "python-wheel",
+        "filename": "governance_eval-0.1.0-py3-none-any.whl",
+        "sha256": "1" * 64,
+        "size_bytes": 1234,
+        "producer_plan_id": "2" * 64,
+        "producer_artifact_id": "3" * 64,
+    }
 
 
 if __name__ == "__main__":

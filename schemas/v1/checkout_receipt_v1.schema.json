@@ -1,0 +1,282 @@
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "receipt_id",
+    "evaluation_role",
+    "repository",
+    "pull_request",
+    "evaluation_target",
+    "policy",
+    "evaluator",
+    "workflows",
+    "github_resources",
+    "runtime"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "receipt_kind": {"const": "checkout_receipt.v1"},
+    "receipt_id": {"$ref": "#/$defs/sha256"},
+    "evaluation_role": {"type": "string", "enum": ["BASELINE", "CANDIDATE"]},
+    "repository": {"$ref": "#/$defs/repository"},
+    "pull_request": {
+      "type": "object",
+      "required": ["number", "api_url", "html_url", "base", "head"],
+      "properties": {
+        "number": {"$ref": "#/$defs/positive_id"},
+        "api_url": {"type": "string", "pattern": "^https://api\\.github\\.com/repos/"},
+        "html_url": {"type": "string", "pattern": "^https://github\\.com/"},
+        "base": {"$ref": "#/$defs/pull_ref"},
+        "head": {"$ref": "#/$defs/pull_ref"}
+      },
+      "additionalProperties": false
+    },
+    "evaluation_target": {
+      "type": "object",
+      "required": ["commit_sha", "tree_sha", "diff_base_commit_sha", "diff_base_tree_sha"],
+      "properties": {
+        "commit_sha": {"$ref": "#/$defs/sha"},
+        "tree_sha": {"$ref": "#/$defs/sha"},
+        "diff_base_commit_sha": {"$ref": "#/$defs/sha"},
+        "diff_base_tree_sha": {"$ref": "#/$defs/sha"}
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "required": ["source", "commit_sha", "tree_sha", "config", "standard", "execution_profile"],
+      "properties": {
+        "source": {"type": "string", "enum": ["BASE", "HEAD"]},
+        "commit_sha": {"$ref": "#/$defs/sha"},
+        "tree_sha": {"$ref": "#/$defs/sha"},
+        "config": {"$ref": "#/$defs/policy_file"},
+        "standard": {"$ref": "#/$defs/policy_file"},
+        "execution_profile": {"$ref": "#/$defs/execution_profile"}
+      },
+      "additionalProperties": false
+    },
+    "evaluator": {
+      "type": "object",
+      "required": ["repository_id", "repository_full_name", "commit_sha", "tree_sha"],
+      "properties": {
+        "repository_id": {"$ref": "#/$defs/positive_id"},
+        "repository_full_name": {"$ref": "#/$defs/repository_name"},
+        "commit_sha": {"$ref": "#/$defs/sha"},
+        "tree_sha": {"$ref": "#/$defs/sha"}
+      },
+      "additionalProperties": false
+    },
+    "workflows": {
+      "type": "object",
+      "required": ["caller", "evaluator", "run"],
+      "properties": {
+        "caller": {"$ref": "#/$defs/workflow"},
+        "evaluator": {"$ref": "#/$defs/workflow"},
+        "run": {
+          "type": "object",
+          "required": ["id", "attempt", "api_url", "event", "action", "artifact_name", "observed_at"],
+          "properties": {
+            "id": {"$ref": "#/$defs/positive_id"},
+            "attempt": {"$ref": "#/$defs/positive_id"},
+            "api_url": {"type": "string", "pattern": "^https://api\\.github\\.com/repos/"},
+            "event": {"const": "pull_request_target"},
+            "action": {"type": "string", "minLength": 1, "maxLength": 80},
+            "artifact_name": {"type": "string", "enum": ["baseline-supportability-gate-evidence", "candidate-supportability-gate-evidence"]},
+            "observed_at": {"$ref": "#/$defs/timestamp"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "github_resources": {
+      "type": "object",
+      "required": [
+        "target_repository",
+        "evaluator_repository",
+        "pull_request",
+        "base_commit",
+        "head_commit",
+        "evaluator_commit",
+        "workflow_run",
+        "effective_base_rules"
+      ],
+      "properties": {
+        "target_repository": {"$ref": "#/$defs/http_resource"},
+        "evaluator_repository": {"$ref": "#/$defs/http_resource"},
+        "pull_request": {"$ref": "#/$defs/http_resource"},
+        "base_commit": {"$ref": "#/$defs/http_resource"},
+        "head_commit": {"$ref": "#/$defs/http_resource"},
+        "evaluator_commit": {"$ref": "#/$defs/http_resource"},
+        "workflow_run": {"$ref": "#/$defs/http_resource"},
+        "effective_base_rules": {"$ref": "#/$defs/http_resource"}
+      },
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["git", "python", "docker", "container_image", "toolchain"],
+      "properties": {
+        "git": {"$ref": "#/$defs/executable"},
+        "python": {
+          "type": "object",
+          "required": ["path", "sha256", "implementation", "version", "cache_tag"],
+          "properties": {
+            "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "sha256": {"$ref": "#/$defs/sha256"},
+            "implementation": {"const": "CPython"},
+            "version": {"type": "string", "pattern": "^3\\.12\\.[0-9]+$"},
+            "cache_tag": {"const": "cpython-312"}
+          },
+          "additionalProperties": false
+        },
+        "docker": {
+          "type": "object",
+          "required": ["path", "sha256", "host", "client_version", "server_version", "server_api_version", "os", "architecture"],
+          "properties": {
+            "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "sha256": {"$ref": "#/$defs/sha256"},
+            "host": {"type": "string", "enum": ["unix:///var/run/docker.sock", "npipe:////./pipe/docker_engine"]},
+            "client_version": {"type": "string", "minLength": 1, "maxLength": 80},
+            "server_version": {"type": "string", "minLength": 1, "maxLength": 80},
+            "server_api_version": {"type": "string", "minLength": 1, "maxLength": 80},
+            "os": {"const": "linux"},
+            "architecture": {"type": "string", "enum": ["amd64", "x86_64"]}
+          },
+          "additionalProperties": false
+        },
+        "container_image": {
+          "type": "object",
+          "required": ["reference", "image_id"],
+          "properties": {
+            "reference": {"type": "string", "pattern": "@sha256:[0-9a-f]{64}$"},
+            "image_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          },
+          "additionalProperties": false
+        },
+        "toolchain": {
+          "type": "object",
+          "required": ["bundle_id", "manifest_sha256", "lock_sha256"],
+          "properties": {
+            "bundle_id": {"$ref": "#/$defs/sha256"},
+            "manifest_sha256": {"$ref": "#/$defs/sha256"},
+            "lock_sha256": {"$ref": "#/$defs/sha256"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "positive_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "repository_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "timestamp": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"},
+    "repository": {
+      "type": "object",
+      "required": ["id", "full_name", "default_branch", "api_url", "html_url"],
+      "properties": {
+        "id": {"$ref": "#/$defs/positive_id"},
+        "full_name": {"$ref": "#/$defs/repository_name"},
+        "default_branch": {"type": "string", "minLength": 1, "maxLength": 255},
+        "api_url": {"type": "string", "pattern": "^https://api\\.github\\.com/repos/"},
+        "html_url": {"type": "string", "pattern": "^https://github\\.com/"}
+      },
+      "additionalProperties": false
+    },
+    "pull_ref": {
+      "type": "object",
+      "required": ["repository_id", "repository_full_name", "ref", "commit_sha", "tree_sha"],
+      "properties": {
+        "repository_id": {"$ref": "#/$defs/positive_id"},
+        "repository_full_name": {"$ref": "#/$defs/repository_name"},
+        "ref": {"type": "string", "minLength": 1, "maxLength": 255},
+        "commit_sha": {"$ref": "#/$defs/sha"},
+        "tree_sha": {"$ref": "#/$defs/sha"}
+      },
+      "additionalProperties": false
+    },
+    "policy_file": {
+      "type": "object",
+      "required": ["path", "git_blob_sha", "content_sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"},
+        "git_blob_sha": {"$ref": "#/$defs/sha"},
+        "content_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "execution_profile": {
+      "type": "object",
+      "required": ["mode", "source_schema_version", "effective_schema_version", "profile_id", "capabilities"],
+      "properties": {
+        "mode": {"type": "string", "enum": ["legacy_v1_exact", "typed_v2"]},
+        "source_schema_version": {"type": "string", "enum": ["1.0", "2.0"]},
+        "effective_schema_version": {"const": "2.0"},
+        "profile_id": {"const": "8bed910deec331868a94c7dc7c835c919b8cf1799cd817152452cae3bdf03316"},
+        "capabilities": {"$ref": "#/$defs/capability_profile"}
+      },
+      "additionalProperties": false
+    },
+    "capability_profile": {
+      "type": "object",
+      "required": ["lint", "format_check", "typecheck", "complexity", "architecture", "tests", "build", "package_audit", "benchmark", "diff_integrity", "sql_supportability"],
+      "properties": {
+        "lint": {"const": "python.ruff-check.v1"},
+        "format_check": {"const": "python.ruff-format-check.v1"},
+        "typecheck": {"const": "python.mypy.v1"},
+        "complexity": {"const": "python.ruff-c901.v1"},
+        "architecture": {"const": "governance.architecture.v1"},
+        "tests": {"const": "python.unittest.v1"},
+        "build": {"const": "python.pip-wheel-no-deps.v1"},
+        "package_audit": {"const": "python.package-audit-isolated.v1"},
+        "benchmark": {"const": "governance.phase1-benchmark.v1"},
+        "diff_integrity": {"const": "git.diff-check.v1"},
+        "sql_supportability": {"const": "auto"}
+      },
+      "additionalProperties": false
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["repository_id", "repository_full_name", "path", "workflow_ref", "commit_sha", "tree_sha", "git_blob_sha", "content_sha256"],
+      "properties": {
+        "repository_id": {"$ref": "#/$defs/positive_id"},
+        "repository_full_name": {"$ref": "#/$defs/repository_name"},
+        "path": {"type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml$"},
+        "workflow_ref": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "commit_sha": {"$ref": "#/$defs/sha"},
+        "tree_sha": {"$ref": "#/$defs/sha"},
+        "git_blob_sha": {"$ref": "#/$defs/sha"},
+        "content_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "http_resource": {
+      "type": "object",
+      "required": ["url", "status", "etag", "observed_at", "body_sha256", "body_base64"],
+      "properties": {
+        "url": {"type": "string", "pattern": "^https://api\\.github\\.com/"},
+        "status": {"const": 200},
+        "etag": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
+        "observed_at": {"$ref": "#/$defs/timestamp"},
+        "body_sha256": {"$ref": "#/$defs/sha256"},
+        "body_base64": {"type": "string", "maxLength": 5592408}
+      },
+      "additionalProperties": false
+    },
+    "executable": {
+      "type": "object",
+      "required": ["path", "sha256", "version"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 160}
+      },
+      "additionalProperties": false
+    }
+  }
+}

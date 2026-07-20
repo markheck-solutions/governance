@@ -18,6 +18,7 @@ SCHEMA_FILES = {
     "target_pack": "target_pack.schema.json",
     "target_evaluation_result": "target_evaluation_result.schema.json",
     "supportability_config": "supportability_config.schema.json",
+    "supportability_config_v2": "supportability_config.schema.json",
     "supportability_gate_result": "supportability_gate_result.schema.json",
     "architecture_gate_result": "architecture_gate_result.schema.json",
     "delivery_receipt": "delivery_receipt.schema.json",
@@ -30,7 +31,8 @@ SCHEMA_FILES = {
     "codex_connector_evidence_result_v4": "codex_connector_evidence_result.schema.json",
     "execution_plan": "execution_plan.schema.json",
     "execution_plan_v2": "execution_plan.schema.json",
-    "checkout_receipt": "checkout_receipt.schema.json",
+    "checkout_receipt": "checkout_receipt_v1.schema.json",
+    "checkout_receipt_legacy_v1": "checkout_receipt.schema.json",
     "execution_result": "execution_result.schema.json",
     "execution_result_v2": "execution_result.schema.json",
     "governance_toolchain_receipt": "governance_toolchain_receipt.schema.json",
@@ -42,6 +44,7 @@ SCHEMA_FILES = {
 SCHEMA_VERSIONS = {
     "execution_plan_v2": "v2",
     "execution_result_v2": "v2",
+    "supportability_config_v2": "v2",
     "codex_connector_snapshot_v2": "v2",
     "codex_connector_evidence_result_v2": "v2",
     "codex_connector_evidence_result_v3": "v3",
@@ -49,9 +52,13 @@ SCHEMA_VERSIONS = {
 }
 
 _PACKAGED_SCHEMA_SHA256 = {
-    "checkout_receipt": "8856cd39a7093eafcfad0b8cfb509e74b33c17eb24985e8205aef4b1c7eed90a",
-    "execution_plan_v2": "22177474a601c4c6dcfa23399173099b47974a5f984dc7d2944269abcb0b6cd9",
-    "execution_result_v2": "b7418511e88fb99f541841bb4658e3bb10e3241e67631c275931ba3aa64fe1fd",
+    "checkout_receipt": "5b2bf4bcef05cfd500326102e8278b27e0c0823b63b14b3516dfd58d0466352c",
+    "checkout_receipt_legacy_v1": "8856cd39a7093eafcfad0b8cfb509e74b33c17eb24985e8205aef4b1c7eed90a",
+    "execution_plan": "4854719c664820b55020d4e3c46b68b8f63b1115761adc5e00df9ff87212963b",
+    "execution_plan_v2": "36964d36ea199605e10bc5deba8b9f9e0ae264cf9a623c08a9e841400f3c4b67",
+    "execution_result": "c3dcbe029e3f7094b8eb8966c487b649bbe08ec945d5f7b396900d2ce0dbee7f",
+    "execution_result_v2": "6ea8f433fbfbad4e2028e845bbf470de1ea9ba1a39236333550cd73886609c6e",
+    "supportability_config_v2": "46e4641b22a918b320add17b0a71d505d2ec05173ecb34ada47b035df87fbc1d",
 }
 
 
