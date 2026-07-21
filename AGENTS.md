@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Build and test an executable governance evaluator for solo, AI-directed software development. This repository judges governance mechanisms; it does not modify the application repositories it evaluates.
+Build and test Practical Tamper-Resistant Governance v1 for solo, AI-directed software development. This repository judges governance mechanisms; it does not modify the application repositories it evaluates.
 
 ## Authority order
 
@@ -29,21 +29,19 @@ Reference documents describe the current system and prior reasoning. They are in
 - Prefer cross-platform Python 3.12+ and commands runnable on Windows and GitHub-hosted runners.
 - Keep dependencies minimal and pinned.
 - Tests for the evaluator must include positive and negative controls.
+- Treat candidate-controlled repository content as malicious. Protect base-branch evaluator and verifier code, workflows, action and dependency pins, configuration and standard hashes, toolchain and image identities, authoritative result artifacts, required-check identity, branch protection, and rulesets from candidate control.
+- Classify every adapter with an evaluator-owned assurance class: `EVALUATOR_AUTHORITATIVE`, `CONTAINED_BUILD`, or `COOPERATIVE_DYNAMIC`. `EXTERNAL_ORACLE` is reserved and is not implemented in Governance v1.
+- `python.unittest.v1` is `COOPERATIVE_DYNAMIC`. Protect its command, scope, containment, resource bounds, host-owned result, and evidence bindings, but do not claim that arbitrary malicious code loaded into the same interpreter truthfully executed assertions.
+- This narrow dynamic-test non-guarantee does not weaken command, filesystem, credential, artifact, scope, threshold, workflow, replay, process, or resource-abuse controls.
 
-## Authorized self-bootstrap
+## Protected release path
 
-The owner authorized one controlled bootstrap because the installed Copilot-dependent gate cannot authorize its own replacement.
-
-- One bootstrap pull request may combine evaluator, configuration, reusable workflow, caller, and receipt changes. Existing required context names remain unchanged. This is the only exception to normal transition separation.
-- If live self-enforcement canaries reproduce bootstrap defects that the protected `pull_request_target` caller cannot validate, the still-open transaction permits at most two corrective bootstrap pull requests total. Each must repair only reproduced bootstrap defects, satisfy the same exact-SHA verification and rollback requirements, use only the same `enforce_admins` toggle, and restore protection immediately. A dependency-complete corrective pull request may contain a publication commit followed by an activation commit pinned to that publication SHA. Produce one schema-valid audit receipt per merge cycle so each receipt binds its own candidate, pull request, merge, rollback, mutation pair, and protection snapshots; final proof must list every content hash. This authority expires with the bootstrap transaction and cannot be used for later maintenance.
-- Before any live mutation, bind the candidate to an exact commit SHA; pass complete local verification; obtain a read-only adversarial review with zero unresolved P0-P2 findings; persist the current branch-protection/ruleset snapshot plus digest; and prepare an independently reviewed exact rollback commit whose tree restores the pre-bootstrap base.
-- Live mutations may target only `markheck-solutions/governance`. Evaluated application repositories remain read-only.
-- The only permitted live protection mutation is toggling `enforce_admins` for `main` from `true` to `false`, then back to `true`. Direct push, required-context deletion or rename, ruleset deletion, default-branch change, force push, permission change, and every other live mutation are forbidden.
-- Merge the bootstrap through an auditable pull request using merge-commit strategy so candidate ancestry is preserved. Squash and rebase merge are forbidden. Do not exploit a spoofed context, false-green result, stale artifact, or unrelated admin change.
-- Immediately restore admin enforcement. Verify live protection equality against the saved snapshot before canaries.
-- A repository-owned deterministic bootstrap command must produce a schema-valid receipt binding resource URLs, ETags when supplied, actor, GitHub server timestamps, mutation requests and responses, candidate SHA, PR head before merge, merge SHA, rollback SHA, pre/post protection digests, and transaction expiry.
-- On failure, first compare the live `main` tree to the saved pre-bootstrap base tree. If equal, skip code rollback and restore/verify protection only. If different, the same exception authorizes one emergency rollback pull request and one rollback-only `enforce_admins` `true` to `false` to `true` cycle. Admin-merge only the exact reviewed rollback SHA, verify its resulting tree equals the saved base tree, and restore the saved protection snapshot before reporting `BLOCK_TECHNICAL`. Produce one schema-valid receipt for each protection cycle and list both content hashes in final proof. Direct push remains forbidden.
-- Rollback authority remains active until code/protection restoration succeeds. The bootstrap exception expires only after restored protection equality, a valid audit receipt, and canary readiness are verified. All later changes use the protected pull-request path normally.
+- Every change merges through the normal protected pull-request path. Direct push, admin bypass, branch-protection or ruleset weakening, required-context deletion or rename, default-branch change, force push, and permission changes are forbidden.
+- Preserve the existing required context names unless a demonstrated GitHub limitation makes that impossible. Never make a candidate-controlled check authoritative.
+- Artifacts from a pull request that changes its own `pull_request` execution caller, pinned wrapper, permissions, or result-upload path are non-authoritative for that pull request. Ordinary changes to those protected surfaces fail closed. A bounded pin-only activation is authorized only by the previously active protected evaluator using the exact qualified publication merge and transition evidence, never by the candidate-controlled run.
+- Publish the complete evaluator without changing live pins or live configuration. Qualify the exact publication merge. Then use a pin-only activation pull request followed by a config-only migration pull request.
+- Use merge-commit strategy for publication so candidate ancestry and tree equality remain auditable. Do not exploit a spoofed context, false-green result, stale artifact, or unrelated administrative change.
+- A contract-reset merge is not Governance readiness. Completion still requires architecture review, implementation, exact-merge qualification, activation, migration, and live canaries.
 
 ## Execution bounds
 
@@ -51,18 +49,20 @@ The owner authorized one controlled bootstrap because the installed Copilot-depe
 - Focused verification command: 2 minutes maximum.
 - Complete local verification: 5 minutes maximum; all local verification for one slice: 10 minutes maximum.
 - Codex evidence wait: 5 minutes maximum.
-- GitHub workflows set `timeout-minutes` at or below 10. Protected pull-request and bootstrap deadlines use GitHub server time.
+- GitHub workflows set `timeout-minutes` at or below 10. Protected pull-request deadlines use GitHub server time.
 - GitHub deterministic workflow: 10 minutes maximum; protected pull request: 15 minutes maximum.
-- Controlled bootstrap transaction: 60 minutes maximum with deterministic abort and rollback when exceeded.
-- One repair loop per slice. If it fails, inspect the design once and either produce a qualified checkpoint or emit deterministic `BLOCK_TECHNICAL` evidence. Do not repeat the same PR, polling, or verification loop.
+- Local development may use multiple finite, bounded repair attempts until the acceptance suite passes. Do not create an autonomous repair loop.
+- After a qualified head opens a pull request, permit at most one repair push for a live-only finding. A failed pull request ends that pull request, not the assignment; close or replace it from the last qualified checkpoint. Do not repeat the same pull request, polling, or verification loop.
 - A timeout is a failure signal, never a reason to extend the same scope or claim partial success.
 
 ## Agent separation
 
-Explicitly use bounded subagents when available:
+Use subagents only for bounded, read-only analysis:
 
-- A read-only specification analyst derives acceptance cases before implementation.
-- A read-only adversarial reviewer inspects the final diff and test evidence.
+- Threat-model or specification review.
+- GitHub Actions trust-boundary review.
+- Cumulative release-delta review.
+- Final adversarial review of the exact diff and test evidence.
 - The primary agent implements and repairs. Reviewer agents must not edit files.
 
 No agent may certify its own output merely by narrative assertion.

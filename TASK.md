@@ -1,6 +1,6 @@
-# Task: Repository-Agnostic Governance Self-Enforcement
+# Task: Practical Tamper-Resistant Governance v1
 
-Implement and prove a reusable GitHub governance framework that can govern this repository before it is adopted by another repository.
+Implement, activate, and prove a reusable GitHub governance framework that can govern this repository before on-demand adoption by another repository.
 
 ## Goal
 
@@ -9,9 +9,12 @@ Governance is a target-neutral evaluator and GitHub enforcement framework for so
 - preserve the completed Phase 1 offline benchmark as a mandatory regression suite;
 - judge changes with deterministic code, not narrative approval;
 - execute target-specific capabilities through typed, versioned adapters;
-- keep the trusted judge separate from candidate-controlled code and commands;
-- replace its currently deadlocked Copilot-dependent path through the authorized controlled bootstrap, then pass its restored protected pull-request path;
+- separate candidate execution from the trusted verifier and authoritative merge decision;
+- protect evaluator authority, credentials, evidence, scope, thresholds, and required-check identity from candidate control;
+- release through normal protected pull requests without weakening branch protection or rulesets;
 - prove clean, defective, and stale-evidence canaries before any target rollout.
+
+Governance v1 supports the Python 3.12 ecosystem only.
 
 Spaghetti remains one registered historical target pack and benchmark source. It is not the framework identity, default target, or special case in the core evaluator. TWMN and all other application repositories remain out of scope until Governance self-enforcement is proven.
 
@@ -25,6 +28,23 @@ Spaghetti remains one registered historical target pack and benchmark source. It
 - `ASK_BUSINESS` is reserved for genuine owner-scoped behavior ambiguity.
 - Human approval, AI approval, waiver, allowlist, CODEOWNER approval, baseline debt, or known-debt metadata never converts RED to GREEN.
 - Deterministic GitHub Actions own merge decisions. External AI evidence can add blocking findings but cannot be the availability dependency that authorizes deterministic checks.
+
+## Revised threat model
+
+Governance v1 protects these assets from candidate control:
+
+- base-branch evaluator and verifier code;
+- reusable and caller workflows;
+- action and dependency pins;
+- configuration and Supportability Standard hashes;
+- toolchain and image identities;
+- the authoritative result artifact directory and its evidence bindings;
+- the GitHub required-check app and workflow identity;
+- branch protection and rulesets.
+
+Candidate-controlled repository content may be malicious. It may attempt command injection, arbitrary configuration, file writes, network or secret access, result replacement, artifact replay, workflow spoofing, evaluator modification, process escape, or resource exhaustion.
+
+Governance prevents candidate control of protected assets and authoritative merge decisions. It does not claim Byzantine proof that arbitrary malicious code loaded into an in-process dynamic test runner truthfully executed assertions. That narrow non-guarantee does not weaken command, filesystem, credential, artifact, scope, threshold, workflow, replay, process, or resource-abuse controls. `docs/adr/0001-governance-v1-threat-model.md` records the complete decision.
 
 ## Preserved Phase 1 benchmark
 
@@ -74,16 +94,27 @@ Repository-specific cases, fixtures, typed capability declarations, bounded adap
 
 - Configuration selects supported typed capability and adapter identifiers, not arbitrary shell commands.
 - Each adapter is versioned, has positive and negative controls, and generates an immutable execution plan.
+- The evaluator assigns and the trusted verifier recomputes each adapter's assurance class. Candidate configuration cannot select or alter assurance.
+- `EVALUATOR_AUTHORITATIVE`: Ruff lint, Ruff format, Ruff C901 at threshold 10, mypy, architecture, Phase 1 benchmark, Git diff integrity, and evaluator-owned package and artifact verification.
+- `CONTAINED_BUILD`: candidate wheel build and other candidate build processes whose effects are contained and whose outputs are host-captured.
+- `COOPERATIVE_DYNAMIC`: `python.unittest.v1` and any dynamic runner that imports candidate code. Its fixed command, scope, nonzero and not-all-skipped test requirements, timeout, output bounds, cleanup, host-owned result, and exact bindings remain enforced; assertion truth is not independently attributable.
+- `EXTERNAL_ORACLE`: reserved for a future repository-specific stable external interface; not implemented or required for Governance v1.
 - Unsupported adapters, capability versions, or options fail closed.
 - The framework does not claim universal language support. A repository is governable only when all required capabilities have supported adapters.
 - Candidate configuration cannot choose, replace, or modify the protected baseline judge or delivery-receipt verifier.
 
-### Isolated execution
+Practical Tamper-Resistant Governance v1 is the product release. Its typed configuration remains the separately versioned `schema_version: "2.0"` contract.
 
-- Untrusted target execution receives no secrets or persisted credentials.
-- Trusted judge files and target files do not share a writable execution boundary.
-- Execution plans bind repository, pull request, base SHA, head SHA, evaluator identity, adapter version, configuration hash, working directory, and bounded commands or steps.
-- Result artifacts bind the executed plan, exit status, output limits, artifact identity, and digest.
+### Untrusted execution and trusted verification
+
+- Candidate execution runs only in a `pull_request` workflow with `contents: read`, every unnecessary permission set to `none`, no secrets, no write token, exact action and evaluator pins, and no authoritative check identity.
+- Provisioning is separate from offline gate execution. Candidate processes run non-root with a read-only root filesystem, dropped capabilities, no privilege escalation, bounded CPU, memory, PIDs, output, step time, and total time, and only a disposable target copy writable.
+- Candidate code cannot access the Docker socket, evaluator checkout, toolchain source, or authoritative artifact directory.
+- A host wrapper outside the target checkout owns result paths and records exact identities, timing, timeout and termination, exit status, bounded stream counts and digests, truncation, cleanup, and artifact name and content digest.
+- The trusted verifier authenticates the `pull_request` workflow path and file hash against the previously published version. If the head changes that caller, its pinned wrapper, permissions, conditions, dependencies, or result-upload path, artifacts from that run are non-authoritative and cannot authorize the change.
+- The base-branch `pull_request_target` workflow performs only trusted verification and GitHub reconciliation. It never checks out candidate code for execution, imports candidate Python, runs candidate scripts, tests, builds, package hooks, or configuration, or executes artifact contents.
+- The trusted verifier downloads artifacts as hostile data, safely inspects archive structure and bounds, validates schemas, recomputes digests and decisions, rejects identity mismatch or replay, reconciles the unchanged exact head and current protection, and alone emits the authoritative required context.
+- Execution plans bind repository, pull request, base SHA and tree, head SHA and tree, evaluator and workflow identities, adapter version and assurance, configuration and standard hashes, toolchain and image identities, working directory, and bounded steps.
 
 ### GitHub enforcement
 
@@ -112,22 +143,15 @@ Required enforcement properties:
 - Copilot is not a required gate, reviewer, receipt dependency, or fallback;
 - manual Actions approval, manual API rerun, or owner-copied review evidence can never satisfy a required check, receipt, canary, or completion proof; automatic exact-head reconciliation is allowed.
 
-Outside the controlled bootstrap below, existing branch protection and required checks may only be inspected and proven. The bootstrap may temporarily modify Governance protection only as narrowly as required to merge the exact independently reviewed bootstrap SHA, then must restore enforcement before canaries.
+Branch protection, rulesets, required contexts, and permissions may only be inspected and proven. Weakening or bypassing them is out of scope.
 
-### Authorized controlled bootstrap
+### Protected three-PR release
 
-The installed gate requires Copilot to approve the change that removes Copilot. That circular dependency is not a valid product requirement. The owner authorized one bounded replacement transaction:
-
-1. One bootstrap pull request may combine evaluator, configuration, reusable workflow, caller, and receipt changes. Existing four required context names remain unchanged.
-   If live self-enforcement canaries reproduce bootstrap defects that the protected `pull_request_target` caller cannot validate, the still-open transaction permits at most two corrective bootstrap pull requests total. Each is limited to reproduced bootstrap defects and must satisfy the same exact-SHA verification, exact rollback, protection snapshot, mutation, restoration, and receipt controls. A dependency-complete corrective pull request may contain a publication commit followed by an activation commit pinned to that publication SHA. Produce one schema-valid audit receipt per merge cycle so each receipt binds its own candidate, pull request, merge, rollback, mutation pair, and protection snapshots; final proof lists every content hash. This authority expires with the bootstrap transaction and cannot authorize later maintenance.
-2. Before live mutation, the exact candidate SHA must pass complete local verification and a fresh read-only adversarial review with zero unresolved P0-P2 findings.
-3. Snapshot and digest current branch protection, rulesets, required contexts, and default-branch identity. Prepare and independently review an exact rollback commit whose tree restores the pre-bootstrap base.
-4. The only permitted live protection mutation is toggling `enforce_admins` for `main` from `true` to `false`, then back to `true`. Direct push, context deletion or rename, ruleset deletion, default-branch change, force push, permission change, and every unlisted mutation are forbidden.
-5. Admin-merge only the exact reviewed bootstrap SHA through its pull request using merge-commit strategy so candidate ancestry is preserved. Squash and rebase merge are forbidden.
-6. Immediately restore admin enforcement and verify live protection equality against the saved snapshot before running canaries.
-7. A repository-owned deterministic bootstrap command must emit a schema-valid receipt binding resource URLs, ETags when supplied, actor, GitHub server timestamps, mutation request/response digests, candidate SHA, PR head immediately before merge, merge SHA, rollback SHA, pre/post protection digests, and transaction expiry.
-8. On failed merge, restoration, receipt validation, deadline, or canary readiness, first compare the live `main` tree to the saved pre-bootstrap base tree. If equal, skip code rollback and restore/verify protection only. If different, the same exception authorizes one emergency rollback pull request and one rollback-only `enforce_admins` `true` to `false` to `true` cycle. Admin-merge only the exact reviewed rollback SHA, verify its resulting tree equals the saved base tree, and restore the saved protection snapshot before producing `BLOCK_TECHNICAL`. Produce one schema-valid receipt for each protection cycle and list both content hashes in final proof. Direct push remains forbidden.
-9. Rollback authority remains active until restoration succeeds. The exception expires only after restored protection equality, valid audit receipt, and canary readiness. All later work must pass the restored protected pull-request path.
+1. **Publication:** merge the complete evaluator, adapters, schemas, workflows, evidence contracts, and adoption tooling without changing the live execution caller, live pins, live config, required contexts, or protection. The previously active protected evaluator judges this pull request; artifacts emitted by candidate-changed workflow files are not authorization evidence. Use merge-commit strategy and record publication merge `M`; require `tree(M) == tree(C)` for the frozen qualified candidate `C`.
+2. **Exact-`M` qualification:** rerun complete qualification against the publication merge while the old evaluator remains active. A failure requires a replacement publication pull request, not weakened criteria.
+3. **Pin-only activation:** change only exact reusable workflow or action pins, `governance-ref` values, and literal pin fixtures. The previously active evaluator judges the transition using the exact-`M` qualification receipt and static transition policy; artifacts from the candidate-modified caller cannot authorize it. Verify every live pin equals `M` after merge.
+4. **Config-only migration:** change only `.github/governance/supportability.yml` and exact migration fixtures from known v1 to typed v2. Require the protected baseline, candidate, and delivery checks GREEN.
+5. Keep `main` frozen from publication-candidate freeze through activation and config migration. Preserve required-context names and protection throughout.
 
 ### Execution service levels
 
@@ -135,17 +159,17 @@ The installed gate requires Copilot to approve the change that removes Copilot. 
 - Focused verification command: at most 2 minutes.
 - Complete local verification: at most 5 minutes; all local verification for the slice: at most 10 minutes.
 - Codex evidence cutoff: 5 minutes from GitHub server time.
-- GitHub workflows set `timeout-minutes` at or below 10. Protected-pull-request and transaction deadlines use GitHub server time.
+- GitHub workflows set `timeout-minutes` at or below 10. Protected-pull-request deadlines use GitHub server time.
 - GitHub deterministic workflow: at most 10 minutes; protected pull request: at most 15 minutes.
-- Entire controlled bootstrap: at most 60 minutes with deterministic abort and rollback when exceeded.
-- Permit one repair loop. Then produce a qualified checkpoint or deterministic `BLOCK_TECHNICAL`; never repeat the same PR, polling, or verification loop.
+- Local development may use multiple finite, bounded repair attempts until the acceptance suite passes. This does not authorize an autonomous repair loop.
+- After a qualified head opens a pull request, permit at most one repair push for a live-only finding. A failed pull request ends that pull request, not the assignment; close or replace it from the last qualified checkpoint. Never repeat the same pull request, polling, or verification loop.
 
 ## Required implementation
 
 1. Preserve every Phase 1 acceptance criterion and registered benchmark case.
 2. Remove target-specific assumptions from the evaluator core while retaining named target packs.
 3. Replace arbitrary command configuration with typed, versioned capability adapters and bounded execution plans.
-4. Provide a safe, deterministic, replay-resistant process for updating protected evaluator and workflow surfaces without same-PR self-authorization.
+4. Provide separate untrusted execution and trusted verification planes with a safe, deterministic, replay-resistant process for updating protected evaluator and workflow surfaces without same-PR self-authorization.
 5. Validate both protected baseline evidence and candidate evidence contents before issuing a GREEN receipt.
 6. Replace placeholder or duplicated gates with real lint, format, type, complexity, architecture, test, build, and package-audit capabilities. Applicability is computed deterministically from registered source and runtime evidence; a required capability without a supported adapter or executable evidence is `BLOCK_TECHNICAL`, never omitted.
 7. Prove changed-file and highest-risk-file gate coverage without exclusions, threshold weakening, or scope narrowing.
@@ -153,7 +177,9 @@ The installed gate requires Copilot to approve the change that removes Copilot. 
 9. Make received-review reconciliation deterministic and automatic without bot-comment approval deadlocks or manual rescue. Record bounded unavailability without converting it to approval or blocking deterministic governance indefinitely.
 10. Keep required final contexts stable and fail closed on missing, skipped, malformed, or stale dependencies.
 11. Produce machine-readable baseline, candidate, architecture, review, benchmark, and delivery-receipt artifacts.
-12. Prove the framework through clean, defective, stale-review, and protected-context-spoof canaries.
+12. Replace manual protected-path filename lists with structural protection for all evaluator Python, schemas, workflows, actions, dependency locks, package metadata, architecture and supportability configuration, adapter command logic, evidence validation, and final decisions.
+13. Generate byte-stable, read-only adoption bundles and proofs without applying changes, opening pull requests, mutating protection, enumerating repositories, or modifying targets.
+14. Prove the framework through clean, defective, replay, stale-review, protected-context-spoof, hostile-artifact, and AI-unavailable canaries.
 
 ## Required controls
 
@@ -166,12 +192,15 @@ Positive, negative, and evasion controls must cover at least:
 - missing or unsupported adapter;
 - arbitrary command or shell syntax;
 - execution-plan mutation or artifact replay;
+- candidate writes or races the result path, reads secrets, reaches the network during offline execution, writes outside the disposable target, accesses the Docker socket, leaves child processes, exhausts PIDs, times out, or floods output;
+- archive traversal, links, duplicate entries, unexpected entries, decompression abuse, oversized content, malformed JSON, or digest and identity mismatch;
 - narrowed gate scope or weakened threshold;
 - duplicate command used as multiple semantic capabilities;
 - missing or malformed candidate artifact;
 - candidate-only GREEN with protected baseline RED;
 - wildcard, similar-looking, or stale-head AI reviewer evidence;
 - workflow pin substitution, floating ref, disabled job, changed condition, removed dependency, broadened permissions, or renamed required context;
+- candidate modification of the `pull_request` caller or upload wrapper cannot make that run's artifact authoritative, including during publication or pin activation;
 - protected-context spoof attempt from candidate-controlled workflow;
 - replay or mutation of a previously authorized protected-workflow update.
 
@@ -185,7 +214,7 @@ Before each implementation slice:
 4. A fresh read-only adversarial reviewer inspects the exact final diff and evidence.
 5. Every reproduced P0-P2 finding is repaired before push.
 6. The pull request requests Codex automatically, records its bounded evidence status, and receives all deterministic required checks.
-7. Merge occurs only through the protected pull-request path, except for the one exact-SHA controlled bootstrap defined above.
+7. Merge occurs only through the normal protected pull-request path. No protection weakening or administrative bypass is authorized.
 
 ## Explicitly out of scope
 
@@ -195,7 +224,10 @@ Before each implementation slice:
 - Autonomous repair loops or planner/builder factories.
 - Production application refactoring.
 - Global governance-skill modification.
-- Branch-protection, ruleset, or required-context mutation outside the one controlled Governance bootstrap.
+- Branch-protection, ruleset, required-context, default-branch, permission, or administrative-bypass mutation.
+- Node, PowerShell, SQL, or additional language adapters in Governance v1.
+- A custom hosted execution service, black-box assertion RPC framework, or `EXTERNAL_ORACLE` implementation in Governance v1.
+- Universal hostile-code truth proof for in-process dynamic assertions.
 - Claiming support for an adapter or ecosystem without executable positive, negative, and evasion controls.
 
 ## Completion
@@ -210,6 +242,10 @@ Completion is `FAIL` unless all are true:
 - No gate threshold or scope was weakened.
 - No evaluated target repository was modified.
 - Governance configuration validates and uses supported typed adapters only.
+- `python.unittest.v1` is documented and evidenced as `COOPERATIVE_DYNAMIC`; no completion document claims otherwise.
+- The trusted verifier never executes or imports candidate code or executes artifact contents.
+- Untrusted execution has no secrets or write token; authoritative artifacts are host-owned and exact-identity bound.
+- Replay, mutation, malformed archives, scope narrowing, threshold weakening, and required-check spoofing deterministically block.
 - Protected baseline and candidate artifacts are independently schema-valid and bound to the exact pull-request head.
 - Delivery receipt validates both evidence chains and remote GitHub state.
 - These existing four required contexts are GREEN on the exact current head and base:
@@ -223,6 +259,9 @@ Completion is `FAIL` unless all are true:
 - Protected-context-spoof canary cannot bypass the real protected result.
 - Codex request transport is attempted automatically and cannot skip deterministic evaluation; exact-head received evidence is classified; missing or unavailable evidence records `AI_REVIEW_UNAVAILABLE`; no PAT or Copilot evidence is required.
 - A deterministic adoption command generates repo config and a caller pinned to the exact Governance SHA, validates config hash and required-context mapping, documents protection setup, and proves disposable clean and defective adoption canaries without modifying any target repository.
+- The active evaluator and adoption pin equal publication merge `M`; live typed config is v2; arbitrary v1 command execution is unreachable; `main` contains no unactivated evaluator backlog.
+- Protection, rulesets, and required contexts equal the saved snapshot.
+- A schema-valid `governance_completion_receipt.v1` binds every release pull request, SHA, run, artifact, digest, command, exit, canary, live-protection proof, and remaining unknown.
 - Fresh adversarial review reports zero unresolved P0-P2 findings.
 - Final report lists exact commands, exit codes, artifacts, hashes, commit SHAs, live GitHub proof, and unresolved unknowns.
 

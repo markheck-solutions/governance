@@ -13,6 +13,7 @@ from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
 from governance_eval.architecture_gate import main as architecture_gate_main
 from governance_eval.lock import write_spaghetti_lock
+from governance_eval.package_audit import run_package_audit
 from governance_eval.paths import repo_root
 from governance_eval.supportability import main as supportability_main
 from governance_eval.target_eval import evaluate_target
@@ -58,6 +59,12 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument(
         "--artifacts-dir", type=Path, default=Path("artifacts/phase1")
     )
+
+    package_parser = subparsers.add_parser(
+        "package-audit", help="build and audit the Governance wheel"
+    )
+    package_parser.add_argument("--repo-root", type=Path, required=True)
+    package_parser.add_argument("--artifacts-dir", type=Path, required=True)
 
     target_parser = subparsers.add_parser(
         "evaluate-target", help="run a non-blocking target shadow evaluation"
@@ -134,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["phase1_decision"] == BENCHMARK_PASS else 1
     if args.command == "verify":
         return _verify(root, args.repeat, root / args.artifacts_dir, args.artifacts_dir)
+    if args.command == "package-audit":
+        result = run_package_audit(args.repo_root, args.artifacts_dir)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["status"] == "PASS" else 1
     if args.command == "evaluate-target":
         result = evaluate_target(
             root / args.pack if not args.pack.is_absolute() else args.pack,
