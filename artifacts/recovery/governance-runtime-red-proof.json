@@ -1,0 +1,95 @@
+{
+  "schema_version": "governance_runtime_red_proof.v1",
+  "collected_at": "2026-07-21T20:42:13Z",
+  "status": "RED",
+  "repositories": {
+    "governance": {
+      "id": 1280677092,
+      "full_name": "markheck-solutions/governance",
+      "main_sha": "1af18ded746ef97c6af49ae10e8e1bde1d660a94",
+      "source": "https://api.github.com/repos/markheck-solutions/governance"
+    },
+    "disposable": {
+      "id": 1308082085,
+      "full_name": "markheck-solutions/governance-runtime-disposable-20260721",
+      "source": "https://api.github.com/repos/markheck-solutions/governance-runtime-disposable-20260721"
+    }
+  },
+  "frozen_architecture_sha256": {
+    "artifacts/recovery/governance-self-maintenance-architecture.json": "1b6a3aa1b3836de4572c4a2fb4a52b361fea680d44657e4125c765b61e74f9bd",
+    "artifacts/recovery/governance-self-maintenance-architecture.md": "feaac1c3732d61cd677aafb3d610eb35bfb8e8ba64abefc8f882a0ddebfd2fd7"
+  },
+  "checkpoint": {
+    "publication_pr": 87,
+    "publication_head_sha": "c90151efbf2ba9f6d418aca17ac5d26d585fe1ce",
+    "publication_merge_sha": "198a794a085e81335e2139fbba5c96b582c0ca35",
+    "activation_pr": 88,
+    "activation_merge_sha": "1af18ded746ef97c6af49ae10e8e1bde1d660a94",
+    "evaluator_pin": "198a794a085e81335e2139fbba5c96b582c0ca35",
+    "exact_main_run_id": 29864094848,
+    "exact_main_check_run_id": 88747840960,
+    "replay_run_id": 29864181938,
+    "replay_check_run_id": 88748136890,
+    "replay_artifact_id": 8508513925,
+    "controller_transaction_sha": "236818c908ab27746d1f8199d111a9d50a4e6746",
+    "controller_receipt_id": "receipt-9f148f5d09ddf42d8f9be9aa",
+    "protection_digest": "86d65ef9503c13397a39088ffda74fb559537eab4d7df40689b3c5effddddf2a"
+  },
+  "c03": {
+    "result": "RED",
+    "shared_candidate_head_sha": "1fc32e21132d2c7a4987eff0d456dac85309c2ef",
+    "source_pr": {
+      "number": 4,
+      "base_sha": "3a601871593b13a16ae90d3ccbb2497d006458ec",
+      "head_sha": "1fc32e21132d2c7a4987eff0d456dac85309c2ef",
+      "state": "closed_unmerged",
+      "closed_at": "2026-07-21T20:23:45Z",
+      "successful_run_id": 29865142166,
+      "successful_check_runs": [
+        88751380687,
+        88751380753,
+        88752568492
+      ],
+      "source": "https://api.github.com/repos/markheck-solutions/governance-runtime-disposable-20260721/pulls/4"
+    },
+    "replay_pr": {
+      "number": 8,
+      "base_sha": "3a601871593b13a16ae90d3ccbb2497d006458ec",
+      "head_sha": "1fc32e21132d2c7a4987eff0d456dac85309c2ef",
+      "state": "closed_unmerged",
+      "closed_at": "2026-07-21T20:26:14Z",
+      "fresh_run_id": 29865574265,
+      "fresh_run_conclusion": "failure",
+      "source": "https://api.github.com/repos/markheck-solutions/governance-runtime-disposable-20260721/pulls/8"
+    },
+    "check_runs_source": "https://api.github.com/repos/markheck-solutions/governance-runtime-disposable-20260721/commits/1fc32e21132d2c7a4987eff0d456dac85309c2ef/check-runs?per_page=100",
+    "root_cause": "Required GitHub check contexts were attached to the reusable candidate head SHA. A later pull request with that same head could observe earlier successful contexts before PR-specific authority existed."
+  },
+  "other_frozen_canaries": {
+    "C-01": "PASS at checkpoint",
+    "C-02": "PASS at checkpoint",
+    "C-04": "PASS at checkpoint",
+    "C-05": "PASS at checkpoint",
+    "C-06": "PASS at checkpoint"
+  },
+  "current_live_state": {
+    "governance_required_contexts": [
+      "Phase 1 shadow run",
+      "Baseline Protected Supportability Gate / Supportability Gate",
+      "Candidate Supportability Gate / Supportability Gate",
+      "Baseline Protected Delivery Receipt / Delivery Receipt"
+    ],
+    "governance_required_check_app_id": 15368,
+    "governance_enforce_admins": true,
+    "disposable_enforce_admins": true,
+    "governance_rulesets": [],
+    "disposable_rulesets": [],
+    "merge_group_workflow_references": [],
+    "source": [
+      "https://api.github.com/repos/markheck-solutions/governance/branches/main/protection",
+      "https://api.github.com/repos/markheck-solutions/governance/rulesets",
+      "https://api.github.com/repos/markheck-solutions/governance-runtime-disposable-20260721/branches/main/protection",
+      "https://api.github.com/repos/markheck-solutions/governance-runtime-disposable-20260721/rulesets"
+    ]
+  }
+}

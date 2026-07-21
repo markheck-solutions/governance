@@ -98,6 +98,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("PHASE1_SHADOW", action)
         self.assertNotIn("GITHUB_PATH", action)
 
+    def test_shadow_workflow_runs_on_merge_group_sha(self) -> None:
+        workflow = (self.root / ".github/workflows/governance-shadow.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("  merge_group:\n    types:\n      - checks_requested", workflow)
+        self.assertIn("github.event.merge_group.head_sha", workflow)
+        self.assertIn("github.event.merge_group.base_sha", workflow)
+
     def test_reusable_gate_consumes_pinned_toolchain_interpreter(self) -> None:
         workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
             encoding="utf-8"
@@ -346,7 +355,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("artifact-id", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-id", workflows["governance-shadow.yml"])
         self.assertIn(
-            "github.event.pull_request.head.sha || github.sha",
+            "github.event.merge_group.head_sha || github.sha",
             workflows["governance-shadow.yml"],
         )
         self.assertIn("workflow_call:", workflows["supportability-gate.yml"])
