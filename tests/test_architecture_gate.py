@@ -10,6 +10,7 @@ from unittest import mock
 from pathlib import Path
 
 import governance_eval.architecture_gate as architecture_gate_module
+import governance_eval.supportability as supportability_module
 from governance_eval.architecture_policy import architecture_policy_weakening_errors
 from governance_eval.architecture_gate import (
     EXIT_BLOCKED,
@@ -76,6 +77,33 @@ class ArchitectureGateTests(unittest.TestCase):
         errors = architecture_policy_weakening_errors(base, head)
 
         self.assertTrue(any("max_file_lines increased" in error for error in errors))
+
+    def test_protected_pin_rotation_ignores_independent_action_pin(self) -> None:
+        trusted_sha = "2" * 40
+        action_sha = "3" * 40
+        source = (
+            self.root / ".github/workflows/supportability-enforcement.yml"
+        ).read_text(encoding="utf-8")
+        current_pin = "198a794a085e81335e2139fbba5c96b582c0ca35"
+        workflow = source.replace(current_pin, trusted_sha).replace(
+            "jobs:\n", f"jobs:\n  # action pin: actions/checkout@{action_sha}\n", 1
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            target = repo / ".github/workflows/supportability-enforcement.yml"
+            target.parent.mkdir(parents=True)
+            target.write_text(workflow, encoding="utf-8")
+            with mock.patch(
+                "governance_eval.supportability._git_show_text",
+                return_value=workflow,
+            ):
+                errors = supportability_module._protected_enforcement_change_errors(
+                    repo,
+                    trusted_sha,
+                    ".github/workflows/supportability-enforcement.yml",
+                )
+
+        self.assertEqual(errors, [])
 
     def test_module_registry_validation_preserves_grouped_error_order(self) -> None:
         modules = {

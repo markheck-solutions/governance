@@ -1119,11 +1119,14 @@ def _protected_enforcement_change_errors(
     if base_text is None or path.is_symlink() or not path.is_file():
         return ["protected enforcement workflow base or head is missing or non-regular"]
     head_text = path.read_text(encoding="utf-8")
-    sha_ref = re.compile(r"(?<=@)[0-9a-f]{40}")
+    workflow_pin = re.compile(
+        r"(?m)(^    uses: markheck-solutions/governance/\.github/workflows/"
+        r"(?:supportability-gate|delivery-receipt)\.yml@)([0-9a-f]{40})(\s*$)"
+    )
     governance_ref = re.compile(r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)")
 
     def normalized(text: str) -> str:
-        text = sha_ref.sub("<PIN>", text)
+        text = workflow_pin.sub(r"\1<PIN>\3", text)
         return governance_ref.sub(r"\1<PIN>\3", text)
 
     base_normalized = normalized(base_text)
@@ -1138,7 +1141,7 @@ def _protected_enforcement_change_errors(
             "protected enforcement workflow change is not an exact SHA pin rotation"
         ]
     errors = _protected_delivery_chain_errors(target_repo)
-    workflow_pins = sha_ref.findall(head_text)
+    workflow_pins = [match.group(2) for match in workflow_pin.finditer(head_text)]
     governance_pins = [match.group(2) for match in governance_ref.finditer(head_text)]
     replacement_pins = workflow_pins + governance_pins
     if (
