@@ -9,16 +9,149 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  merge_group:
+    branches:
+      - main
+    types:
+      - checks_requested
 
 permissions:
   actions: read
+  checks: read
   contents: read
   pull-requests: read
 
 jobs:
+  resolve-authority:
+    name: Resolve Merge Authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      base-ref: ${{ steps.resolve.outputs.base-ref }}
+      target-base-sha: ${{ steps.resolve.outputs.target-base-sha }}
+      target-head-sha: ${{ steps.resolve.outputs.target-head-sha }}
+      pull-request-number: ${{ steps.resolve.outputs.pull-request-number }}
+      pull-request-url: ${{ steps.resolve.outputs.pull-request-url }}
+      pull-request-head-sha: ${{ steps.resolve.outputs.pull-request-head-sha }}
+      pull-request-base-sha: ${{ steps.resolve.outputs.pull-request-base-sha }}
+      head-repository-id: ${{ steps.resolve.outputs.head-repository-id }}
+      review-window-started-at: ${{ steps.resolve.outputs.review-window-started-at }}
+      merge-group-ref: ${{ steps.resolve.outputs.merge-group-ref }}
+      merge-group-sha: ${{ steps.resolve.outputs.merge-group-sha }}
+      merge-group-event-id: ${{ steps.resolve.outputs.merge-group-event-id }}
+      event-created-at: ${{ steps.resolve.outputs.event-created-at }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout protected authority resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: markheck-solutions/governance
+          ref: ${{ github.workflow_sha }}
+          path: governance-authority
+          persist-credentials: false
+      - name: Resolve exact event authority
+        id: resolve
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          import sys
+          sys.path.insert(0, str(Path("governance-authority").resolve()))
+          from governance_eval.merge_group_authority import resolve_merge_group_authority
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+          event_name = os.environ["GITHUB_EVENT_NAME"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+
+          def api(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          if event_name == "merge_group":
+              group = event.get("merge_group") or {}
+              merge_sha = group.get("head_sha", "")
+              pulls = api(f"repos/{repository}/commits/{merge_sha}/pulls?per_page=100")
+              authority = resolve_merge_group_authority(event, pulls)
+              pull = pulls[0]
+              run = api(f"repos/{repository}/actions/runs/{os.environ['GITHUB_RUN_ID']}")
+              target_head = authority["merge_group"]["sha"]
+              merge_ref = authority["merge_group"]["ref"]
+              merge_group_sha = authority["merge_group"]["sha"]
+              event_id = f"merge-group:{os.environ['GITHUB_RUN_ID']}:{os.environ['GITHUB_RUN_ATTEMPT']}"
+              event_created_at = run.get("created_at", "")
+              review_started = event_created_at
+          elif event_name == "pull_request_target":
+              pull = event.get("pull_request") or {}
+              authority = {
+                  "repository": {
+                      "id": event.get("repository", {}).get("id"),
+                      "full_name": event.get("repository", {}).get("full_name"),
+                  },
+                  "pull_request": {
+                      "number": pull.get("number"),
+                      "url": pull.get("html_url"),
+                      "head_sha": pull.get("head", {}).get("sha"),
+                      "base_sha": pull.get("base", {}).get("sha"),
+                      "base_ref": pull.get("base", {}).get("ref"),
+                  },
+              }
+              target_head = authority["pull_request"]["head_sha"]
+              merge_ref = ""
+              merge_group_sha = ""
+              event_id = ""
+              event_created_at = pull.get("updated_at", "")
+              review_started = event_created_at
+          else:
+              raise SystemExit("unsupported authority event")
+
+          pr = authority["pull_request"]
+          outputs = {
+              "base-ref": pr["base_ref"],
+              "target-base-sha": pr["base_sha"],
+              "target-head-sha": target_head,
+              "pull-request-number": str(pr["number"]),
+              "pull-request-url": pr["url"],
+              "pull-request-head-sha": pr["head_sha"],
+              "pull-request-base-sha": pr["base_sha"],
+              "head-repository-id": str(pull.get("head", {}).get("repo", {}).get("id") or ""),
+              "review-window-started-at": review_started,
+              "merge-group-ref": merge_ref,
+              "merge-group-sha": merge_group_sha,
+              "merge-group-event-id": event_id,
+              "event-created-at": event_created_at,
+          }
+          if not outputs["head-repository-id"].isdigit():
+              raise SystemExit("pull-request head repository id is missing")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              for key, value in outputs.items():
+                  text = str(value)
+                  if "\n" in text or "\r" in text:
+                      raise SystemExit(f"invalid multiline authority output: {key}")
+                  output.write(f"{key}={text}\n")
+          PY
+
   request-codex-review:
     name: Request Codex Review
-    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    needs: resolve-authority
+    if: ${{ needs.resolve-authority.outputs.base-ref == 'main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -39,8 +172,8 @@ jobs:
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ needs.resolve-authority.outputs.pull-request-number }}
+      HEAD_SHA: ${{ needs.resolve-authority.outputs.target-head-sha }}
       REPOSITORY: ${{ github.repository }}
       RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
@@ -267,18 +400,27 @@ jobs:
 
   baseline-supportability:
     name: Baseline Protected Supportability Gate
-    needs: request-codex-review
-    if: ${{ github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@198a794a085e81335e2139fbba5c96b582c0ca35
+    needs:
+      - resolve-authority
+      - request-codex-review
+    if: ${{ needs.resolve-authority.outputs.base-ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@50a7c1c958fe06056206429d7e2f194e0288738c
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
-      target-base-sha: ${{ github.event.pull_request.base.sha }}
-      target-head-sha: ${{ github.event.pull_request.head.sha }}
-      target-pr-number: ${{ github.event.pull_request.number }}
-      target-pr-url: ${{ github.event.pull_request.html_url }}
-      review-window-started-at: ${{ github.event.pull_request.updated_at }}
-      governance-ref: 198a794a085e81335e2139fbba5c96b582c0ca35
+      target-base-sha: ${{ needs.resolve-authority.outputs.target-base-sha }}
+      target-head-sha: ${{ needs.resolve-authority.outputs.target-head-sha }}
+      target-pr-number: ${{ needs.resolve-authority.outputs.pull-request-number }}
+      target-pr-url: ${{ needs.resolve-authority.outputs.pull-request-url }}
+      target-head-repository-id: ${{ needs.resolve-authority.outputs.head-repository-id }}
+      target-pr-head-sha: ${{ needs.resolve-authority.outputs.pull-request-head-sha }}
+      target-pr-base-sha: ${{ needs.resolve-authority.outputs.pull-request-base-sha }}
+      merge-group-ref: ${{ needs.resolve-authority.outputs.merge-group-ref }}
+      merge-group-sha: ${{ needs.resolve-authority.outputs.merge-group-sha }}
+      merge-group-event-id: ${{ needs.resolve-authority.outputs.merge-group-event-id }}
+      event-created-at: ${{ needs.resolve-authority.outputs.event-created-at }}
+      review-window-started-at: ${{ needs.resolve-authority.outputs.review-window-started-at }}
+      governance-ref: 50a7c1c958fe06056206429d7e2f194e0288738c
       request-outcome: ${{ needs['request-codex-review'].outputs['request-outcome'] }}
       request-transport-command-json: ${{ needs['request-codex-review'].outputs['request-transport-command-json'] }}
       request-transport-started-at: ${{ needs['request-codex-review'].outputs['request-transport-started-at'] }}
@@ -294,18 +436,27 @@ jobs:
 
   candidate-supportability:
     name: Candidate Supportability Gate
-    needs: request-codex-review
-    if: ${{ github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@198a794a085e81335e2139fbba5c96b582c0ca35
+    needs:
+      - resolve-authority
+      - request-codex-review
+    if: ${{ needs.resolve-authority.outputs.base-ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@50a7c1c958fe06056206429d7e2f194e0288738c
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
-      target-base-sha: ${{ github.event.pull_request.base.sha }}
-      target-head-sha: ${{ github.event.pull_request.head.sha }}
-      target-pr-number: ${{ github.event.pull_request.number }}
-      target-pr-url: ${{ github.event.pull_request.html_url }}
-      review-window-started-at: ${{ github.event.pull_request.updated_at }}
-      governance-ref: 198a794a085e81335e2139fbba5c96b582c0ca35
+      target-base-sha: ${{ needs.resolve-authority.outputs.target-base-sha }}
+      target-head-sha: ${{ needs.resolve-authority.outputs.target-head-sha }}
+      target-pr-number: ${{ needs.resolve-authority.outputs.pull-request-number }}
+      target-pr-url: ${{ needs.resolve-authority.outputs.pull-request-url }}
+      target-head-repository-id: ${{ needs.resolve-authority.outputs.head-repository-id }}
+      target-pr-head-sha: ${{ needs.resolve-authority.outputs.pull-request-head-sha }}
+      target-pr-base-sha: ${{ needs.resolve-authority.outputs.pull-request-base-sha }}
+      merge-group-ref: ${{ needs.resolve-authority.outputs.merge-group-ref }}
+      merge-group-sha: ${{ needs.resolve-authority.outputs.merge-group-sha }}
+      merge-group-event-id: ${{ needs.resolve-authority.outputs.merge-group-event-id }}
+      event-created-at: ${{ needs.resolve-authority.outputs.event-created-at }}
+      review-window-started-at: ${{ needs.resolve-authority.outputs.review-window-started-at }}
+      governance-ref: 50a7c1c958fe06056206429d7e2f194e0288738c
       request-outcome: ${{ needs['request-codex-review'].outputs['request-outcome'] }}
       request-transport-command-json: ${{ needs['request-codex-review'].outputs['request-transport-command-json'] }}
       request-transport-started-at: ${{ needs['request-codex-review'].outputs['request-transport-started-at'] }}
@@ -322,18 +473,25 @@ jobs:
   delivery-receipt:
     name: Baseline Protected Delivery Receipt
     needs:
+      - resolve-authority
       - baseline-supportability
       - candidate-supportability
-    if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@198a794a085e81335e2139fbba5c96b582c0ca35
+    if: ${{ always() && needs.resolve-authority.outputs.base-ref == 'main' }}
+    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@50a7c1c958fe06056206429d7e2f194e0288738c
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
-      target-base-sha: ${{ github.event.pull_request.base.sha }}
-      target-head-sha: ${{ github.event.pull_request.head.sha }}
-      target-pr-number: ${{ github.event.pull_request.number }}
-      target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: 198a794a085e81335e2139fbba5c96b582c0ca35
+      target-base-sha: ${{ needs.resolve-authority.outputs.target-base-sha }}
+      target-head-sha: ${{ needs.resolve-authority.outputs.target-head-sha }}
+      target-pr-number: ${{ needs.resolve-authority.outputs.pull-request-number }}
+      target-pr-url: ${{ needs.resolve-authority.outputs.pull-request-url }}
+      target-pr-head-sha: ${{ needs.resolve-authority.outputs.pull-request-head-sha }}
+      target-pr-base-sha: ${{ needs.resolve-authority.outputs.pull-request-base-sha }}
+      merge-group-ref: ${{ needs.resolve-authority.outputs.merge-group-ref }}
+      merge-group-sha: ${{ needs.resolve-authority.outputs.merge-group-sha }}
+      merge-group-event-id: ${{ needs.resolve-authority.outputs.merge-group-event-id }}
+      event-created-at: ${{ needs.resolve-authority.outputs.event-created-at }}
+      governance-ref: 50a7c1c958fe06056206429d7e2f194e0288738c
       supportability-artifact-name: baseline-supportability-gate-evidence
       supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] || 'missing-baseline-supportability-artifact-id' }}
       supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] || 'missing-baseline-supportability-artifact-digest' }}
