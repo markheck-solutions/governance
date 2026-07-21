@@ -98,6 +98,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("PHASE1_SHADOW", action)
         self.assertNotIn("GITHUB_PATH", action)
 
+    def test_shadow_workflow_runs_on_merge_group_sha(self) -> None:
+        workflow = (self.root / ".github/workflows/governance-shadow.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("  merge_group:\n    types:\n      - checks_requested", workflow)
+        self.assertIn("github.event.merge_group.head_sha", workflow)
+        self.assertIn("github.event.merge_group.base_sha", workflow)
+
     def test_reusable_gate_consumes_pinned_toolchain_interpreter(self) -> None:
         workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
             encoding="utf-8"
@@ -128,7 +137,7 @@ class WorkflowTests(unittest.TestCase):
         )
         post_provision = workflow[provision:]
         pinned_invocation = '"${{ steps.toolchain.outputs.python-path }}"'
-        self.assertEqual(post_provision.count(pinned_invocation), 5)
+        self.assertEqual(post_provision.count(pinned_invocation), 6)
         architecture_block = post_provision.split(
             "      - name: Run approved architecture fitness gate", 1
         )[1].split("      - name: Reconcile Codex review evidence", 1)[0]
@@ -152,7 +161,7 @@ class WorkflowTests(unittest.TestCase):
             "evaluator-sha: ${{ inputs.governance-ref }}",
             "target-base-sha: ${{ inputs.target-base-sha }}",
             "target-head-sha: ${{ inputs.target-head-sha }}",
-            "head-repository-id: ${{ github.event.pull_request.head.repo.id }}",
+            "head-repository-id: ${{ inputs.target-head-repository-id || github.event.pull_request.head.repo.id }}",
             "event-name: ${{ github.event_name }}",
             "event-action: ${{ github.event.action }}",
             "run-attempt: ${{ github.run_attempt }}",
@@ -346,10 +355,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("artifact-id", workflows["governance-evaluate.yml"])
         self.assertIn("artifact-id", workflows["governance-shadow.yml"])
         self.assertIn(
-            "github.event.pull_request.head.sha || github.sha",
+            "github.event.merge_group.head_sha || github.sha",
             workflows["governance-shadow.yml"],
         )
         self.assertIn("workflow_call:", workflows["supportability-gate.yml"])
+        self.assertIn(
+            "TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha || inputs.target-head-sha }}",
+            workflows["supportability-gate.yml"],
+        )
+        self.assertIn(
+            "TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha || inputs.target-head-sha }}",
+            workflows["delivery-receipt.yml"],
+        )
         self.assertIn("Supportability Gate", workflows["supportability-gate.yml"])
         self.assertIn("supportability-config", workflows["supportability-gate.yml"])
         self.assertIn(
@@ -687,7 +704,8 @@ class ReusableWorkflowTests(unittest.TestCase):
             "f\"{os.environ['TARGET_REPOSITORY']}/.github/workflows/\"",
             '"supportability-enforcement.yml@refs/heads/main"',
             'os.environ["REQUEST_WORKFLOW_SHA"]',
-            'os.environ["REQUEST_EVENT_NAME"] != "pull_request_target"',
+            'os.environ["REQUEST_EVENT_NAME"] not in {',
+            '"pull_request_target", "merge_group"',
             '"opened", "reopened", "synchronize", "ready_for_review"',
             'os.environ["REQUEST_RUN_ATTEMPT"] != "1"',
             'os.environ["REQUEST_OUTCOME"]',
@@ -769,6 +787,12 @@ class ReusableWorkflowTests(unittest.TestCase):
             "TARGET_REPOSITORY": "markheck-solutions/governance",
             "TARGET_BASE_SHA": "a" * 40,
             "TARGET_HEAD_SHA": "b" * 40,
+            "TARGET_PR_HEAD_SHA": "b" * 40,
+            "TARGET_PR_BASE_SHA": "a" * 40,
+            "MERGE_GROUP_REF": "",
+            "MERGE_GROUP_SHA": "",
+            "MERGE_GROUP_EVENT_ID": "",
+            "EVENT_CREATED_AT": "2026-07-17T13:32:56Z",
             "GOVERNANCE_REF": "c" * 40,
             "TARGET_PR_NUMBER": "57",
             "ARTIFACT_NAME": "candidate-supportability-gate-evidence",
@@ -999,6 +1023,10 @@ class ReusableWorkflowTests(unittest.TestCase):
         self.assertNotIn("Copilot review request", workflows["supportability-gate.yml"])
         self.assertIn("workflow_call:", workflows["delivery-receipt.yml"])
         self.assertIn("Delivery Receipt", workflows["delivery-receipt.yml"])
+        self.assertIn(
+            '== "Baseline Protected Delivery Receipt / Delivery Receipt"',
+            workflows["delivery-receipt.yml"],
+        )
         self.assertIn(
             'gh api "repos/${TARGET_REPOSITORY}/actions/artifacts/${SUPPORTABILITY_ARTIFACT_ID}/zip"',
             workflows["delivery-receipt.yml"],

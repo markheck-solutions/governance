@@ -21,6 +21,7 @@ from governance_eval.architecture_policy import (
     architecture_policy_weakening_errors as _architecture_policy_weakening_errors,
 )
 from governance_eval.hashing import sha256_file
+from governance_eval import merge_group_authority
 from governance_eval.paths import repo_root
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
@@ -47,10 +48,6 @@ GIT_NETWORK_TIMEOUT_SECONDS = 60
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_ENFORCEMENT_RECEIPT_TRANSITION_SHA256 = (
-    "09f318698fa421b130f527b6f51376302ae7b6c7b2983641238ebd266136ddd9",
-    "e7dcc678d0391535a5befc148c63f3a41029c6a020645b855514ff408bd85e1d",
-)
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
 LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
@@ -260,6 +257,8 @@ def generate_delivery_receipt(
     artifact_id: str = "",
     artifact_digest: str = "",
     merged_sha: str = "",
+    pull_request_head_sha: str = "",
+    evaluation_head_sha: str = "",
     required_judges: dict[str, bool] | None = None,
     bootstrap_reason: str = "",
 ) -> dict[str, Any]:
@@ -268,7 +267,9 @@ def generate_delivery_receipt(
     )
     resolved_pr_url = pr_url or str(gate_result.get("pull_request_url") or "")
     base_sha = str(gate_result.get("base_sha") or "")
-    head_sha = str(gate_result.get("head_sha") or "")
+    gate_head_sha = str(gate_result.get("head_sha") or "")
+    head_sha = pull_request_head_sha or gate_head_sha
+    resolved_evaluation_head_sha = evaluation_head_sha or gate_head_sha
     architecture_result = architecture_result or {
         "owner_status": STATUS_RED,
         "gate_implementation": "FAIL",
@@ -292,6 +293,10 @@ def generate_delivery_receipt(
         errors.append("base_sha must be a 40-character lowercase Git SHA")
     if not SHA1_RE.fullmatch(head_sha):
         errors.append("head_sha must be a 40-character lowercase Git SHA")
+    if not SHA1_RE.fullmatch(resolved_evaluation_head_sha):
+        errors.append("evaluation_head_sha must be a 40-character lowercase Git SHA")
+    if resolved_evaluation_head_sha != gate_head_sha:
+        errors.append("evaluation_head_sha must match supportability gate head_sha")
     resolved_merged_sha = merged_sha
     if merged_sha and not SHA1_RE.fullmatch(merged_sha):
         errors.append("merged_sha must be empty or a 40-character lowercase Git SHA")
@@ -309,6 +314,7 @@ def generate_delivery_receipt(
         "pull_request_url": resolved_pr_url,
         "base_sha": _schema_safe_sha(base_sha),
         "head_sha": _schema_safe_sha(head_sha),
+        "evaluation_head_sha": _schema_safe_sha(resolved_evaluation_head_sha),
         "merged_sha": resolved_merged_sha,
         "workflow": {
             "run_id": run_id,
@@ -982,9 +988,11 @@ def _architecture_governance_change_errors(
         "governance_eval/codex_connector_collector.py",
         "governance_eval/codex_connector_evidence.py",
         "governance_eval/codex_review_gate.py",
+        "governance_eval/merge_group_authority.py",
         "schemas/v1/architecture_gate_result.schema.json",
         "schemas/v1/bootstrap_audit_receipt.schema.json",
         "schemas/v1/delivery_receipt.schema.json",
+        "schemas/v1/governance_merge_group_receipt.schema.json",
         "schemas/v1/supportability_config.schema.json",
         "schemas/v2/codex_connector_evidence_result.schema.json",
         "schemas/v3/codex_connector_evidence_result.schema.json",
@@ -1055,13 +1063,9 @@ def _protected_delivery_chain_errors(target_repo: Path) -> list[str]:
         for name, block in jobs.items()
         if not block
     ]
-    expected_conditions = {
-        "baseline-supportability": "${{ github.event.pull_request.base.ref == 'main' }}",
-        "candidate-supportability": "${{ github.event.pull_request.base.ref == 'main' }}",
-        "delivery-receipt": "${{ always() && github.event.pull_request.base.ref == 'main' }}",
-    }
+    expected_conditions = merge_group_authority.protected_delivery_conditions()
     for name, expected in expected_conditions.items():
-        if jobs[name] and _job_condition(jobs[name]) != expected:
+        if jobs[name] and _job_condition(jobs[name]) not in expected:
             errors.append(f"protected {name} workflow condition is missing or changed")
     pinned_workflows = {
         "baseline-supportability": "supportability-gate.yml",
@@ -1128,9 +1132,8 @@ def _protected_enforcement_change_errors(
         hashlib.sha256(base_normalized.encode()).hexdigest(),
         hashlib.sha256(head_normalized.encode()).hexdigest(),
     )
-    if base_normalized != head_normalized and (
-        digests != _ENFORCEMENT_RECEIPT_TRANSITION_SHA256
-    ):
+    allowed = merge_group_authority.enforcement_transition_allowed(digests)
+    if base_normalized != head_normalized and not allowed:
         return [
             "protected enforcement workflow change is not an exact SHA pin rotation"
         ]
@@ -1844,6 +1847,9 @@ def _receipt_sha_errors(receipt: dict[str, Any]) -> list[str]:
         if not SHA1_RE.fullmatch(str(receipt.get(key) or ""))
     ]
     merged_sha = str(receipt.get("merged_sha") or "")
+    evaluation_head_sha = receipt.get("evaluation_head_sha")
+    if evaluation_head_sha and not SHA1_RE.fullmatch(str(evaluation_head_sha)):
+        errors.append("evaluation_head_sha must be a 40-character lowercase Git SHA")
     if merged_sha and not SHA1_RE.fullmatch(merged_sha):
         errors.append("merged_sha must be empty or a 40-character lowercase Git SHA")
     return errors
@@ -1909,8 +1915,9 @@ def _live_run_errors(
     if not run:
         return ["GitHub workflow run proof is missing"]
     errors = []
-    if run.get("headSha") != receipt.get("head_sha"):
-        errors.append("workflow run headSha does not match receipt head_sha")
+    expected_head = receipt.get("evaluation_head_sha") or receipt.get("head_sha")
+    if run.get("headSha") != expected_head:
+        errors.append("workflow run headSha does not match receipt evaluation_head_sha")
     if allow_current_run_pending and _is_current_workflow_run(receipt):
         return errors
     if run.get("status") != "completed":
@@ -2157,6 +2164,8 @@ def _add_receipt_parser(
     parser.add_argument("--artifact-id", default="")
     parser.add_argument("--artifact-digest", default="")
     parser.add_argument("--merged-sha", default="")
+    parser.add_argument("--pull-request-head-sha", default="")
+    parser.add_argument("--evaluation-head-sha", default="")
     parser.add_argument("--protected-baseline-judge-ran", action="store_true")
     parser.add_argument("--candidate-judge-ran", action="store_true")
     parser.add_argument("--baseline-receipt-produced", action="store_true")
@@ -2244,6 +2253,8 @@ def _cli_receipt(args: argparse.Namespace) -> int:
         artifact_id=args.artifact_id,
         artifact_digest=args.artifact_digest,
         merged_sha=args.merged_sha,
+        pull_request_head_sha=args.pull_request_head_sha,
+        evaluation_head_sha=args.evaluation_head_sha,
         required_judges={
             "protected_baseline_judge_ran": args.protected_baseline_judge_ran,
             "candidate_judge_ran": args.candidate_judge_ran,

@@ -203,9 +203,7 @@ class SupportabilityConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _synthetic_repo(Path(tmp), self.root)
             config_path = repo / ".github/governance/supportability.yml"
-
             config = load_supportability_config(config_path)
-
             self.assertEqual(validate_supportability_config(config), [])
             self.assertEqual(config["receipt"]["retention_days"], 90)
 
@@ -214,9 +212,7 @@ class SupportabilityConfigTests(unittest.TestCase):
             repo = _synthetic_repo(Path(tmp), self.root)
             config_path = repo / ".github/governance/supportability.yml"
             raw = config_path.read_bytes()
-
             config = parse_supportability_config_bytes(raw, suffix=".yml")
-
             self.assertEqual(validate_supportability_config(config), [])
             with self.assertRaisesRegex(SupportabilityError, "must be UTF-8"):
                 parse_supportability_config_bytes(b"\xff", suffix=".yml")
@@ -260,7 +256,6 @@ class SupportabilityConfigTests(unittest.TestCase):
     def test_sql_supportability_error_names_accepted_shapes(self) -> None:
         config = _valid_config(self.root)
         config["required_gates"]["sql_supportability"] = 123
-
         errors = validate_supportability_config(config)
 
         self.assertTrue(
@@ -1084,7 +1079,6 @@ class SupportabilityGateTests(unittest.TestCase):
             self.assertEqual(activated.count(trusted_sha), 6)
             target = workflow_dir / "supportability-enforcement.yml"
             target.write_text(activated, encoding="utf-8")
-
             with mock.patch(
                 "governance_eval.supportability._git_show_text", return_value=base
             ):
@@ -1102,8 +1096,13 @@ class SupportabilityGateTests(unittest.TestCase):
                     trusted_sha,
                     ".github/workflows/supportability-enforcement.yml",
                 )
-
             self.assertEqual(accepted, [])
+            self.assertIn(
+                "${{ needs.resolve-authority.outputs.base-ref == 'main' }}",
+                supportability_module.merge_group_authority.protected_delivery_conditions()[
+                    "baseline-supportability"
+                ],
+            )
             self.assertEqual(
                 rejected,
                 [

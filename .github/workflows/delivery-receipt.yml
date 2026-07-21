@@ -21,6 +21,30 @@ on:
       target-pr-url:
         required: true
         type: string
+      target-pr-head-sha:
+        required: false
+        type: string
+        default: ""
+      target-pr-base-sha:
+        required: false
+        type: string
+        default: ""
+      merge-group-ref:
+        required: false
+        type: string
+        default: ""
+      merge-group-sha:
+        required: false
+        type: string
+        default: ""
+      merge-group-event-id:
+        required: false
+        type: string
+        default: ""
+      event-created-at:
+        required: false
+        type: string
+        default: ""
       governance-ref:
         required: true
         type: string
@@ -65,6 +89,7 @@ on:
 
 permissions:
   actions: read
+  checks: read
   contents: read
   pull-requests: read
 
@@ -84,6 +109,12 @@ jobs:
       TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
       TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
       TARGET_PR_URL: ${{ inputs.target-pr-url }}
+      TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha || inputs.target-head-sha }}
+      TARGET_PR_BASE_SHA: ${{ inputs.target-pr-base-sha || inputs.target-base-sha }}
+      MERGE_GROUP_REF: ${{ inputs.merge-group-ref }}
+      MERGE_GROUP_SHA: ${{ inputs.merge-group-sha }}
+      MERGE_GROUP_EVENT_ID: ${{ inputs.merge-group-event-id }}
+      EVENT_CREATED_AT: ${{ inputs.event-created-at }}
       GOVERNANCE_REF: ${{ inputs.governance-ref }}
       SUPPORTABILITY_ARTIFACT_NAME: ${{ inputs.supportability-artifact-name }}
       SUPPORTABILITY_ARTIFACT_ID: ${{ inputs.supportability-artifact-id }}
@@ -121,6 +152,12 @@ jobs:
           if not sha_re.fullmatch(os.environ["TARGET_HEAD_SHA"]):
               print("Invalid target head SHA", file=sys.stderr)
               raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["TARGET_PR_HEAD_SHA"]):
+              print("Invalid pull-request head SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["TARGET_PR_BASE_SHA"]):
+              print("Invalid pull-request base SHA", file=sys.stderr)
+              raise SystemExit(64)
           if not sha_re.fullmatch(os.environ["GOVERNANCE_REF"]):
               print("Governance ref must be an exact commit SHA", file=sys.stderr)
               raise SystemExit(64)
@@ -134,6 +171,34 @@ jobs:
               raise SystemExit(64)
           if not re.fullmatch(r"[1-9][0-9]{0,9}", os.environ["TARGET_PR_NUMBER"]):
               print("Invalid target PR number", file=sys.stderr)
+              raise SystemExit(64)
+          merge_group_sha = os.environ["MERGE_GROUP_SHA"]
+          if merge_group_sha:
+              if (
+                  merge_group_sha != os.environ["TARGET_HEAD_SHA"]
+                  or os.environ["TARGET_PR_BASE_SHA"] != os.environ["TARGET_BASE_SHA"]
+                  or not os.environ["MERGE_GROUP_REF"].startswith(
+                      "gh-readonly-queue/"
+                  )
+                  or not re.fullmatch(
+                      r"merge-group:[1-9][0-9]*:[1-9][0-9]*",
+                      os.environ["MERGE_GROUP_EVENT_ID"],
+                  )
+                  or not re.fullmatch(
+                      r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+                      r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+                      os.environ["EVENT_CREATED_AT"],
+                  )
+              ):
+                  print("Invalid merge-group receipt inputs", file=sys.stderr)
+                  raise SystemExit(64)
+          elif (
+              os.environ["TARGET_PR_HEAD_SHA"] != os.environ["TARGET_HEAD_SHA"]
+              or os.environ["TARGET_PR_BASE_SHA"] != os.environ["TARGET_BASE_SHA"]
+              or os.environ["MERGE_GROUP_REF"]
+              or os.environ["MERGE_GROUP_EVENT_ID"]
+          ):
+              print("Invalid pull-request receipt inputs", file=sys.stderr)
               raise SystemExit(64)
           for key in ("SUPPORTABILITY_ARTIFACT_NAME", "CANDIDATE_SUPPORTABILITY_ARTIFACT_NAME", "RECEIPT_ARTIFACT_NAME"):
               if not artifact_re.fullmatch(os.environ[key]):
@@ -338,7 +403,146 @@ jobs:
             --artifact-name "$SUPPORTABILITY_ARTIFACT_NAME" \
             --artifact-id "${{ steps.supportability_artifact.outputs.id }}" \
             --artifact-digest "${{ steps.judge_artifacts.outputs.baseline_actual_digest }}" \
-            "${proof_flags[@]}"
+            --pull-request-head-sha "$TARGET_PR_HEAD_SHA" \
+             --evaluation-head-sha "$TARGET_HEAD_SHA" \
+             "${proof_flags[@]}"
+      - name: Generate authoritative merge-group receipt
+        id: merge_group_receipt
+        if: ${{ inputs.merge-group-sha != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          BASELINE_ARTIFACT_DIGEST: ${{ steps.judge_artifacts.outputs.baseline_actual_digest }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ steps.judge_artifacts.outputs.candidate_actual_digest }}
+        run: |
+          cd governance
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          from governance_eval.hashing import sha256_file
+          from governance_eval.merge_group_authority import (
+              create_merge_group_receipt,
+              validate_merge_group_artifact,
+              verify_merge_group_receipt,
+          )
+
+          def unique_claim(root):
+              paths = sorted(Path(root).rglob("merge-group-authority.json"))
+              if len(paths) != 1:
+                  raise RuntimeError(
+                      f"expected one merge-group authority claim in {root}; found {len(paths)}"
+                  )
+              return json.loads(paths[0].read_text(encoding="utf-8"))
+
+          baseline_claim = unique_claim("../evidence/baseline")
+          candidate_claim = unique_claim("../evidence/candidate")
+          if baseline_claim != candidate_claim:
+              raise RuntimeError("baseline and candidate merge-group claims differ")
+
+          authority = {
+              "repository": {
+                  "id": int(os.environ["GITHUB_REPOSITORY_ID"]),
+                  "full_name": os.environ["TARGET_REPOSITORY"],
+              },
+              "merge_group": {
+                  "ref": os.environ["MERGE_GROUP_REF"],
+                  "sha": os.environ["MERGE_GROUP_SHA"],
+                  "base_ref": "main",
+                  "base_sha": os.environ["TARGET_BASE_SHA"],
+              },
+              "pull_request": {
+                  "number": int(os.environ["TARGET_PR_NUMBER"]),
+                  "url": os.environ["TARGET_PR_URL"],
+                  "head_sha": os.environ["TARGET_PR_HEAD_SHA"],
+                  "base_sha": os.environ["TARGET_PR_BASE_SHA"],
+                  "base_ref": "main",
+              },
+          }
+          validate_merge_group_artifact(authority, baseline_claim)
+          expected_claim = {
+              "event_id": os.environ["MERGE_GROUP_EVENT_ID"],
+              "event_created_at": os.environ["EVENT_CREATED_AT"],
+              "evaluator_sha": os.environ["GOVERNANCE_REF"],
+              "workflow_run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "workflow_run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }
+          for key, value in expected_claim.items():
+              if baseline_claim.get(key) != value:
+                  raise RuntimeError(f"merge-group claim {key} differs from current run")
+
+          request = urllib.request.Request(
+              "https://api.github.com/repos/"
+              f"{os.environ['TARGET_REPOSITORY']}/commits/"
+              f"{os.environ['TARGET_HEAD_SHA']}/check-runs?per_page=100",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              checks = json.load(response).get("check_runs", [])
+          run_marker = f"/actions/runs/{os.environ['GITHUB_RUN_ID']}/job/"
+          matches = [
+              check
+              for check in checks
+              if check.get("name") == "Baseline Protected Delivery Receipt / Delivery Receipt"
+              and run_marker in str(check.get("details_url") or "")
+          ]
+          if len(matches) != 1:
+              raise RuntimeError(
+                  "expected one current protected Delivery Receipt check; "
+                  f"found {len(matches)}"
+              )
+          check = matches[0]
+          app = check.get("app") if isinstance(check.get("app"), dict) else {}
+          if int(app.get("id") or 0) < 1:
+              raise RuntimeError("Delivery Receipt check has no authoritative GitHub App")
+
+          artifact_chain = json.dumps(
+              {
+                  "baseline": os.environ["BASELINE_ARTIFACT_DIGEST"],
+                  "candidate": os.environ["CANDIDATE_ARTIFACT_DIGEST"],
+              },
+              sort_keys=True,
+              separators=(",", ":"),
+          ).encode("utf-8")
+          evidence = {
+              "event_id": os.environ["MERGE_GROUP_EVENT_ID"],
+              "event_created_at": os.environ["EVENT_CREATED_AT"],
+              "verification_time": datetime.now(timezone.utc).isoformat().replace(
+                  "+00:00", "Z"
+              ),
+              "evaluator_sha": os.environ["GOVERNANCE_REF"],
+              "caller_workflow_path": baseline_claim["caller_workflow"]["path"],
+              "caller_workflow_sha256": baseline_claim["caller_workflow"]["sha256"],
+              "reusable_workflow_path": ".github/workflows/delivery-receipt.yml",
+              "reusable_workflow_sha256": sha256_file(
+                  Path(".github/workflows/delivery-receipt.yml")
+              ),
+              "workflow_run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "workflow_run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "check_run_id": int(check["id"]),
+              "github_app_id": int(app["id"]),
+              "config_sha256": baseline_claim["config_sha256"],
+              "standard_sha256": baseline_claim["standard_sha256"],
+              "transaction_id": baseline_claim["transaction_id"],
+              "artifact_digest": hashlib.sha256(artifact_chain).hexdigest(),
+          }
+          receipt = create_merge_group_receipt(authority, evidence)
+          verify_merge_group_receipt(receipt, authority, evidence)
+          destination = Path(
+              "../artifacts/supportability/governance-merge-group-receipt.json"
+          )
+          destination.write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
       - name: Verify delivery receipt against GitHub
         id: verify
         continue-on-error: true
@@ -354,6 +558,8 @@ jobs:
         id: summary
         if: always()
         shell: bash
+        env:
+          AUTHORITY_OUTCOME: ${{ steps.merge_group_receipt.outcome }}
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
@@ -364,13 +570,25 @@ jobs:
           receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.exists() else {"owner_status": "RED", "errors": ["delivery receipt missing"]}
           verify_text = verify_path.read_text(encoding="utf-8").strip() if verify_path.exists() else ""
           verification = json.loads(verify_text) if verify_text else {"owner_status": "RED", "errors": ["receipt verification missing"]}
-          owner_status = "GREEN" if receipt.get("owner_status") == "GREEN" and verification.get("owner_status") == "GREEN" else "RED"
+          authority_path = Path("artifacts/supportability/governance-merge-group-receipt.json")
+          authority_required = bool(__import__("os").environ["MERGE_GROUP_SHA"])
+          authority_status = (
+              "GREEN"
+              if not authority_required
+              or (
+                  __import__("os").environ["AUTHORITY_OUTCOME"] == "success"
+                  and authority_path.exists()
+              )
+              else "RED"
+          )
+          owner_status = "GREEN" if receipt.get("owner_status") == "GREEN" and verification.get("owner_status") == "GREEN" and authority_status == "GREEN" else "RED"
           def emit(name, value):
               text = str(value).replace("\r", " ").replace("\n", " ")
               print(f"{name}={text}")
           emit("owner_status", owner_status)
           emit("receipt_status", receipt.get("owner_status", "RED"))
           emit("verification_status", verification.get("owner_status", "RED"))
+          emit("authority_status", authority_status)
           emit("receipt_errors", "; ".join((receipt.get("errors") or [])[:5]))
           emit("verification_errors", "; ".join((verification.get("errors") or [])[:5]))
           PY
@@ -394,7 +612,8 @@ jobs:
             echo "| Commit SHA | \`${TARGET_HEAD_SHA}\` |"
             echo "| Owner status | \`${{ steps.summary.outputs.owner_status }}\` |"
             echo "| Receipt generation | \`${{ steps.summary.outputs.receipt_status }}\` |"
-            echo "| Remote audit | \`${{ steps.summary.outputs.verification_status }}\` |"
+             echo "| Remote audit | \`${{ steps.summary.outputs.verification_status }}\` |"
+            echo "| Merge-group authority | \`${{ steps.summary.outputs.authority_status }}\` |"
             echo "| Receipt errors | \`${{ steps.summary.outputs.receipt_errors }}\` |"
             echo "| Remote audit errors | \`${{ steps.summary.outputs.verification_errors }}\` |"
             echo "| Source evidence artifact | \`${SUPPORTABILITY_ARTIFACT_NAME}\` |"

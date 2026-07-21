@@ -21,6 +21,34 @@ on:
       target-pr-url:
         required: true
         type: string
+      target-head-repository-id:
+        required: false
+        type: string
+        default: ""
+      target-pr-head-sha:
+        required: false
+        type: string
+        default: ""
+      target-pr-base-sha:
+        required: false
+        type: string
+        default: ""
+      merge-group-ref:
+        required: false
+        type: string
+        default: ""
+      merge-group-sha:
+        required: false
+        type: string
+        default: ""
+      merge-group-event-id:
+        required: false
+        type: string
+        default: ""
+      event-created-at:
+        required: false
+        type: string
+        default: ""
       review-window-started-at:
         required: true
         type: string
@@ -104,6 +132,13 @@ jobs:
       TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
       TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
       TARGET_PR_URL: ${{ inputs.target-pr-url }}
+      TARGET_HEAD_REPOSITORY_ID: ${{ inputs.target-head-repository-id || github.event.pull_request.head.repo.id }}
+      TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha || inputs.target-head-sha }}
+      TARGET_PR_BASE_SHA: ${{ inputs.target-pr-base-sha || inputs.target-base-sha }}
+      MERGE_GROUP_REF: ${{ inputs.merge-group-ref }}
+      MERGE_GROUP_SHA: ${{ inputs.merge-group-sha }}
+      MERGE_GROUP_EVENT_ID: ${{ inputs.merge-group-event-id }}
+      EVENT_CREATED_AT: ${{ inputs.event-created-at || inputs.review-window-started-at }}
       REVIEW_WINDOW_STARTED_AT: ${{ inputs.review-window-started-at }}
       GOVERNANCE_REF: ${{ inputs.governance-ref }}
       REQUEST_WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -185,6 +220,12 @@ jobs:
           if not sha_re.fullmatch(os.environ["TARGET_HEAD_SHA"]):
               print("Invalid target head SHA", file=sys.stderr)
               raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["TARGET_PR_HEAD_SHA"]):
+              print("Invalid pull-request head SHA", file=sys.stderr)
+              raise SystemExit(64)
+          if not sha_re.fullmatch(os.environ["TARGET_PR_BASE_SHA"]):
+              print("Invalid pull-request base SHA", file=sys.stderr)
+              raise SystemExit(64)
           if not ref_re.fullmatch(os.environ["GOVERNANCE_REF"]):
               print("Governance ref must be an exact commit SHA", file=sys.stderr)
               raise SystemExit(64)
@@ -208,14 +249,43 @@ jobs:
           if not sha_re.fullmatch(os.environ["REQUEST_WORKFLOW_SHA"]):
               print("Invalid request workflow SHA", file=sys.stderr)
               raise SystemExit(64)
-          if os.environ["REQUEST_EVENT_NAME"] != "pull_request_target":
+          if os.environ["REQUEST_EVENT_NAME"] not in {
+              "pull_request_target", "merge_group"
+          }:
               print("Invalid request event", file=sys.stderr)
               raise SystemExit(64)
           allowed_actions = {
-              "opened", "reopened", "synchronize", "ready_for_review"
+              "opened", "reopened", "synchronize", "ready_for_review",
+              "checks_requested",
           }
           if os.environ["REQUEST_EVENT_ACTION"] not in allowed_actions:
               print("Invalid request event action", file=sys.stderr)
+              raise SystemExit(64)
+          if os.environ["REQUEST_EVENT_NAME"] == "merge_group":
+              if (
+                  os.environ["REQUEST_EVENT_ACTION"] != "checks_requested"
+                  or os.environ["MERGE_GROUP_SHA"] != os.environ["TARGET_HEAD_SHA"]
+                  or os.environ["TARGET_PR_BASE_SHA"] != os.environ["TARGET_BASE_SHA"]
+                  or not sha_re.fullmatch(os.environ["MERGE_GROUP_SHA"])
+                  or not os.environ["MERGE_GROUP_REF"].startswith(
+                      "gh-readonly-queue/"
+                  )
+                  or not re.fullmatch(
+                      r"merge-group:[1-9][0-9]*:[1-9][0-9]*",
+                      os.environ["MERGE_GROUP_EVENT_ID"],
+                  )
+                  or not valid_timestamp(os.environ["EVENT_CREATED_AT"])
+              ):
+                  print("Invalid merge-group authority inputs", file=sys.stderr)
+                  raise SystemExit(64)
+          elif (
+              os.environ["TARGET_PR_HEAD_SHA"] != os.environ["TARGET_HEAD_SHA"]
+              or os.environ["TARGET_PR_BASE_SHA"] != os.environ["TARGET_BASE_SHA"]
+              or os.environ["MERGE_GROUP_SHA"]
+              or os.environ["MERGE_GROUP_REF"]
+              or os.environ["MERGE_GROUP_EVENT_ID"]
+          ):
+              print("Invalid pull-request authority inputs", file=sys.stderr)
               raise SystemExit(64)
           if not positive_int_re.fullmatch(os.environ["REQUEST_RUN_ID"]):
               print("Invalid request run ID", file=sys.stderr)
@@ -325,7 +395,7 @@ jobs:
           python-path: ${{ steps.setup-python.outputs.python-path }}
           repository: ${{ github.repository }}
           repository-id: ${{ github.repository_id }}
-          head-repository-id: ${{ github.event.pull_request.head.repo.id }}
+          head-repository-id: ${{ inputs.target-head-repository-id || github.event.pull_request.head.repo.id }}
           event-name: ${{ github.event_name }}
           event-action: ${{ github.event.action }}
           target-base-sha: ${{ inputs.target-base-sha }}
@@ -537,6 +607,82 @@ jobs:
           emit("gate_errors", "; ".join((gate.get("errors") or [])[:5]))
           emit("architecture_errors", "; ".join((architecture.get("errors") or [])[:5]))
           emit("ai_review_observations", "; ".join((ai_review.get("observations") or [])[:5]))
+          PY
+      - name: Write merge-group authority claim
+        if: ${{ inputs.merge-group-sha != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ""
+        run: |
+          cd governance
+          "${{ steps.toolchain.outputs.python-path }}" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from governance_eval.hashing import sha256_file
+          from governance_eval.merge_group_authority import validate_merge_group_artifact
+          from governance_eval.supportability import load_supportability_config
+
+          target = Path("../target").resolve()
+          config_path = (target / os.environ["CONFIG_PATH"]).resolve(strict=True)
+          config_path.relative_to(target)
+          config = load_supportability_config(config_path)
+          standard_path = (target / config["standard"]["source"]).resolve(strict=True)
+          standard_path.relative_to(target)
+          authority = {
+              "repository": {
+                  "id": int(os.environ["REQUEST_REPOSITORY_ID"]),
+                  "full_name": os.environ["TARGET_REPOSITORY"],
+              },
+              "merge_group": {
+                  "ref": os.environ["MERGE_GROUP_REF"],
+                  "sha": os.environ["MERGE_GROUP_SHA"],
+                  "base_ref": "main",
+                  "base_sha": os.environ["TARGET_BASE_SHA"],
+              },
+              "pull_request": {
+                  "number": int(os.environ["TARGET_PR_NUMBER"]),
+                  "url": os.environ["TARGET_PR_URL"],
+                  "head_sha": os.environ["TARGET_PR_HEAD_SHA"],
+                  "base_sha": os.environ["TARGET_PR_BASE_SHA"],
+                  "base_ref": "main",
+              },
+          }
+          validate_merge_group_artifact(authority, authority)
+          claim = {
+              **authority,
+              "event_id": os.environ["MERGE_GROUP_EVENT_ID"],
+              "event_created_at": os.environ["EVENT_CREATED_AT"],
+              "evaluator_sha": os.environ["GOVERNANCE_REF"],
+              "caller_workflow": {
+                  "path": ".github/workflows/supportability-enforcement.yml",
+                  "sha256": sha256_file(
+                      target / ".github/workflows/supportability-enforcement.yml"
+                  ),
+              },
+              "reusable_workflow": {
+                  "path": ".github/workflows/supportability-gate.yml",
+                  "sha256": sha256_file(
+                      Path(".github/workflows/supportability-gate.yml")
+                  ),
+              },
+              "workflow_run_id": int(os.environ["REQUEST_RUN_ID"]),
+              "workflow_run_attempt": int(os.environ["REQUEST_RUN_ATTEMPT"]),
+              "config_sha256": sha256_file(config_path),
+              "standard_sha256": sha256_file(standard_path),
+              "transaction_id": (
+                  f"merge-group:{os.environ['REQUEST_RUN_ID']}:"
+                  f"{os.environ['REQUEST_RUN_ATTEMPT']}:"
+                  f"{os.environ['TARGET_PR_NUMBER']}"
+              ),
+          }
+          destination = Path(
+              "../target/artifacts/supportability/merge-group-authority.json"
+          )
+          destination.write_text(
+              json.dumps(claim, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
           PY
       - name: Upload supportability evidence
         id: upload

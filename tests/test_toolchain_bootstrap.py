@@ -230,7 +230,9 @@ class _ToolchainBootstrapTestCase(unittest.TestCase):
 
 
 class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
-    def test_phase1_shadow_context_accepts_pr_push_and_dispatch(self) -> None:
+    def test_phase1_shadow_context_accepts_pr_push_dispatch_and_merge_group(
+        self,
+    ) -> None:
         contexts = (
             self._shadow_context(),
             self._shadow_context(
@@ -245,6 +247,14 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
                 event_name="workflow_dispatch",
                 pull_request_number=None,
                 base_sha="a" * 40,
+                workflow_ref=(
+                    "markheck-solutions/governance/.github/workflows/"
+                    "governance-shadow.yml@refs/heads/main"
+                ),
+            ),
+            self._shadow_context(
+                event_name="merge_group",
+                pull_request_number=None,
                 workflow_ref=(
                     "markheck-solutions/governance/.github/workflows/"
                     "governance-shadow.yml@refs/heads/main"
@@ -312,6 +322,13 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
         self.assertNotIn("base_sha", validated)
         self.assertEqual(validated["target_base_sha"], "b" * 40)
         self.assertEqual(validated["target_head_sha"], "c" * 40)
+
+        merge_group = self._evaluation_context(
+            event_name="merge_group", event_action="checks_requested"
+        )
+        self.assertEqual(
+            BOOTSTRAP._validated_evaluation_context(merge_group), merge_group
+        )
 
     def test_supportability_evaluation_context_fails_closed(self) -> None:
         cases = {

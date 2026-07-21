@@ -67,6 +67,7 @@ class SelfUpdatePolicyTests(unittest.TestCase):
             "governance_eval/supportability.py",
             "governance_eval/trusted_command.py",
             "governance_eval/architecture_policy.py",
+            "governance_eval/merge_group_authority.py",
         ):
             with self.subTest(checker=checker), tempfile.TemporaryDirectory() as tmp:
                 errors = supportability._architecture_governance_change_errors(
@@ -214,7 +215,9 @@ class SelfUpdatePolicyTests(unittest.TestCase):
             hashlib.sha256(
                 _normalized_enforcement_workflow(activated).encode()
             ).hexdigest(),
-            supportability._ENFORCEMENT_RECEIPT_TRANSITION_SHA256[1],
+            supportability.merge_group_authority._ENFORCEMENT_RECEIPT_TRANSITION_SHA256[
+                1
+            ],
         )
 
     def test_receipt_activation_records_exact_transport_execution(self) -> None:
