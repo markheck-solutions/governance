@@ -3,24 +3,50 @@ from __future__ import annotations
 import base64
 import configparser
 import csv
+import hashlib
+import importlib.metadata
 import io
 import json
+import os
 import shutil
 import stat
-import subprocess
-import sys
+import tempfile
 import tomllib
+import uuid
 import zipfile
+import zlib
 from datetime import datetime, timezone
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from governance_eval.hashing import sha256_bytes, sha256_file
+from governance_eval.docker_runtime import (
+    DockerRuntimeError,
+    _run_bounded,
+    _trusted_docker,
+    _verify_image,
+)
+from governance_eval.execution_plan_v2 import _IMAGE
+from governance_eval.hashing import sha256_file
 
 SCHEMA_VERSION = "governance_package_audit.v1"
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 5_000
+MAX_MEMBER_UNCOMPRESSED_BYTES = 10 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 200
+MAX_METADATA_BYTES = 1024 * 1024
+MAX_BUILD_OUTPUT_BYTES = 1024 * 1024
+BUILD_TIMEOUT_SECONDS = 120
+_COPY_EXCLUDED = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "build",
+    "dist",
+}
 
 
 class _EntryPointParser(configparser.ConfigParser):
@@ -28,58 +54,30 @@ class _EntryPointParser(configparser.ConfigParser):
         return optionstr
 
 
-def run_package_audit(repo_root: Path, artifacts_dir: Path) -> dict[str, Any]:
+def run_package_audit(
+    repo_root: Path,
+    artifacts_dir: Path,
+    *,
+    build_timeout_seconds: int = BUILD_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     root = repo_root.resolve()
     output = artifacts_dir.resolve()
     errors = _preflight_errors(root, output)
     output.mkdir(parents=True, exist_ok=True)
     wheel_dir = output / "wheel"
     wheel_dir.mkdir(exist_ok=True)
-    source_dir = output / "source"
-    if not errors:
-        source_dir.mkdir()
-        shutil.copy2(root / "pyproject.toml", source_dir / "pyproject.toml")
-        shutil.copytree(
-            root / "governance_eval",
-            source_dir / "governance_eval",
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-    started_at = _utc_now()
-    command = [
-        sys.executable,
-        "-m",
-        "pip",
-        "wheel",
-        "--no-deps",
-        "--no-index",
-        "--no-build-isolation",
-        str(source_dir),
-        "-w",
-        str(wheel_dir),
-    ]
-    timed_out = False
-    exit_code: int | None = None
-    stdout = b""
-    stderr = b""
+    build = _empty_build(build_timeout_seconds)
     if not errors:
         try:
-            completed = subprocess.run(
-                command,
-                cwd=root,
-                capture_output=True,
-                timeout=120,
-                check=False,
-            )
-            exit_code = completed.returncode
-            stdout = completed.stdout
-            stderr = completed.stderr
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            exit_code = 124
-            stdout = _as_bytes(exc.stdout)
-            stderr = _as_bytes(exc.stderr)
-    if exit_code not in (None, 0):
-        errors.append(f"wheel build exited {exit_code}")
+            build = _run_contained_build(root, wheel_dir, build_timeout_seconds)
+        except (DockerRuntimeError, OSError, ValueError) as exc:
+            errors.append(f"contained wheel build failed: {exc}")
+    if build["termination"] == "TIMED_OUT":
+        errors.append("contained wheel build timed out")
+    elif build["termination"] == "OUTPUT_LIMIT":
+        errors.append("contained wheel build exceeded output limit")
+    elif build["exit_code"] not in (None, 0):
+        errors.append(f"contained wheel build exited {build['exit_code']}")
     wheels = sorted(wheel_dir.glob("*.whl"))
     if len(wheels) != 1:
         errors.append(f"expected exactly one wheel, found {len(wheels)}")
@@ -91,16 +89,7 @@ def run_package_audit(repo_root: Path, artifacts_dir: Path) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "status": "PASS" if not errors else "FAIL",
         "repo_root": str(root),
-        "build": {
-            "command": command,
-            "started_at": started_at,
-            "completed_at": _utc_now(),
-            "timeout_seconds": 120,
-            "timed_out": timed_out,
-            "exit_code": exit_code,
-            "stdout_sha256": sha256_bytes(stdout),
-            "stderr_sha256": sha256_bytes(stderr),
-        },
+        "build": build,
         "wheel": wheel_evidence,
         "errors": errors,
     }
@@ -117,63 +106,267 @@ def run_package_audit(repo_root: Path, artifacts_dir: Path) -> dict[str, Any]:
     return result
 
 
+def _run_contained_build(
+    root: Path, wheel_dir: Path, timeout_seconds: int
+) -> dict[str, Any]:
+    docker, docker_host, docker_sha256 = _docker_identity()
+    _verify_image(docker, docker_host, _IMAGE)
+    with tempfile.TemporaryDirectory(prefix="governance-package-build-") as directory:
+        runtime_root = Path(directory).resolve()
+        workspace = runtime_root / "workspace"
+        toolchain = runtime_root / "toolchain"
+        _stage_source(root, workspace)
+        toolchain_sha256, setuptools_version = _stage_build_toolchain(toolchain)
+        container_name = f"governance-package-{uuid.uuid4().hex[:16]}"
+        command = _contained_build_argv(
+            docker,
+            docker_host,
+            workspace,
+            toolchain,
+            container_name,
+            timeout_seconds,
+        )
+        outcome = _run_bounded(
+            command,
+            docker=docker,
+            docker_host=docker_host,
+            container_name=container_name,
+            timeout_seconds=timeout_seconds,
+            output_limit=MAX_BUILD_OUTPUT_BYTES,
+        )
+        if outcome["errors"]:
+            raise DockerRuntimeError("; ".join(outcome["errors"]))
+        produced = sorted((workspace / "dist").glob("*.whl"))
+        if outcome["termination"] == "EXITED" and outcome["exit_code"] == 0:
+            if len(produced) != 1:
+                raise DockerRuntimeError(
+                    f"contained build produced {len(produced)} wheels"
+                )
+            if produced[0].stat().st_size > MAX_ARCHIVE_BYTES:
+                raise DockerRuntimeError("contained wheel exceeds archive size limit")
+            shutil.copyfile(produced[0], wheel_dir / produced[0].name)
+        return {
+            "command": command,
+            "image": _IMAGE,
+            "docker_path": str(docker),
+            "docker_host": docker_host,
+            "docker_sha256": docker_sha256,
+            "toolchain_sha256": toolchain_sha256,
+            "setuptools_version": setuptools_version,
+            "started_at": _format_time(outcome["started_at"]),
+            "completed_at": _format_time(outcome["completed_at"]),
+            "timeout_seconds": timeout_seconds,
+            "output_limit_bytes": MAX_BUILD_OUTPUT_BYTES,
+            "termination": outcome["termination"],
+            "timed_out": outcome["termination"] == "TIMED_OUT",
+            "exit_code": outcome["exit_code"],
+            "stdout": outcome["stdout"],
+            "stderr": outcome["stderr"],
+        }
+
+
+def _contained_build_argv(
+    docker: Path,
+    docker_host: str,
+    workspace: Path,
+    toolchain: Path,
+    container_name: str,
+    timeout_seconds: int,
+) -> list[str]:
+    return [
+        str(docker),
+        f"--host={docker_host}",
+        "run",
+        "--rm",
+        f"--name={container_name}",
+        "--read-only",
+        "--network=none",
+        "--user=65532:65532",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges:true",
+        "--pids-limit=128",
+        "--memory=536870912",
+        "--cpus=1.0",
+        f"--ulimit=cpu={timeout_seconds}:{timeout_seconds}",
+        "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
+        "--env=HOME=/workspace/.home",
+        "--env=TMPDIR=/workspace/.tmp",
+        "--env=PYTHONNOUSERSITE=1",
+        "--env=PYTHONDONTWRITEBYTECODE=1",
+        "--env=PYTHONPATH=/opt/governance-build-toolchain",
+        "--workdir=/workspace",
+        "--mount",
+        f"type=bind,src={workspace},dst=/workspace",
+        "--mount",
+        f"type=bind,src={toolchain},dst=/opt/governance-build-toolchain,readonly",
+        _IMAGE,
+        "python",
+        "-m",
+        "pip",
+        "wheel",
+        "--no-deps",
+        "--no-index",
+        "--no-build-isolation",
+        ".",
+        "-w",
+        "/workspace/dist",
+    ]
+
+
+def _docker_identity() -> tuple[Path, str, str]:
+    configured = os.environ.get("GOVERNANCE_TRUSTED_DOCKER_PATH")
+    discovered = configured or shutil.which("docker")
+    if discovered is None:
+        raise DockerRuntimeError("trusted Docker CLI is unavailable")
+    path = Path(discovered).resolve()
+    digest = os.environ.get("GOVERNANCE_TRUSTED_DOCKER_SHA256") or sha256_file(path)
+    host = os.environ.get("GOVERNANCE_TRUSTED_DOCKER_HOST") or (
+        "npipe:////./pipe/docker_engine"
+        if os.name == "nt"
+        else "unix:///var/run/docker.sock"
+    )
+    return _trusted_docker(path, digest, host), host, digest
+
+
+def _stage_source(root: Path, workspace: Path) -> None:
+    workspace.mkdir()
+    for source in sorted(root.rglob("*")):
+        relative = source.relative_to(root)
+        if any(_excluded(part) for part in relative.parts):
+            continue
+        if source.is_symlink():
+            raise DockerRuntimeError(f"candidate source symlink forbidden: {relative}")
+        if source.is_dir():
+            continue
+        if not source.is_file():
+            raise DockerRuntimeError(f"candidate source form unsupported: {relative}")
+        destination = workspace / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    for name in (".home", ".tmp", "dist"):
+        (workspace / name).mkdir()
+    _make_workspace_writable(workspace)
+
+
+def _excluded(part: str) -> bool:
+    return part in _COPY_EXCLUDED or part.endswith(".egg-info") or part.endswith(".pyc")
+
+
+def _stage_build_toolchain(destination: Path) -> tuple[str, str]:
+    distribution = importlib.metadata.distribution("setuptools")
+    destination.mkdir()
+    copied: list[tuple[str, str]] = []
+    for relative in distribution.files or ():
+        path = PurePosixPath(str(relative).replace("\\", "/"))
+        if path.is_absolute() or ".." in path.parts or path.suffix == ".pyc":
+            continue
+        source = Path(str(distribution.locate_file(relative))).resolve()
+        if not source.is_file():
+            continue
+        target = destination.joinpath(*path.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        copied.append((path.as_posix(), sha256_file(target)))
+    if not copied:
+        raise DockerRuntimeError("setuptools build toolchain is unavailable")
+    manifest = "".join(f"{digest}  {path}\n" for path, digest in sorted(copied))
+    return hashlib.sha256(manifest.encode("utf-8")).hexdigest(), distribution.version
+
+
+def _make_workspace_writable(root: Path) -> None:
+    if os.name == "nt":
+        return
+    for path in (root, *root.rglob("*")):
+        path.chmod(0o777 if path.is_dir() else 0o666)
+
+
 def audit_wheel(repo_root: Path, wheel_path: Path) -> tuple[dict[str, Any], list[str]]:
-    errors: list[str] = []
     expected = _expected_package_files(repo_root)
-    project = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
-    with zipfile.ZipFile(wheel_path) as archive:
-        infos = archive.infolist()
-        names = [item.filename for item in infos]
-        errors.extend(_archive_errors(infos))
-        package_names = {name for name in names if name.startswith("governance_eval/")}
-        missing = sorted(expected - package_names)
-        unexpected = sorted(package_names - expected)
-        if missing:
-            errors.append("missing package files: " + ", ".join(missing))
-        if unexpected:
-            errors.append("unexpected package files: " + ", ".join(unexpected))
-        metadata_name = _one_suffix(names, ".dist-info/METADATA", errors)
-        entry_name = _one_suffix(names, ".dist-info/entry_points.txt", errors)
-        record_name = _one_suffix(names, ".dist-info/RECORD", errors)
-        if metadata_name:
-            dist_info = metadata_name.removesuffix("METADATA")
-            allowed = expected | {
-                dist_info + name
-                for name in (
-                    "METADATA",
-                    "RECORD",
-                    "WHEEL",
-                    "entry_points.txt",
-                    "top_level.txt",
+    evidence = _empty_wheel_evidence(wheel_path, expected)
+    if not wheel_path.is_file():
+        return evidence, ["wheel archive missing"]
+    if wheel_path.stat().st_size > MAX_ARCHIVE_BYTES:
+        return evidence, [f"wheel archive size exceeds {MAX_ARCHIVE_BYTES}"]
+    try:
+        project = tomllib.loads(
+            (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        with zipfile.ZipFile(wheel_path) as archive:
+            infos = archive.infolist()
+            names = [item.filename for item in infos]
+            evidence.update(
+                {
+                    "member_count": len(names),
+                    "uncompressed_bytes": sum(item.file_size for item in infos),
+                    "members": sorted(names),
+                }
+            )
+            errors = _structural_errors(infos, expected)
+            if errors:
+                return evidence, errors
+            by_name = {item.filename: item for item in infos}
+            metadata_name = _required_suffix(names, ".dist-info/METADATA")
+            entry_name = _required_suffix(names, ".dist-info/entry_points.txt")
+            record_name = _required_suffix(names, ".dist-info/RECORD")
+            errors.extend(
+                _metadata_errors(
+                    _read_member_bytes(archive, by_name[metadata_name]), project
                 )
-            }
-            outside_allowlist = sorted(set(names) - allowed)
-            if outside_allowlist:
-                errors.append(
-                    "unexpected wheel members: " + ", ".join(outside_allowlist)
+            )
+            errors.extend(
+                _entry_point_errors(
+                    _read_member_bytes(archive, by_name[entry_name]).decode("utf-8"),
+                    project,
                 )
-        if metadata_name:
-            metadata = BytesParser().parsebytes(archive.read(metadata_name))
-            expected_name = project["project"]["name"]
-            expected_version = project["project"]["version"]
-            if metadata.get("Name") != expected_name:
-                errors.append("wheel metadata project name mismatch")
-            if metadata.get("Version") != expected_version:
-                errors.append("wheel metadata version mismatch")
-        if entry_name:
-            entry_points = archive.read(entry_name).decode("utf-8")
-            errors.extend(_entry_point_errors(entry_points, project))
-        if record_name:
-            errors.extend(_record_errors(archive, record_name, names))
-    evidence = {
+            )
+            errors.extend(_record_errors(archive, by_name, record_name))
+            return evidence, errors
+    except (KeyError, OSError, UnicodeError, ValueError, zipfile.BadZipFile) as exc:
+        return evidence, [f"wheel archive malformed: {type(exc).__name__}"]
+
+
+def _empty_wheel_evidence(wheel_path: Path, expected: set[str]) -> dict[str, Any]:
+    return {
         "name": wheel_path.name,
-        "sha256": sha256_file(wheel_path),
-        "member_count": len(names),
-        "uncompressed_bytes": sum(item.file_size for item in infos),
+        "sha256": sha256_file(wheel_path) if wheel_path.is_file() else None,
+        "member_count": 0,
+        "uncompressed_bytes": 0,
         "expected_package_files": sorted(expected),
-        "members": sorted(names),
+        "members": [],
     }
-    return evidence, errors
+
+
+def _structural_errors(infos: list[zipfile.ZipInfo], expected: set[str]) -> list[str]:
+    errors = _archive_errors(infos)
+    names = [item.filename for item in infos]
+    package_names = {name for name in names if name.startswith("governance_eval/")}
+    missing = sorted(expected - package_names)
+    unexpected = sorted(package_names - expected)
+    if missing:
+        errors.append("missing package files: " + ", ".join(missing))
+    if unexpected:
+        errors.append("unexpected package files: " + ", ".join(unexpected))
+    suffix_errors: list[str] = []
+    metadata_name = _one_suffix(names, ".dist-info/METADATA", suffix_errors)
+    _one_suffix(names, ".dist-info/entry_points.txt", suffix_errors)
+    _one_suffix(names, ".dist-info/RECORD", suffix_errors)
+    errors.extend(suffix_errors)
+    if metadata_name:
+        dist_info = metadata_name.removesuffix("METADATA")
+        allowed = expected | {
+            dist_info + name
+            for name in (
+                "METADATA",
+                "RECORD",
+                "WHEEL",
+                "entry_points.txt",
+                "top_level.txt",
+            )
+        }
+        outside_allowlist = sorted(set(names) - allowed)
+        if outside_allowlist:
+            errors.append("unexpected wheel members: " + ", ".join(outside_allowlist))
+    return errors
 
 
 def _preflight_errors(root: Path, output: Path) -> list[str]:
@@ -186,8 +379,6 @@ def _preflight_errors(root: Path, output: Path) -> list[str]:
         errors.append("artifacts directory must be outside repository")
     if any(output.glob("wheel/*.whl")):
         errors.append("artifacts wheel directory must not contain an existing wheel")
-    if (output / "source").exists():
-        errors.append("artifacts source directory must not exist")
     return errors
 
 
@@ -212,17 +403,41 @@ def _archive_errors(infos: list[zipfile.ZipInfo]) -> list[str]:
     if len(names) != len(set(names)):
         errors.append("wheel contains duplicate members")
     for item in infos:
-        path = PurePosixPath(item.filename)
-        if (
-            not item.filename
-            or "\\" in item.filename
-            or path.is_absolute()
-            or ".." in path.parts
-        ):
-            errors.append(f"unsafe wheel member: {item.filename}")
-        mode = item.external_attr >> 16
-        if stat.S_ISLNK(mode):
-            errors.append(f"wheel symlink forbidden: {item.filename}")
+        errors.extend(_member_structure_errors(item))
+    return errors
+
+
+def _member_structure_errors(item: zipfile.ZipInfo) -> list[str]:
+    errors: list[str] = []
+    path = PurePosixPath(item.filename)
+    if (
+        not item.filename
+        or "\\" in item.filename
+        or path.is_absolute()
+        or ".." in path.parts
+        or item.is_dir()
+    ):
+        errors.append(f"unsafe wheel member: {item.filename}")
+    mode = item.external_attr >> 16
+    kind = stat.S_IFMT(mode)
+    if stat.S_ISLNK(mode) or kind not in {0, stat.S_IFREG}:
+        errors.append(f"wheel member form unsupported: {item.filename}")
+    if item.flag_bits & 1 or item.compress_type not in {
+        zipfile.ZIP_STORED,
+        zipfile.ZIP_DEFLATED,
+    }:
+        errors.append(f"wheel member encoding unsupported: {item.filename}")
+    if item.file_size > MAX_MEMBER_UNCOMPRESSED_BYTES:
+        errors.append(
+            f"wheel member size exceeds {MAX_MEMBER_UNCOMPRESSED_BYTES}: {item.filename}"
+        )
+    if item.file_size and (
+        item.compress_size == 0
+        or item.file_size > item.compress_size * MAX_COMPRESSION_RATIO
+    ):
+        errors.append(
+            f"wheel compression ratio exceeds {MAX_COMPRESSION_RATIO}: {item.filename}"
+        )
     return errors
 
 
@@ -232,6 +447,23 @@ def _one_suffix(names: list[str], suffix: str, errors: list[str]) -> str | None:
         errors.append(f"expected one {suffix}, found {len(matches)}")
         return None
     return matches[0]
+
+
+def _required_suffix(names: list[str], suffix: str) -> str:
+    matches = [name for name in names if name.endswith(suffix)]
+    if len(matches) != 1:
+        raise ValueError(f"required wheel member missing: {suffix}")
+    return matches[0]
+
+
+def _metadata_errors(data: bytes, project: dict[str, Any]) -> list[str]:
+    metadata = BytesParser().parsebytes(data)
+    errors = []
+    if metadata.get("Name") != project["project"]["name"]:
+        errors.append("wheel metadata project name mismatch")
+    if metadata.get("Version") != project["project"]["version"]:
+        errors.append("wheel metadata version mismatch")
+    return errors
 
 
 def _entry_point_errors(text: str, project: dict[str, Any]) -> list[str]:
@@ -252,37 +484,108 @@ def _entry_point_errors(text: str, project: dict[str, Any]) -> list[str]:
 
 
 def _record_errors(
-    archive: zipfile.ZipFile, record_name: str, archive_names: list[str]
+    archive: zipfile.ZipFile,
+    by_name: dict[str, zipfile.ZipInfo],
+    record_name: str,
 ) -> list[str]:
-    errors: list[str] = []
-    rows = list(csv.reader(io.StringIO(archive.read(record_name).decode("utf-8"))))
+    rows = list(
+        csv.reader(
+            io.StringIO(
+                _read_member_bytes(archive, by_name[record_name]).decode("utf-8")
+            )
+        )
+    )
     if any(len(row) != 3 for row in rows):
         return ["wheel RECORD row must contain three fields"]
+    errors: list[str] = []
     record_names = [row[0] for row in rows]
-    if sorted(record_names) != sorted(archive_names):
+    if sorted(record_names) != sorted(by_name):
         errors.append("wheel RECORD member set mismatch")
     for name, digest, size in rows:
-        if name == record_name:
-            if digest or size:
-                errors.append("wheel RECORD self-entry must omit hash and size")
-            continue
-        if name not in archive_names:
-            continue
-        data = archive.read(name)
-        encoded = (
-            base64.urlsafe_b64encode(bytes.fromhex(sha256_bytes(data)))
-            .rstrip(b"=")
-            .decode("ascii")
+        errors.extend(
+            _record_row_errors(archive, by_name, record_name, name, digest, size)
         )
-        if digest != f"sha256={encoded}" or size != str(len(data)):
-            errors.append(f"wheel RECORD mismatch: {name}")
     return errors
 
 
-def _as_bytes(value: bytes | str | None) -> bytes:
-    if value is None:
-        return b""
-    return value if isinstance(value, bytes) else value.encode("utf-8")
+def _record_row_errors(
+    archive: zipfile.ZipFile,
+    by_name: dict[str, zipfile.ZipInfo],
+    record_name: str,
+    name: str,
+    digest: str,
+    size: str,
+) -> list[str]:
+    if name == record_name:
+        return (
+            []
+            if not digest and not size
+            else ["wheel RECORD self-entry must omit hash and size"]
+        )
+    if name not in by_name:
+        return []
+    observed_digest, observed_size = _hash_member(archive, by_name[name])
+    encoded = base64.urlsafe_b64encode(observed_digest).rstrip(b"=").decode("ascii")
+    if digest != f"sha256={encoded}" or size != str(observed_size):
+        return [f"wheel RECORD mismatch: {name}"]
+    return []
+
+
+def _read_member_bytes(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
+    limit = min(MAX_MEMBER_UNCOMPRESSED_BYTES, MAX_METADATA_BYTES)
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        with archive.open(info, "r") as stream:
+            while chunk := stream.read(min(64 * 1024, limit - total + 1)):
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError(
+                        f"wheel member read exceeds {limit}: {info.filename}"
+                    )
+                chunks.append(chunk)
+    except (EOFError, OSError, RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
+        raise ValueError(f"wheel member truncated: {info.filename}") from exc
+    if total != info.file_size:
+        raise ValueError(f"wheel member truncated: {info.filename}")
+    return b"".join(chunks)
+
+
+def _hash_member(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> tuple[bytes, int]:
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with archive.open(info, "r") as stream:
+            while chunk := stream.read(64 * 1024):
+                total += len(chunk)
+                if total > MAX_MEMBER_UNCOMPRESSED_BYTES:
+                    raise ValueError(
+                        f"wheel member read exceeds {MAX_MEMBER_UNCOMPRESSED_BYTES}: {info.filename}"
+                    )
+                digest.update(chunk)
+    except (EOFError, OSError, RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
+        raise ValueError(f"wheel member truncated: {info.filename}") from exc
+    if total != info.file_size:
+        raise ValueError(f"wheel member truncated: {info.filename}")
+    return digest.digest(), total
+
+
+def _empty_build(timeout_seconds: int) -> dict[str, Any]:
+    return {
+        "command": [],
+        "image": _IMAGE,
+        "started_at": _utc_now(),
+        "completed_at": _utc_now(),
+        "timeout_seconds": timeout_seconds,
+        "output_limit_bytes": MAX_BUILD_OUTPUT_BYTES,
+        "termination": "NOT_STARTED",
+        "timed_out": False,
+        "exit_code": None,
+    }
+
+
+def _format_time(value: Any) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def _utc_now() -> str:
