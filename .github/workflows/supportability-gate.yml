@@ -22,26 +22,33 @@ on:
         required: true
         type: string
       target-head-repository-id:
-        required: true
+        required: false
         type: string
+        default: ""
       target-pr-head-sha:
-        required: true
+        required: false
         type: string
+        default: ""
       target-pr-base-sha:
-        required: true
+        required: false
         type: string
+        default: ""
       merge-group-ref:
-        required: true
+        required: false
         type: string
+        default: ""
       merge-group-sha:
-        required: true
+        required: false
         type: string
+        default: ""
       merge-group-event-id:
-        required: true
+        required: false
         type: string
+        default: ""
       event-created-at:
-        required: true
+        required: false
         type: string
+        default: ""
       review-window-started-at:
         required: true
         type: string
@@ -125,13 +132,13 @@ jobs:
       TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
       TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
       TARGET_PR_URL: ${{ inputs.target-pr-url }}
-      TARGET_HEAD_REPOSITORY_ID: ${{ inputs.target-head-repository-id }}
-      TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha }}
-      TARGET_PR_BASE_SHA: ${{ inputs.target-pr-base-sha }}
+      TARGET_HEAD_REPOSITORY_ID: ${{ inputs.target-head-repository-id || github.event.pull_request.head.repo.id }}
+      TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha || inputs.target-head-sha }}
+      TARGET_PR_BASE_SHA: ${{ inputs.target-pr-base-sha || inputs.target-base-sha }}
       MERGE_GROUP_REF: ${{ inputs.merge-group-ref }}
       MERGE_GROUP_SHA: ${{ inputs.merge-group-sha }}
       MERGE_GROUP_EVENT_ID: ${{ inputs.merge-group-event-id }}
-      EVENT_CREATED_AT: ${{ inputs.event-created-at }}
+      EVENT_CREATED_AT: ${{ inputs.event-created-at || inputs.review-window-started-at }}
       REVIEW_WINDOW_STARTED_AT: ${{ inputs.review-window-started-at }}
       GOVERNANCE_REF: ${{ inputs.governance-ref }}
       REQUEST_WORKFLOW_REF: ${{ github.workflow_ref }}

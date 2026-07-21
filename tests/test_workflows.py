@@ -359,6 +359,14 @@ class WorkflowTests(unittest.TestCase):
             workflows["governance-shadow.yml"],
         )
         self.assertIn("workflow_call:", workflows["supportability-gate.yml"])
+        self.assertIn(
+            "TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha || inputs.target-head-sha }}",
+            workflows["supportability-gate.yml"],
+        )
+        self.assertIn(
+            "TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha || inputs.target-head-sha }}",
+            workflows["delivery-receipt.yml"],
+        )
         self.assertIn("Supportability Gate", workflows["supportability-gate.yml"])
         self.assertIn("supportability-config", workflows["supportability-gate.yml"])
         self.assertIn(

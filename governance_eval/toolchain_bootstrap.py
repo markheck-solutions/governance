@@ -79,7 +79,7 @@ _SHADOW_CONTEXT_FIELDS = (
     "expected_artifact_name",
 )
 _EVALUATION_ACTIONS = frozenset(
-    {"opened", "reopened", "synchronize", "ready_for_review"}
+    {"opened", "reopened", "synchronize", "ready_for_review", "checks_requested"}
 )
 _ARTIFACT_AUTHORITY_FIELDS = (
     "artifact_id",
@@ -507,8 +507,13 @@ def _validated_evaluation_context(
         expected_kind="SUPPORTABILITY_EVALUATION",
         label="evaluation",
     )
-    if context["event_name"] != "pull_request_target":
+    if context["event_name"] not in {"pull_request_target", "merge_group"}:
         raise BootstrapError("authoritative evaluation event invalid")
+    if (
+        context["event_name"] == "merge_group"
+        and context["event_action"] != "checks_requested"
+    ):
+        raise BootstrapError("authoritative merge-group evaluation action invalid")
     if context["event_action"] not in _EVALUATION_ACTIONS:
         raise BootstrapError("authoritative evaluation action invalid")
     pull_request_number = context["pull_request_number"]
@@ -573,7 +578,7 @@ def _validate_shadow_event(context: Mapping[str, object], workflow_ref: str) -> 
         if not isinstance(pull_request_number, int) or pull_request_number < 1:
             raise BootstrapError("pull request shadow requires a PR number")
         return
-    if event_name not in {"push", "workflow_dispatch"}:
+    if event_name not in {"push", "workflow_dispatch", "merge_group"}:
         raise BootstrapError("authoritative shadow event invalid")
     if pull_request_number is not None:
         raise BootstrapError("non-PR shadow forbids a PR number")

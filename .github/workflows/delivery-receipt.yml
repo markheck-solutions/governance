@@ -22,23 +22,29 @@ on:
         required: true
         type: string
       target-pr-head-sha:
-        required: true
+        required: false
         type: string
+        default: ""
       target-pr-base-sha:
-        required: true
+        required: false
         type: string
+        default: ""
       merge-group-ref:
-        required: true
+        required: false
         type: string
+        default: ""
       merge-group-sha:
-        required: true
+        required: false
         type: string
+        default: ""
       merge-group-event-id:
-        required: true
+        required: false
         type: string
+        default: ""
       event-created-at:
-        required: true
+        required: false
         type: string
+        default: ""
       governance-ref:
         required: true
         type: string
@@ -103,8 +109,8 @@ jobs:
       TARGET_HEAD_SHA: ${{ inputs.target-head-sha }}
       TARGET_PR_NUMBER: ${{ inputs.target-pr-number }}
       TARGET_PR_URL: ${{ inputs.target-pr-url }}
-      TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha }}
-      TARGET_PR_BASE_SHA: ${{ inputs.target-pr-base-sha }}
+      TARGET_PR_HEAD_SHA: ${{ inputs.target-pr-head-sha || inputs.target-head-sha }}
+      TARGET_PR_BASE_SHA: ${{ inputs.target-pr-base-sha || inputs.target-base-sha }}
       MERGE_GROUP_REF: ${{ inputs.merge-group-ref }}
       MERGE_GROUP_SHA: ${{ inputs.merge-group-sha }}
       MERGE_GROUP_EVENT_ID: ${{ inputs.merge-group-event-id }}

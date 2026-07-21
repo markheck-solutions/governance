@@ -5,8 +5,8 @@ import re
 from typing import Any
 
 _ARCHITECTURE_WORKFLOW_TRANSITION_SHA256 = (
-    "d4111d0ea92d050f3367c4ade52f8301a417f85bad172147d7f91a165ad5abc4",
-    "8fe6c253b46e9117dbf3c0d8e88a714710bc5b0336f3412e6dc81e5628f8016d",
+    "68e47514857050319ecd60c67f188c4ffb54bcd6fe40a6122c19488ae9b6db03",
+    "e8ce64a7cbf8ab0b0bb1199e588e522c83c7930b4fc3a5d925a2ee3f791f070a",
 )
 _ARCHITECTURE_WORKFLOW_BASE_COMMAND = (
     "          python -m governance_eval architecture-gate \\\n"
