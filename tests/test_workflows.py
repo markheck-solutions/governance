@@ -161,7 +161,7 @@ class WorkflowTests(unittest.TestCase):
             "evaluator-sha: ${{ inputs.governance-ref }}",
             "target-base-sha: ${{ inputs.target-base-sha }}",
             "target-head-sha: ${{ inputs.target-head-sha }}",
-            "head-repository-id: ${{ inputs.target-head-repository-id }}",
+            "head-repository-id: ${{ inputs.target-head-repository-id || github.event.pull_request.head.repo.id }}",
             "event-name: ${{ github.event_name }}",
             "event-action: ${{ github.event.action }}",
             "run-attempt: ${{ github.run_attempt }}",

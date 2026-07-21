@@ -395,7 +395,7 @@ jobs:
           python-path: ${{ steps.setup-python.outputs.python-path }}
           repository: ${{ github.repository }}
           repository-id: ${{ github.repository_id }}
-          head-repository-id: ${{ inputs.target-head-repository-id }}
+          head-repository-id: ${{ inputs.target-head-repository-id || github.event.pull_request.head.repo.id }}
           event-name: ${{ github.event_name }}
           event-action: ${{ github.event.action }}
           target-base-sha: ${{ inputs.target-base-sha }}
