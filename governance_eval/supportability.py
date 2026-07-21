@@ -48,10 +48,6 @@ GIT_NETWORK_TIMEOUT_SECONDS = 60
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_ENFORCEMENT_RECEIPT_TRANSITION_SHA256 = (
-    "09f318698fa421b130f527b6f51376302ae7b6c7b2983641238ebd266136ddd9",
-    "e7dcc678d0391535a5befc148c63f3a41029c6a020645b855514ff408bd85e1d",
-)
 LEGACY_POLICY_DEBT_FIELD = "ex" + "ceptions"
 LEGACY_APPLIED_DEBT_FIELD = "ex" + "ceptions_applied"
 LEGACY_EXPIRED_DEBT_FIELD = "expired_ex" + "ceptions"
@@ -992,6 +988,7 @@ def _architecture_governance_change_errors(
         "governance_eval/codex_connector_collector.py",
         "governance_eval/codex_connector_evidence.py",
         "governance_eval/codex_review_gate.py",
+        "governance_eval/merge_group_authority.py",
         "schemas/v1/architecture_gate_result.schema.json",
         "schemas/v1/bootstrap_audit_receipt.schema.json",
         "schemas/v1/delivery_receipt.schema.json",
@@ -1135,9 +1132,7 @@ def _protected_enforcement_change_errors(
         hashlib.sha256(base_normalized.encode()).hexdigest(),
         hashlib.sha256(head_normalized.encode()).hexdigest(),
     )
-    allowed = merge_group_authority.enforcement_transition_allowed(
-        digests, _ENFORCEMENT_RECEIPT_TRANSITION_SHA256
-    )
+    allowed = merge_group_authority.enforcement_transition_allowed(digests)
     if base_normalized != head_normalized and not allowed:
         return [
             "protected enforcement workflow change is not an exact SHA pin rotation"

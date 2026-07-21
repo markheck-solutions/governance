@@ -18,7 +18,11 @@ _PATH_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
 _DIGEST_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 _RECEIPT_VERSION = "governance_merge_group_receipt.v1"
-_ENFORCEMENT_TRANSITION = (
+_ENFORCEMENT_RECEIPT_TRANSITION_SHA256 = (
+    "09f318698fa421b130f527b6f51376302ae7b6c7b2983641238ebd266136ddd9",
+    "e7dcc678d0391535a5befc148c63f3a41029c6a020645b855514ff408bd85e1d",
+)
+_ENFORCEMENT_MERGE_GROUP_TRANSITION_SHA256 = (
     "e7dcc678d0391535a5befc148c63f3a41029c6a020645b855514ff408bd85e1d",
     "4fc59fe8d102ced45dc14f49343a22a0130af32ddbb6afec63c9ce09b005adc7",
 )
@@ -41,10 +45,11 @@ def protected_delivery_conditions() -> dict[str, set[str]]:
     }
 
 
-def enforcement_transition_allowed(
-    digests: tuple[str, str], legacy_transition: tuple[str, str]
-) -> bool:
-    return digests in {legacy_transition, _ENFORCEMENT_TRANSITION}
+def enforcement_transition_allowed(digests: tuple[str, str]) -> bool:
+    return digests in {
+        _ENFORCEMENT_RECEIPT_TRANSITION_SHA256,
+        _ENFORCEMENT_MERGE_GROUP_TRANSITION_SHA256,
+    }
 
 
 def resolve_merge_group_authority(

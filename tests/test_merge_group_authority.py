@@ -66,14 +66,8 @@ class MergeGroupAuthorityTests(unittest.TestCase):
             "e7dcc678d0391535a5befc148c63f3a41029c6a020645b855514ff408bd85e1d",
             "4fc59fe8d102ced45dc14f49343a22a0130af32ddbb6afec63c9ce09b005adc7",
         )
-        self.assertTrue(
-            enforcement_transition_allowed(transition, ("1" * 64, "2" * 64))
-        )
-        self.assertFalse(
-            enforcement_transition_allowed(
-                (transition[0], "0" * 64), ("1" * 64, "2" * 64)
-            )
-        )
+        self.assertTrue(enforcement_transition_allowed(transition))
+        self.assertFalse(enforcement_transition_allowed((transition[0], "0" * 64)))
         conditions = protected_delivery_conditions()
         self.assertIn(
             "${{ needs.resolve-authority.outputs.base-ref == 'main' }}",
