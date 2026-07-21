@@ -727,6 +727,16 @@ class ArchitectureGateTests(unittest.TestCase):
                 any("negative_vague_folder" in error for error in result["errors"])
             )
 
+    def test_merge_group_claim_does_not_duplicate_architecture_command(self) -> None:
+        workflow = (self.root / ".github/workflows/supportability-gate.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            workflow.count("python -m governance_eval architecture-gate \\"), 1
+        )
+        self.assertIn("Write merge-group authority claim", workflow)
+
 
 def _repo(path: Path, root: Path, *, mode: str) -> Path:
     (path / ".github/governance").mkdir(parents=True)

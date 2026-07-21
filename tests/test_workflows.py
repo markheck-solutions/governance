@@ -137,7 +137,7 @@ class WorkflowTests(unittest.TestCase):
         )
         post_provision = workflow[provision:]
         pinned_invocation = '"${{ steps.toolchain.outputs.python-path }}"'
-        self.assertEqual(post_provision.count(pinned_invocation), 5)
+        self.assertEqual(post_provision.count(pinned_invocation), 6)
         architecture_block = post_provision.split(
             "      - name: Run approved architecture fitness gate", 1
         )[1].split("      - name: Reconcile Codex review evidence", 1)[0]
@@ -161,7 +161,7 @@ class WorkflowTests(unittest.TestCase):
             "evaluator-sha: ${{ inputs.governance-ref }}",
             "target-base-sha: ${{ inputs.target-base-sha }}",
             "target-head-sha: ${{ inputs.target-head-sha }}",
-            "head-repository-id: ${{ github.event.pull_request.head.repo.id }}",
+            "head-repository-id: ${{ inputs.target-head-repository-id }}",
             "event-name: ${{ github.event_name }}",
             "event-action: ${{ github.event.action }}",
             "run-attempt: ${{ github.run_attempt }}",
@@ -696,7 +696,8 @@ class ReusableWorkflowTests(unittest.TestCase):
             "f\"{os.environ['TARGET_REPOSITORY']}/.github/workflows/\"",
             '"supportability-enforcement.yml@refs/heads/main"',
             'os.environ["REQUEST_WORKFLOW_SHA"]',
-            'os.environ["REQUEST_EVENT_NAME"] != "pull_request_target"',
+            'os.environ["REQUEST_EVENT_NAME"] not in {',
+            '"pull_request_target", "merge_group"',
             '"opened", "reopened", "synchronize", "ready_for_review"',
             'os.environ["REQUEST_RUN_ATTEMPT"] != "1"',
             'os.environ["REQUEST_OUTCOME"]',
@@ -778,6 +779,12 @@ class ReusableWorkflowTests(unittest.TestCase):
             "TARGET_REPOSITORY": "markheck-solutions/governance",
             "TARGET_BASE_SHA": "a" * 40,
             "TARGET_HEAD_SHA": "b" * 40,
+            "TARGET_PR_HEAD_SHA": "b" * 40,
+            "TARGET_PR_BASE_SHA": "a" * 40,
+            "MERGE_GROUP_REF": "",
+            "MERGE_GROUP_SHA": "",
+            "MERGE_GROUP_EVENT_ID": "",
+            "EVENT_CREATED_AT": "2026-07-17T13:32:56Z",
             "GOVERNANCE_REF": "c" * 40,
             "TARGET_PR_NUMBER": "57",
             "ARTIFACT_NAME": "candidate-supportability-gate-evidence",

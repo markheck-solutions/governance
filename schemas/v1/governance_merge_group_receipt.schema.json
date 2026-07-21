@@ -1,0 +1,76 @@
+{
+  "type": "object",
+  "required": ["schema_version", "repository", "base_branch", "base_sha", "merge_group", "pull_request", "evaluator_sha", "caller_workflow", "reusable_workflow", "workflow", "config_sha256", "standard_sha256", "transaction_id", "artifact_digest", "verification_time", "receipt_id"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["governance_merge_group_receipt.v1"]},
+    "repository": {
+      "type": "object",
+      "required": ["id", "full_name"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "full_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}
+      },
+      "additionalProperties": false
+    },
+    "base_branch": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$"},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "merge_group": {
+      "type": "object",
+      "required": ["ref", "sha", "base_ref", "base_sha", "event_id", "event_created_at"],
+      "properties": {
+        "ref": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$"},
+        "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "base_ref": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$"},
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "event_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,160}$"},
+        "event_created_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "pull_request": {
+      "type": "object",
+      "required": ["number", "url", "head_sha", "base_sha", "base_ref"],
+      "properties": {
+        "number": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "url": {"type": "string", "pattern": "^https://github\\.com/"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "base_ref": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$"}
+      },
+      "additionalProperties": false
+    },
+    "evaluator_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "caller_workflow": {"$ref": "#/$defs/workflow_file"},
+    "reusable_workflow": {"$ref": "#/$defs/workflow_file"},
+    "workflow": {
+      "type": "object",
+      "required": ["run_id", "run_attempt", "check_run_id", "github_app_id"],
+      "properties": {
+        "run_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "run_attempt": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "check_run_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "github_app_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+      },
+      "additionalProperties": false
+    },
+    "config_sha256": {"$ref": "#/$defs/sha256"},
+    "standard_sha256": {"$ref": "#/$defs/sha256"},
+    "transaction_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,160}$"},
+    "artifact_digest": {"$ref": "#/$defs/sha256"},
+    "verification_time": {"type": "string", "format": "date-time"},
+    "receipt_id": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "workflow_file": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml$"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

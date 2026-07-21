@@ -21,6 +21,7 @@ SCHEMA_FILES = {
     "supportability_gate_result": "supportability_gate_result.schema.json",
     "architecture_gate_result": "architecture_gate_result.schema.json",
     "delivery_receipt": "delivery_receipt.schema.json",
+    "governance_merge_group_receipt": "governance_merge_group_receipt.schema.json",
     "bootstrap_audit_receipt": "bootstrap_audit_receipt.schema.json",
     "codex_connector_snapshot": "codex_connector_snapshot.schema.json",
     "codex_connector_evidence_result": "codex_connector_evidence_result.schema.json",
