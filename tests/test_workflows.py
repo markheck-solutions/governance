@@ -1016,6 +1016,10 @@ class ReusableWorkflowTests(unittest.TestCase):
         self.assertIn("workflow_call:", workflows["delivery-receipt.yml"])
         self.assertIn("Delivery Receipt", workflows["delivery-receipt.yml"])
         self.assertIn(
+            '== "Baseline Protected Delivery Receipt / Delivery Receipt"',
+            workflows["delivery-receipt.yml"],
+        )
+        self.assertIn(
             'gh api "repos/${TARGET_REPOSITORY}/actions/artifacts/${SUPPORTABILITY_ARTIFACT_ID}/zip"',
             workflows["delivery-receipt.yml"],
         )

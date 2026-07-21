@@ -485,12 +485,13 @@ jobs:
           matches = [
               check
               for check in checks
-              if check.get("name") == "Delivery Receipt"
+              if check.get("name") == "Baseline Protected Delivery Receipt / Delivery Receipt"
               and run_marker in str(check.get("details_url") or "")
           ]
           if len(matches) != 1:
               raise RuntimeError(
-                  f"expected one current Delivery Receipt check; found {len(matches)}"
+                  "expected one current protected Delivery Receipt check; "
+                  f"found {len(matches)}"
               )
           check = matches[0]
           app = check.get("app") if isinstance(check.get("app"), dict) else {}
