@@ -1033,9 +1033,8 @@ class SupportabilityGateTests(unittest.TestCase):
             workflow_dir.mkdir(parents=True)
             source = self.root / ".github/workflows/supportability-enforcement.yml"
             current = source.read_text(encoding="utf-8")
-            current_pins = re.findall(
-                r"(?:@|governance-ref:\s+)([0-9a-f]{40})", current
-            )
+            pin_pattern = r"(?:governance/\.github/workflows/(?:supportability-gate|delivery-receipt)\.yml@|governance-ref:\s+)([0-9a-f]{40})"
+            current_pins = re.findall(pin_pattern, current)
             self.assertEqual(len(current_pins), 6)
             self.assertEqual(len(set(current_pins)), 1)
             head = current.replace(current_pins[0], "2" * 40)

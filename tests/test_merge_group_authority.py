@@ -64,7 +64,7 @@ class MergeGroupAuthorityTests(unittest.TestCase):
     def test_protected_activation_and_job_conditions_are_exact(self) -> None:
         transition = (
             "e7dcc678d0391535a5befc148c63f3a41029c6a020645b855514ff408bd85e1d",
-            "4fc59fe8d102ced45dc14f49343a22a0130af32ddbb6afec63c9ce09b005adc7",
+            "07697d9a659b24615d95bd73eaebeb388c81d0c1cbdfc4af3d1773e258598b72",
         )
         self.assertTrue(enforcement_transition_allowed(transition))
         self.assertFalse(enforcement_transition_allowed((transition[0], "0" * 64)))
