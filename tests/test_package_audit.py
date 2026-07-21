@@ -39,6 +39,22 @@ class PackageAuditTests(unittest.TestCase):
             _, errors = audit_wheel(root, wheel)
             self.assertIn("wheel RECORD mismatch: governance_eval/__init__.py", errors)
 
+    def test_rejects_recorded_member_outside_exact_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_source(root)
+            wheel = self._write_wheel(root / "extra.whl", extra_member="evil.pth")
+            _, errors = audit_wheel(root, wheel)
+            self.assertIn("unexpected wheel members: evil.pth", errors)
+
+    def test_rejects_expected_entry_point_text_in_wrong_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_source(root)
+            wheel = self._write_wheel(root / "entry.whl", bad_entry_point=True)
+            _, errors = audit_wheel(root, wheel)
+            self.assertIn("wheel console entry points mismatch pyproject.toml", errors)
+
     @staticmethod
     def _write_source(root: Path) -> None:
         package = root / "governance_eval"
@@ -50,13 +66,20 @@ class PackageAuditTests(unittest.TestCase):
             """[project]
 name = "governance-eval"
 version = "0.1.0"
+[project.scripts]
+governance-eval = "governance_eval.cli:main"
 """,
             encoding="utf-8",
         )
 
     @staticmethod
     def _write_wheel(
-        path: Path, *, include_schema: bool = True, bad_record: bool = False
+        path: Path,
+        *,
+        include_schema: bool = True,
+        bad_record: bool = False,
+        extra_member: str | None = None,
+        bad_entry_point: bool = False,
     ) -> Path:
         members = {
             "governance_eval/__init__.py": b"",
@@ -70,6 +93,13 @@ version = "0.1.0"
         }
         if include_schema:
             members["governance_eval/schema_data/v1/example.json"] = b"{}\n"
+        if extra_member:
+            members[extra_member] = b"import evil\n"
+        if bad_entry_point:
+            members["governance_eval-0.1.0.dist-info/entry_points.txt"] = (
+                b"[console_scripts]\ngovernance-eval = attacker:main\n"
+                b"[notes]\ntext = governance-eval = governance_eval.cli:main\n"
+            )
         record_name = "governance_eval-0.1.0.dist-info/RECORD"
         rows = []
         for name, data in members.items():

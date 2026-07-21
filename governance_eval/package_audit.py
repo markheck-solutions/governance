@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import configparser
 import csv
 import io
 import json
@@ -20,6 +21,11 @@ from governance_eval.hashing import sha256_bytes, sha256_file
 SCHEMA_VERSION = "governance_package_audit.v1"
 MAX_MEMBERS = 5_000
 MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+
+
+class _EntryPointParser(configparser.ConfigParser):
+    def optionxform(self, optionstr: str) -> str:
+        return optionstr
 
 
 def run_package_audit(repo_root: Path, artifacts_dir: Path) -> dict[str, Any]:
@@ -130,6 +136,23 @@ def audit_wheel(repo_root: Path, wheel_path: Path) -> tuple[dict[str, Any], list
         entry_name = _one_suffix(names, ".dist-info/entry_points.txt", errors)
         record_name = _one_suffix(names, ".dist-info/RECORD", errors)
         if metadata_name:
+            dist_info = metadata_name.removesuffix("METADATA")
+            allowed = expected | {
+                dist_info + name
+                for name in (
+                    "METADATA",
+                    "RECORD",
+                    "WHEEL",
+                    "entry_points.txt",
+                    "top_level.txt",
+                )
+            }
+            outside_allowlist = sorted(set(names) - allowed)
+            if outside_allowlist:
+                errors.append(
+                    "unexpected wheel members: " + ", ".join(outside_allowlist)
+                )
+        if metadata_name:
             metadata = BytesParser().parsebytes(archive.read(metadata_name))
             expected_name = project["project"]["name"]
             expected_version = project["project"]["version"]
@@ -139,8 +162,7 @@ def audit_wheel(repo_root: Path, wheel_path: Path) -> tuple[dict[str, Any], list
                 errors.append("wheel metadata version mismatch")
         if entry_name:
             entry_points = archive.read(entry_name).decode("utf-8")
-            if "governance-eval = governance_eval.cli:main" not in entry_points:
-                errors.append("governance-eval console entry point missing")
+            errors.extend(_entry_point_errors(entry_points, project))
         if record_name:
             errors.extend(_record_errors(archive, record_name, names))
     evidence = {
@@ -210,6 +232,23 @@ def _one_suffix(names: list[str], suffix: str, errors: list[str]) -> str | None:
         errors.append(f"expected one {suffix}, found {len(matches)}")
         return None
     return matches[0]
+
+
+def _entry_point_errors(text: str, project: dict[str, Any]) -> list[str]:
+    parser = _EntryPointParser(interpolation=None, strict=True)
+    try:
+        parser.read_string(text)
+    except configparser.Error:
+        return ["wheel entry points are malformed"]
+    expected = project["project"].get("scripts", {})
+    observed = (
+        dict(parser.items("console_scripts"))
+        if parser.has_section("console_scripts")
+        else {}
+    )
+    if parser.sections() != ["console_scripts"] or observed != expected:
+        return ["wheel console entry points mismatch pyproject.toml"]
+    return []
 
 
 def _record_errors(
