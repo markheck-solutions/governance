@@ -111,6 +111,15 @@ def run_package_audit(
     root = repo_root.resolve()
     output = artifacts_dir.resolve()
     errors = _preflight_errors(root, output)
+    if errors:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "status": "FAIL",
+            "repo_root": str(root),
+            "build": _empty_build(build_timeout_seconds),
+            "wheel": None,
+            "errors": errors,
+        }
     output.mkdir(parents=True, exist_ok=True)
     wheel_dir = output / "wheel"
     wheel_dir.mkdir(exist_ok=True)
@@ -316,6 +325,9 @@ def _build_inputs(root: Path) -> list[Path]:
 
 
 def _copy_build_input(root: Path, workspace: Path, build_input: Path) -> None:
+    if build_input.is_symlink():
+        relative = build_input.relative_to(root)
+        raise DockerRuntimeError(f"candidate source symlink forbidden: {relative}")
     sources = [build_input] if build_input.is_file() else sorted(build_input.rglob("*"))
     for source in sources:
         if source.is_dir():

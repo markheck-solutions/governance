@@ -11,7 +11,9 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
+from governance_eval.docker_runtime import DockerRuntimeError
 from governance_eval.package_audit import (
+    _copy_build_input,
     _contained_build_argv,
     audit_wheel,
     run_package_audit,
@@ -21,6 +23,38 @@ LIVE_DOCKER = os.environ.get("GOVERNANCE_LIVE_DOCKER") == "1"
 
 
 class PackageAuditTests(unittest.TestCase):
+    def test_rejected_repo_local_artifact_path_creates_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_source(root)
+            output = root / "artifacts" / "package-audit"
+            with mock.patch(
+                "governance_eval.package_audit._run_contained_build"
+            ) as builder:
+                result = run_package_audit(root, output)
+            self.assertEqual(result["status"], "FAIL")
+            self.assertFalse(output.exists())
+            builder.assert_not_called()
+
+    def test_rejects_symlinked_source_root_before_recursing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "secret.py").write_text("secret = True\n", encoding="utf-8")
+            linked = root / "linked"
+            try:
+                linked.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+            workspace = root / "workspace"
+            workspace.mkdir()
+            with self.assertRaisesRegex(
+                DockerRuntimeError, "candidate source symlink forbidden: linked"
+            ):
+                _copy_build_input(root, workspace, linked)
+            self.assertFalse((workspace / "linked" / "secret.py").exists())
+
     def test_accepts_complete_wheel_and_rejects_missing_package_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
