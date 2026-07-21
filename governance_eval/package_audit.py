@@ -30,14 +30,62 @@ from governance_eval.execution_plan_v2 import _IMAGE
 from governance_eval.hashing import sha256_file
 
 SCHEMA_VERSION = "governance_package_audit.v1"
-MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_MEMBERS = 5_000
 MAX_MEMBER_UNCOMPRESSED_BYTES = 10 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
 MAX_METADATA_BYTES = 1024 * 1024
-MAX_BUILD_OUTPUT_BYTES = 1024 * 1024
+MAX_BUILD_OUTPUT_BYTES = 45 * 1024 * 1024
 BUILD_TIMEOUT_SECONDS = 120
+_WHEEL_MARKER = b"__GOVERNANCE_WHEEL_V1__"
+_BUILD_SCRIPT = f"""
+import base64
+import json
+import os
+import pathlib
+import shutil
+import stat
+import subprocess
+import sys
+
+source = pathlib.Path('/workspace/source')
+shutil.copytree('/candidate', source)
+for name in ('.home', '.tmp', 'dist'):
+    (pathlib.Path('/workspace') / name).mkdir()
+completed = subprocess.run([
+    sys.executable, '-m', 'pip', 'wheel', '--no-deps', '--no-index',
+    '--no-build-isolation', '.', '-w', '/workspace/dist'
+], cwd=source)
+if completed.returncode:
+    raise SystemExit(completed.returncode)
+wheels = sorted(pathlib.Path('/workspace/dist').glob('*.whl'))
+if len(wheels) != 1:
+    raise SystemExit('contained build must produce exactly one wheel')
+wheel = wheels[0]
+descriptor = os.open(wheel, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode):
+        raise SystemExit('contained wheel output must be a regular file')
+    if info.st_size > {MAX_ARCHIVE_BYTES}:
+        raise SystemExit('contained wheel exceeds archive size limit')
+    chunks = []
+    remaining = info.st_size
+    while remaining:
+        chunk = os.read(descriptor, min(65536, remaining))
+        if not chunk:
+            raise SystemExit('contained wheel output is truncated')
+        chunks.append(chunk)
+        remaining -= len(chunk)
+finally:
+    os.close(descriptor)
+payload = {{
+    'name': wheel.name,
+    'content_base64': base64.b64encode(b''.join(chunks)).decode('ascii'),
+}}
+print({_WHEEL_MARKER.decode("ascii")!r} + json.dumps(payload, separators=(',', ':')))
+""".strip()
 _COPY_EXCLUDED = {
     ".git",
     ".mypy_cache",
@@ -113,15 +161,15 @@ def _run_contained_build(
     _verify_image(docker, docker_host, _IMAGE)
     with tempfile.TemporaryDirectory(prefix="governance-package-build-") as directory:
         runtime_root = Path(directory).resolve()
-        workspace = runtime_root / "workspace"
+        source = runtime_root / "source"
         toolchain = runtime_root / "toolchain"
-        _stage_source(root, workspace)
+        _stage_source(root, source)
         toolchain_sha256, setuptools_version = _stage_build_toolchain(toolchain)
         container_name = f"governance-package-{uuid.uuid4().hex[:16]}"
         command = _contained_build_argv(
             docker,
             docker_host,
-            workspace,
+            source,
             toolchain,
             container_name,
             timeout_seconds,
@@ -136,15 +184,9 @@ def _run_contained_build(
         )
         if outcome["errors"]:
             raise DockerRuntimeError("; ".join(outcome["errors"]))
-        produced = sorted((workspace / "dist").glob("*.whl"))
         if outcome["termination"] == "EXITED" and outcome["exit_code"] == 0:
-            if len(produced) != 1:
-                raise DockerRuntimeError(
-                    f"contained build produced {len(produced)} wheels"
-                )
-            if produced[0].stat().st_size > MAX_ARCHIVE_BYTES:
-                raise DockerRuntimeError("contained wheel exceeds archive size limit")
-            shutil.copyfile(produced[0], wheel_dir / produced[0].name)
+            name, content = _extract_contained_wheel(outcome["stdout"])
+            (wheel_dir / name).write_bytes(content)
         return {
             "command": command,
             "image": _IMAGE,
@@ -168,7 +210,7 @@ def _run_contained_build(
 def _contained_build_argv(
     docker: Path,
     docker_host: str,
-    workspace: Path,
+    source: Path,
     toolchain: Path,
     container_name: str,
     timeout_seconds: int,
@@ -188,7 +230,7 @@ def _contained_build_argv(
         "--memory=536870912",
         "--cpus=1.0",
         f"--ulimit=cpu={timeout_seconds}:{timeout_seconds}",
-        "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
+        "--tmpfs=/workspace:rw,nosuid,nodev,size=67108864,mode=1777",
         "--env=HOME=/workspace/.home",
         "--env=TMPDIR=/workspace/.tmp",
         "--env=PYTHONNOUSERSITE=1",
@@ -196,21 +238,40 @@ def _contained_build_argv(
         "--env=PYTHONPATH=/opt/governance-build-toolchain",
         "--workdir=/workspace",
         "--mount",
-        f"type=bind,src={workspace},dst=/workspace",
+        f"type=bind,src={source},dst=/candidate,readonly",
         "--mount",
         f"type=bind,src={toolchain},dst=/opt/governance-build-toolchain,readonly",
         _IMAGE,
         "python",
-        "-m",
-        "pip",
-        "wheel",
-        "--no-deps",
-        "--no-index",
-        "--no-build-isolation",
-        ".",
-        "-w",
-        "/workspace/dist",
+        "-c",
+        _BUILD_SCRIPT,
     ]
+
+
+def _extract_contained_wheel(stream: dict[str, Any]) -> tuple[str, bytes]:
+    captured = base64.b64decode(stream["captured_base64"], validate=True)
+    payloads = [
+        line.removeprefix(_WHEEL_MARKER)
+        for line in captured.splitlines()
+        if line.startswith(_WHEEL_MARKER)
+    ]
+    if len(payloads) != 1:
+        raise DockerRuntimeError("contained wheel payload is missing or ambiguous")
+    try:
+        payload = json.loads(payloads[0])
+        name = payload["name"]
+        content = base64.b64decode(payload["content_base64"], validate=True)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise DockerRuntimeError("contained wheel payload is malformed") from exc
+    if (
+        not isinstance(name, str)
+        or Path(name).name != name
+        or not name.endswith(".whl")
+    ):
+        raise DockerRuntimeError("contained wheel name is invalid")
+    if len(content) > MAX_ARCHIVE_BYTES:
+        raise DockerRuntimeError("contained wheel exceeds archive size limit")
+    return name, content
 
 
 def _docker_identity() -> tuple[Path, str, str]:
@@ -230,7 +291,35 @@ def _docker_identity() -> tuple[Path, str, str]:
 
 def _stage_source(root: Path, workspace: Path) -> None:
     workspace.mkdir()
-    for source in sorted(root.rglob("*")):
+    for source in _build_inputs(root):
+        _copy_build_input(root, workspace, source)
+
+
+def _build_inputs(root: Path) -> list[Path]:
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    inputs = {root / "pyproject.toml", root / "governance_eval"}
+    for name in ("setup.py", "setup.cfg", "MANIFEST.in"):
+        if (root / name).is_file():
+            inputs.add(root / name)
+    build = project.get("build-system", {})
+    backend = str(build.get("build-backend", "")).partition(":")[0]
+    top_level = backend.partition(".")[0]
+    for value in build.get("backend-path", []):
+        relative = PurePosixPath(str(value))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise DockerRuntimeError("candidate backend path is unsafe")
+        backend_root = root.joinpath(*relative.parts)
+        for candidate in (backend_root / top_level, backend_root / f"{top_level}.py"):
+            if candidate.exists():
+                inputs.add(candidate)
+    return sorted(inputs)
+
+
+def _copy_build_input(root: Path, workspace: Path, build_input: Path) -> None:
+    sources = [build_input] if build_input.is_file() else sorted(build_input.rglob("*"))
+    for source in sources:
+        if source.is_dir():
+            continue
         relative = source.relative_to(root)
         if any(_excluded(part) for part in relative.parts):
             continue
@@ -243,9 +332,6 @@ def _stage_source(root: Path, workspace: Path) -> None:
         destination = workspace / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
-    for name in (".home", ".tmp", "dist"):
-        (workspace / name).mkdir()
-    _make_workspace_writable(workspace)
 
 
 def _excluded(part: str) -> bool:
@@ -271,13 +357,6 @@ def _stage_build_toolchain(destination: Path) -> tuple[str, str]:
         raise DockerRuntimeError("setuptools build toolchain is unavailable")
     manifest = "".join(f"{digest}  {path}\n" for path, digest in sorted(copied))
     return hashlib.sha256(manifest.encode("utf-8")).hexdigest(), distribution.version
-
-
-def _make_workspace_writable(root: Path) -> None:
-    if os.name == "nt":
-        return
-    for path in (root, *root.rglob("*")):
-        path.chmod(0o777 if path.is_dir() else 0o666)
 
 
 def audit_wheel(repo_root: Path, wheel_path: Path) -> tuple[dict[str, Any], list[str]]:

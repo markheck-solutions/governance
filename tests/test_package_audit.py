@@ -157,11 +157,13 @@ class PackageAuditTests(unittest.TestCase):
             "--memory=536870912",
             "--cpus=1.0",
             "--ulimit=cpu=120:120",
+            "--tmpfs=/workspace:rw,nosuid,nodev,size=67108864,mode=1777",
         ):
             self.assertIn(expected, command)
         self.assertFalse(any("TOKEN" in argument for argument in command))
         mounts = [item for item in command if item.startswith("type=bind")]
         self.assertEqual(len(mounts), 2)
+        self.assertTrue(mounts[0].endswith(",readonly"))
         self.assertTrue(mounts[1].endswith(",readonly"))
 
     @unittest.skipIf(not LIVE_DOCKER, "live Docker package boundary not selected")
