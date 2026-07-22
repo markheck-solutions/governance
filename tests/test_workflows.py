@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,20 @@ def _legacy_startup_receipt_strings() -> tuple[str, ...]:
         "Confirm " + boot + strap + " is still required",
         boot.capitalize() + strap + " reason",
         "remove " + boot + strap + " mode",
+    )
+
+
+def _normalized_enforcement_workflow(workflow: str) -> str:
+    workflow = re.sub(
+        r"(?m)(^    uses: markheck-solutions/governance/\.github/workflows/"
+        r"(?:supportability-gate|delivery-receipt)\.yml@)([0-9a-f]{40})(\s*$)",
+        r"\1<PIN>\3",
+        workflow,
+    )
+    return re.sub(
+        r"(?m)(^\s+governance-ref:\s+)([0-9a-f]{40})(\s*$)",
+        r"\1<PIN>\3",
+        workflow,
     )
 
 
@@ -421,12 +436,12 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-gate.yml"],
         )
         enforcement = workflows["supportability-enforcement.yml"]
-        activated_fixture = (
-            (self.root / "fixtures/supportability-enforcement-receipt-activated.yml")
-            .read_text(encoding="utf-8")
-            .replace("2" * 40, "50a7c1c958fe06056206429d7e2f194e0288738c")
+        self.assertEqual(
+            hashlib.sha256(
+                _normalized_enforcement_workflow(enforcement).encode("utf-8")
+            ).hexdigest(),
+            "07697d9a659b24615d95bd73eaebeb388c81d0c1cbdfc4af3d1773e258598b72",
         )
-        self.assertEqual(enforcement, activated_fixture)
         self.assertIn("pull_request_target:", enforcement)
         self.assertNotIn("pull_request_review:", enforcement)
         self.assertNotIn("issue_comment:", enforcement)
@@ -440,7 +455,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("issues: write", enforcement)
         self.assertIn("Codex review request transport unavailable", enforcement)
         self.assertIn("AI_REVIEW_UNAVAILABLE", enforcement)
-        self.assertIn("needs: request-codex-review", enforcement)
+        self.assertEqual(enforcement.count("      - request-codex-review"), 2)
         self.assertIn("baseline-supportability:", enforcement)
         self.assertIn("candidate-supportability:", enforcement)
         self.assertIn("Baseline Protected Supportability Gate", enforcement)
@@ -527,10 +542,12 @@ class WorkflowTests(unittest.TestCase):
             baseline_block,
         )
         self.assertIn(
-            "target-base-sha: ${{ github.event.pull_request.base.sha }}", baseline_block
+            "target-base-sha: ${{ needs.resolve-authority.outputs.target-base-sha }}",
+            baseline_block,
         )
         self.assertIn(
-            "target-head-sha: ${{ github.event.pull_request.head.sha }}", baseline_block
+            "target-head-sha: ${{ needs.resolve-authority.outputs.target-head-sha }}",
+            baseline_block,
         )
         self.assertIn(
             "governance-ref: 50a7c1c958fe06056206429d7e2f194e0288738c", baseline_block
@@ -540,7 +557,7 @@ class WorkflowTests(unittest.TestCase):
             candidate_block,
         )
         self.assertIn(
-            "target-head-sha: ${{ github.event.pull_request.head.sha }}",
+            "target-head-sha: ${{ needs.resolve-authority.outputs.target-head-sha }}",
             candidate_block,
         )
         self.assertIn(
@@ -557,11 +574,11 @@ class WorkflowTests(unittest.TestCase):
             "governance-ref: 50a7c1c958fe06056206429d7e2f194e0288738c", delivery_block
         )
         self.assertIn(
-            "if: ${{ github.event.pull_request.base.ref == 'main' }}",
+            "if: ${{ needs.resolve-authority.outputs.base-ref == 'main' }}",
             workflows["supportability-enforcement.yml"],
         )
         self.assertIn(
-            "if: ${{ always() && github.event.pull_request.base.ref == 'main' }}",
+            "if: ${{ always() && needs.resolve-authority.outputs.base-ref == 'main' }}",
             workflows["supportability-enforcement.yml"],
         )
 
@@ -994,12 +1011,12 @@ class ReusableWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             enforcement.count(
-                "if: ${{ github.event.pull_request.base.ref == 'main' }}"
+                "if: ${{ needs.resolve-authority.outputs.base-ref == 'main' }}"
             ),
             3,
         )
         self.assertIn(
-            "if: ${{ always() && github.event.pull_request.base.ref == 'main' }}",
+            "if: ${{ always() && needs.resolve-authority.outputs.base-ref == 'main' }}",
             enforcement,
         )
 
