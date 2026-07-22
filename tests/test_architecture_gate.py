@@ -84,7 +84,7 @@ class ArchitectureGateTests(unittest.TestCase):
         source = (
             self.root / ".github/workflows/supportability-enforcement.yml"
         ).read_text(encoding="utf-8")
-        current_pin = "198a794a085e81335e2139fbba5c96b582c0ca35"
+        current_pin = "50a7c1c958fe06056206429d7e2f194e0288738c"
         workflow = source.replace(current_pin, trusted_sha).replace(
             "jobs:\n", f"jobs:\n  # action pin: actions/checkout@{action_sha}\n", 1
         )

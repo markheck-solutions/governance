@@ -269,7 +269,7 @@ jobs:
     name: Baseline Protected Supportability Gate
     needs: request-codex-review
     if: ${{ github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@198a794a085e81335e2139fbba5c96b582c0ca35
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@50a7c1c958fe06056206429d7e2f194e0288738c
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
@@ -278,7 +278,7 @@ jobs:
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
       review-window-started-at: ${{ github.event.pull_request.updated_at }}
-      governance-ref: 198a794a085e81335e2139fbba5c96b582c0ca35
+      governance-ref: 50a7c1c958fe06056206429d7e2f194e0288738c
       request-outcome: ${{ needs['request-codex-review'].outputs['request-outcome'] }}
       request-transport-command-json: ${{ needs['request-codex-review'].outputs['request-transport-command-json'] }}
       request-transport-started-at: ${{ needs['request-codex-review'].outputs['request-transport-started-at'] }}
@@ -296,7 +296,7 @@ jobs:
     name: Candidate Supportability Gate
     needs: request-codex-review
     if: ${{ github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@198a794a085e81335e2139fbba5c96b582c0ca35
+    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@50a7c1c958fe06056206429d7e2f194e0288738c
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
@@ -305,7 +305,7 @@ jobs:
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
       review-window-started-at: ${{ github.event.pull_request.updated_at }}
-      governance-ref: 198a794a085e81335e2139fbba5c96b582c0ca35
+      governance-ref: 50a7c1c958fe06056206429d7e2f194e0288738c
       request-outcome: ${{ needs['request-codex-review'].outputs['request-outcome'] }}
       request-transport-command-json: ${{ needs['request-codex-review'].outputs['request-transport-command-json'] }}
       request-transport-started-at: ${{ needs['request-codex-review'].outputs['request-transport-started-at'] }}
@@ -325,7 +325,7 @@ jobs:
       - baseline-supportability
       - candidate-supportability
     if: ${{ always() && github.event.pull_request.base.ref == 'main' }}
-    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@198a794a085e81335e2139fbba5c96b582c0ca35
+    uses: markheck-solutions/governance/.github/workflows/delivery-receipt.yml@50a7c1c958fe06056206429d7e2f194e0288738c
     with:
       target-repository: ${{ github.repository }}
       target-repository-url: https://github.com/${{ github.repository }}.git
@@ -333,7 +333,7 @@ jobs:
       target-head-sha: ${{ github.event.pull_request.head.sha }}
       target-pr-number: ${{ github.event.pull_request.number }}
       target-pr-url: ${{ github.event.pull_request.html_url }}
-      governance-ref: 198a794a085e81335e2139fbba5c96b582c0ca35
+      governance-ref: 50a7c1c958fe06056206429d7e2f194e0288738c
       supportability-artifact-name: baseline-supportability-gate-evidence
       supportability-artifact-id: ${{ needs['baseline-supportability'].outputs['artifact-id'] || 'missing-baseline-supportability-artifact-id' }}
       supportability-artifact-digest: ${{ needs['baseline-supportability'].outputs['artifact-digest'] || 'missing-baseline-supportability-artifact-digest' }}
