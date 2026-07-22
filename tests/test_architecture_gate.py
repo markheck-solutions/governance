@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import re
 import subprocess
 import tempfile
 import unittest
@@ -85,7 +84,7 @@ class ArchitectureGateTests(unittest.TestCase):
         source = (
             self.root / ".github/workflows/supportability-enforcement.yml"
         ).read_text(encoding="utf-8")
-        current_pin = re.search(r"governance-ref:\s+([0-9a-f]{40})", source).group(1)
+        current_pin = "50a7c1c958fe06056206429d7e2f194e0288738c"
         workflow = source.replace(current_pin, trusted_sha).replace(
             "jobs:\n", f"jobs:\n  # action pin: actions/checkout@{action_sha}\n", 1
         )
