@@ -582,6 +582,18 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-enforcement.yml"],
         )
 
+    def test_protected_caller_handles_merge_group_checks(self) -> None:
+        enforcement = (
+            self.root / ".github/workflows/supportability-enforcement.yml"
+        ).read_text(encoding="utf-8")
+        top_permissions = enforcement.split("jobs:", 1)[0].split("permissions:", 1)[1]
+
+        self.assertIn(
+            "  merge_group:\n    branches:\n      - main\n    types:\n      - checks_requested",
+            enforcement,
+        )
+        self.assertIn("checks: read", top_permissions)
+
     def test_codex_reconciliation_uses_pre_execution_bound_config_without_architecture_drift(
         self,
     ) -> None:

@@ -14,6 +14,7 @@ from governance_eval.schema_validator import SchemaValidationError
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+_BRANCH_REF_PREFIX = "refs/heads/"
 _PATH_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
 _DIGEST_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
@@ -90,6 +91,21 @@ def validate_merge_group_artifact(
     )
     _require_equal(
         expected_group["ref"], actual_group["ref"], "artifact merge-group ref"
+    )
+    _require_equal(
+        expected_group.get("raw_ref"),
+        actual_group.get("raw_ref"),
+        "artifact raw merge-group ref",
+    )
+    _require_equal(
+        expected_group["base_ref"],
+        actual_group["base_ref"],
+        "artifact merge-group base ref",
+    )
+    _require_equal(
+        expected_group.get("raw_base_ref"),
+        actual_group.get("raw_base_ref"),
+        "artifact raw merge-group base ref",
     )
     _require_equal(
         expected_group["base_sha"],
@@ -329,16 +345,38 @@ def _merge_group_from_authority(value: Mapping[str, Any]) -> dict[str, str]:
 def _artifact_merge_group(value: Any) -> dict[str, str]:
     if not isinstance(value, Mapping):
         raise MergeGroupAuthorityError("artifact merge group is missing")
-    return {
-        "ref": _required_ref(value.get("ref"), "artifact merge-group ref"),
+    result = {
+        "ref": _required_branch_name(value.get("ref"), "artifact merge-group ref"),
         "sha": _required_sha(value.get("sha"), "artifact merge-group sha"),
-        "base_ref": _required_ref(
+        "base_ref": _required_branch_name(
             value.get("base_ref"), "artifact merge-group base ref"
         ),
         "base_sha": _required_sha(
             value.get("base_sha"), "artifact merge-group base sha"
         ),
     }
+    has_raw_ref = "raw_ref" in value
+    has_raw_base_ref = "raw_base_ref" in value
+    if has_raw_ref != has_raw_base_ref:
+        raise MergeGroupAuthorityError("artifact raw merge-group refs are incomplete")
+    if has_raw_ref:
+        raw_ref, canonical_ref = _normalize_branch_ref(
+            value.get("raw_ref"), "artifact raw merge-group ref"
+        )
+        raw_base_ref, canonical_base_ref = _normalize_branch_ref(
+            value.get("raw_base_ref"), "artifact raw merge-group base ref"
+        )
+        if canonical_ref != result["ref"]:
+            raise MergeGroupAuthorityError(
+                "artifact raw merge-group ref differs from canonical ref"
+            )
+        if canonical_base_ref != result["base_ref"]:
+            raise MergeGroupAuthorityError(
+                "artifact raw merge-group base ref differs from canonical ref"
+            )
+        result["raw_ref"] = raw_ref
+        result["raw_base_ref"] = raw_base_ref
+    return result
 
 
 def _pull_request_from_authority(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -363,7 +401,7 @@ def _artifact_pull_request(value: Any) -> dict[str, Any]:
         "base_sha": _required_sha(
             value.get("base_sha"), "artifact pull-request base sha"
         ),
-        "base_ref": _required_ref(
+        "base_ref": _required_branch_name(
             value.get("base_ref"), "artifact pull-request base ref"
         ),
     }
@@ -389,11 +427,20 @@ def _repository_identity(value: Any) -> dict[str, Any]:
 def _merge_group_identity(value: Any) -> dict[str, str]:
     if not isinstance(value, Mapping):
         raise MergeGroupAuthorityError("merge-group identity is missing")
-    ref = _required_ref(value.get("head_ref"), "merge-group ref")
+    raw_ref, ref = _normalize_branch_ref(value.get("head_ref"), "merge-group ref")
     sha = _required_sha(value.get("head_sha"), "merge-group sha")
-    base_ref = _required_ref(value.get("base_ref"), "merge-group base ref")
+    raw_base_ref, base_ref = _normalize_branch_ref(
+        value.get("base_ref"), "merge-group base ref"
+    )
     base_sha = _required_sha(value.get("base_sha"), "merge-group base sha")
-    return {"ref": ref, "sha": sha, "base_ref": base_ref, "base_sha": base_sha}
+    return {
+        "ref": ref,
+        "raw_ref": raw_ref,
+        "sha": sha,
+        "base_ref": base_ref,
+        "raw_base_ref": raw_base_ref,
+        "base_sha": base_sha,
+    }
 
 
 def _single_pull_request(
@@ -421,7 +468,7 @@ def _single_pull_request(
         "url": url,
         "head_sha": _required_sha(head.get("sha"), "pull-request head sha"),
         "base_sha": _required_sha(base.get("sha"), "pull-request base sha"),
-        "base_ref": _required_ref(base.get("ref"), "pull-request base ref"),
+        "base_ref": _required_branch_name(base.get("ref"), "pull-request base ref"),
     }
 
 
@@ -440,7 +487,27 @@ def _required_sha(value: Any, label: str) -> str:
     return value
 
 
-def _required_ref(value: Any, label: str) -> str:
+def _normalize_branch_ref(value: Any, label: str) -> tuple[str, str]:
     if not isinstance(value, str) or not _REF_RE.fullmatch(value):
+        raise MergeGroupAuthorityError(f"{label} is invalid")
+    if value.startswith(_BRANCH_REF_PREFIX):
+        canonical = value[len(_BRANCH_REF_PREFIX) :]
+    elif value.startswith("refs/"):
+        raise MergeGroupAuthorityError(f"{label} is invalid")
+    else:
+        canonical = value
+    return value, _required_branch_name(canonical, label)
+
+
+def _required_branch_name(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not _REF_RE.fullmatch(value)
+        or value.startswith(("/", ".", "refs/"))
+        or value.endswith(("/", "."))
+        or "//" in value
+        or ".." in value
+        or any(part.startswith(".") or part.endswith(".lock") for part in value.split("/"))
+    ):
         raise MergeGroupAuthorityError(f"{label} is invalid")
     return value

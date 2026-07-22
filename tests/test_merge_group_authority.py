@@ -14,7 +14,11 @@ from governance_eval.merge_group_authority import (
 )
 
 
-def authority() -> dict:
+def authority(
+    *,
+    head_ref: str = "refs/heads/gh-readonly-queue/main/pr-91-abc",
+    base_ref: str = "refs/heads/main",
+) -> dict:
     return resolve_merge_group_authority(
         {
             "repository": {
@@ -22,9 +26,9 @@ def authority() -> dict:
                 "full_name": "markheck-solutions/governance",
             },
             "merge_group": {
-                "head_ref": "gh-readonly-queue/main/pr-91-abc",
+                "head_ref": head_ref,
                 "head_sha": "a" * 40,
-                "base_ref": "main",
+                "base_ref": base_ref,
                 "base_sha": "b" * 40,
             },
         },
@@ -86,9 +90,9 @@ class MergeGroupAuthorityTests(unittest.TestCase):
                     "full_name": "markheck-solutions/governance",
                 },
                 "merge_group": {
-                    "head_ref": "gh-readonly-queue/main/pr-91-abc",
+                    "head_ref": "refs/heads/gh-readonly-queue/main/pr-91-abc",
                     "head_sha": "a" * 40,
-                    "base_ref": "main",
+                    "base_ref": "refs/heads/main",
                     "base_sha": "b" * 40,
                 },
             },
@@ -111,8 +115,10 @@ class MergeGroupAuthorityTests(unittest.TestCase):
                 },
                 "merge_group": {
                     "ref": "gh-readonly-queue/main/pr-91-abc",
+                    "raw_ref": "refs/heads/gh-readonly-queue/main/pr-91-abc",
                     "sha": "a" * 40,
                     "base_ref": "main",
+                    "raw_base_ref": "refs/heads/main",
                     "base_sha": "b" * 40,
                 },
                 "pull_request": {
@@ -124,6 +130,55 @@ class MergeGroupAuthorityTests(unittest.TestCase):
                 },
             },
         )
+
+    def test_canonicalizes_equivalent_short_and_fully_qualified_refs(self) -> None:
+        qualified = authority()
+        short = authority(
+            head_ref="gh-readonly-queue/main/pr-91-abc", base_ref="main"
+        )
+
+        self.assertEqual(qualified["merge_group"]["ref"], short["merge_group"]["ref"])
+        self.assertEqual(
+            qualified["merge_group"]["base_ref"], short["merge_group"]["base_ref"]
+        )
+        self.assertEqual(qualified["merge_group"]["raw_base_ref"], "refs/heads/main")
+        self.assertEqual(short["merge_group"]["raw_base_ref"], "main")
+
+    def test_rejects_invalid_merge_group_branch_refs(self) -> None:
+        invalid_refs = (
+            ("empty", "head_ref", ""),
+            ("tag", "head_ref", "refs/tags/v1.0.0"),
+            ("pull", "head_ref", "refs/pull/94/merge"),
+            ("malformed_namespace", "base_ref", "refs/head/main"),
+            ("malformed_branch", "base_ref", "refs/heads//main"),
+            ("unexpected_nested_namespace", "base_ref", "refs/heads/refs/tags/main"),
+        )
+        for name, field, value in invalid_refs:
+            current = authority()
+            event = {
+                "repository": current["repository"],
+                "merge_group": {
+                    "head_ref": current["merge_group"]["raw_ref"],
+                    "head_sha": current["merge_group"]["sha"],
+                    "base_ref": current["merge_group"]["raw_base_ref"],
+                    "base_sha": current["merge_group"]["base_sha"],
+                },
+            }
+            event["merge_group"][field] = value
+            pull = {
+                "number": current["pull_request"]["number"],
+                "html_url": current["pull_request"]["url"],
+                "head": {"sha": current["pull_request"]["head_sha"]},
+                "base": {
+                    "ref": current["pull_request"]["base_ref"],
+                    "sha": current["pull_request"]["base_sha"],
+                },
+            }
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(MergeGroupAuthorityError, "ref is invalid"),
+            ):
+                resolve_merge_group_authority(event, [pull])
 
     def test_rejects_candidate_head_artifact_for_merge_group(self) -> None:
         authority = resolve_merge_group_authority(
@@ -169,9 +224,9 @@ class MergeGroupAuthorityTests(unittest.TestCase):
         base_event = {
             "repository": authority()["repository"],
             "merge_group": {
-                "head_ref": authority()["merge_group"]["ref"],
+                "head_ref": authority()["merge_group"]["raw_ref"],
                 "head_sha": authority()["merge_group"]["sha"],
-                "base_ref": authority()["merge_group"]["base_ref"],
+                "base_ref": authority()["merge_group"]["raw_base_ref"],
                 "base_sha": authority()["merge_group"]["base_sha"],
             },
         }
@@ -200,9 +255,9 @@ class MergeGroupAuthorityTests(unittest.TestCase):
                 {
                     "repository": current["repository"],
                     "merge_group": {
-                        "head_ref": current["merge_group"]["ref"],
+                        "head_ref": current["merge_group"]["raw_ref"],
                         "head_sha": current["merge_group"]["sha"],
-                        "base_ref": current["merge_group"]["base_ref"],
+                        "base_ref": current["merge_group"]["raw_base_ref"],
                         "base_sha": current["merge_group"]["base_sha"],
                     },
                 },
@@ -256,7 +311,15 @@ class MergeGroupAuthorityTests(unittest.TestCase):
 
         self.assertEqual(receipt["base_branch"], "main")
         self.assertEqual(receipt["merge_group"]["sha"], "a" * 40)
+        self.assertEqual(
+            receipt["merge_group"]["raw_ref"],
+            "refs/heads/gh-readonly-queue/main/pr-91-abc",
+        )
+        self.assertEqual(receipt["merge_group"]["base_ref"], "main")
         self.assertEqual(receipt["pull_request"]["number"], 91)
+        self.assertEqual(receipt["pull_request"]["head_sha"], "c" * 40)
+        self.assertEqual(receipt["pull_request"]["base_sha"], "b" * 40)
+        self.assertEqual(receipt["repository"]["id"], 1280677092)
         self.assertEqual(receipt["workflow"]["github_app_id"], 15368)
 
     def test_receipt_generation_and_duplicate_delivery_are_idempotent(self) -> None:
@@ -291,6 +354,12 @@ class MergeGroupAuthorityTests(unittest.TestCase):
                 "ref",
                 "gh-readonly-queue/main/pr-91-other",
             ),
+            "raw_merge_group": (
+                "merge_group",
+                "raw_ref",
+                "refs/heads/gh-readonly-queue/main/pr-91-other",
+            ),
+            "canonical_base_ref": ("merge_group", "base_ref", "release"),
             "cross_pr": ("pull_request", "number", 93),
         }
         for name, (parent, key, value) in mutations.items():
