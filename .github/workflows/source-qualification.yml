@@ -1,0 +1,52 @@
+name: Governance Source Qualification
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  source-qualification:
+    name: Governance Source Qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted qualifier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-governance
+          persist-credentials: false
+      - name: Checkout exact candidate without execution
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+      - name: Install pinned trusted qualifier
+        working-directory: trusted-governance
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-governance.lock
+      - name: Validate candidate source contract with trusted base
+        working-directory: trusted-governance
+        run: python -m governance_eval.workflow_contract ../candidate
+      - name: Reconcile exact candidate workflow result
+        working-directory: trusted-governance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SOURCE_EVENT_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
+        run: python -m governance_eval.source_qualification

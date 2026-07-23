@@ -326,9 +326,10 @@ class ToolchainBootstrapProvisionTests(_ToolchainBootstrapTestCase):
         merge_group = self._evaluation_context(
             event_name="merge_group", event_action="checks_requested"
         )
-        self.assertEqual(
-            BOOTSTRAP._validated_evaluation_context(merge_group), merge_group
-        )
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError, "authoritative evaluation event invalid"
+        ):
+            BOOTSTRAP._validated_evaluation_context(merge_group)
 
     def test_supportability_evaluation_context_fails_closed(self) -> None:
         cases = {

@@ -23,6 +23,12 @@ from governance_eval.architecture_policy import (
 from governance_eval.hashing import sha256_file
 from governance_eval import merge_group_authority
 from governance_eval.paths import repo_root
+from governance_eval.protected_surface import (
+    protected_authority_paths as _protected_authority_paths,
+)
+from governance_eval.protected_surface import (
+    protected_checker_paths as _protected_checker_paths,
+)
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_named
 from governance_eval.trusted_command import run_bound_shell_command, split_command
@@ -978,27 +984,13 @@ def _architecture_governance_change_errors(
 ) -> list[str]:
     changed_set = {path.replace("\\", "/") for path in changed}
     errors: list[str] = []
-    checker_paths = {
-        "governance_eval/supportability.py",
-        "governance_eval/trusted_command.py",
-        "governance_eval/architecture_policy.py",
-        "governance_eval/architecture_gate.py",
-        "governance_eval/ai_review_gate.py",
-        "governance_eval/bootstrap_audit.py",
-        "governance_eval/codex_connector_collector.py",
-        "governance_eval/codex_connector_evidence.py",
-        "governance_eval/codex_review_gate.py",
-        "governance_eval/merge_group_authority.py",
-        "schemas/v1/architecture_gate_result.schema.json",
-        "schemas/v1/bootstrap_audit_receipt.schema.json",
-        "schemas/v1/delivery_receipt.schema.json",
-        "schemas/v1/governance_merge_group_receipt.schema.json",
-        "schemas/v1/supportability_config.schema.json",
-        "schemas/v2/codex_connector_evidence_result.schema.json",
-        "schemas/v3/codex_connector_evidence_result.schema.json",
-        "schemas/v4/codex_connector_evidence_result.schema.json",
-    }
-    touched_checkers = sorted(changed_set & checker_paths)
+    touched_authority = _protected_authority_paths(list(changed_set))
+    touched_checkers = _protected_checker_paths(list(changed_set))
+    companion_authority = sorted(
+        set(touched_authority)
+        - set(touched_checkers)
+        - {".github/governance/supportability.yml"}
+    )
     enforcement_path = ".github/workflows/supportability-enforcement.yml"
     if touched_checkers:
         required_tests = {
@@ -1018,6 +1010,12 @@ def _architecture_governance_change_errors(
             errors.append(
                 "protected checker and enforcement workflow cannot change in the same PR"
             )
+    if companion_authority and "tests/test_source_boundary.py" not in changed_set:
+        errors.append(
+            "protected authority change "
+            + ", ".join(companion_authority)
+            + " missing source-boundary regression test: tests/test_source_boundary.py"
+        )
     if enforcement_path in changed_set:
         errors.extend(
             _protected_enforcement_change_errors(

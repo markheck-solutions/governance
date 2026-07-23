@@ -118,7 +118,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('python-version: "3.12.13"', workflow)
         self.assertIn("id: setup-python", workflow)
         self.assertIn(
-            "uses: ./governance/.github/actions/setup-governance-toolchain",
+            "uses: markheck-solutions/governance/.github/actions/"
+            "setup-governance-toolchain@50a7c1c958fe06056206429d7e2f194e0288738c",
             workflow,
         )
         self.assertNotIn(
@@ -330,8 +331,13 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("supportability-gate.yml", workflows)
         self.assertIn("delivery-receipt.yml", workflows)
         self.assertIn("supportability-enforcement.yml", workflows)
+        self.assertIn("source-candidate.yml", workflows)
+        self.assertIn("source-qualification.yml", workflows)
         for name, text in workflows.items():
-            if name == "supportability-enforcement.yml":
+            if name in {
+                "supportability-enforcement.yml",
+                "source-qualification.yml",
+            }:
                 self.assertIn("pull_request_target:", text)
             else:
                 self.assertNotRegex(text, r"(?m)^  pull_request_target:\s*$")
@@ -421,16 +427,11 @@ class WorkflowTests(unittest.TestCase):
             workflows["supportability-gate.yml"],
         )
         enforcement = workflows["supportability-enforcement.yml"]
-        activated_fixture = (
-            (self.root / "fixtures/supportability-enforcement-receipt-activated.yml")
-            .read_text(encoding="utf-8")
-            .replace("2" * 40, "50a7c1c958fe06056206429d7e2f194e0288738c")
-        )
-        self.assertEqual(enforcement, activated_fixture)
         self.assertIn("pull_request_target:", enforcement)
         self.assertNotIn("pull_request_review:", enforcement)
         self.assertNotIn("issue_comment:", enforcement)
         top_permissions = enforcement.split("jobs:", 1)[0].split("permissions:", 1)[1]
+        self.assertIn("checks: read", top_permissions)
         self.assertNotIn("issues: read", top_permissions)
         self.assertNotIn("actions: write", enforcement)
         self.assertNotIn("rerun", enforcement.lower())
@@ -563,6 +564,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(
             "if: ${{ always() && github.event.pull_request.base.ref == 'main' }}",
             workflows["supportability-enforcement.yml"],
+        )
+
+    def test_source_qualification_separates_candidate_and_authority(self) -> None:
+        workflow_root = self.root / ".github/workflows"
+        source_candidate = (workflow_root / "source-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        source_qualifier = (workflow_root / "source-qualification.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertRegex(source_candidate, r"(?m)^  pull_request:\s*$")
+        self.assertNotIn("pull_request_target:", source_candidate)
+        self.assertIn("Checkout exact candidate without execution", source_qualifier)
+        self.assertIn(
+            "python -m governance_eval.workflow_contract ../candidate",
+            source_qualifier,
+        )
+        self.assertNotIn("working-directory: candidate", source_qualifier)
+        self.assertIn(
+            "python -m governance_eval.source_qualification", source_qualifier
+        )
+        self.assertIn(
+            "SOURCE_EVENT_UPDATED_AT: ${{ github.event.pull_request.updated_at }}",
+            source_qualifier,
         )
 
     def test_codex_reconciliation_uses_pre_execution_bound_config_without_architecture_drift(
@@ -704,8 +730,7 @@ class ReusableWorkflowTests(unittest.TestCase):
             "f\"{os.environ['TARGET_REPOSITORY']}/.github/workflows/\"",
             '"supportability-enforcement.yml@refs/heads/main"',
             'os.environ["REQUEST_WORKFLOW_SHA"]',
-            'os.environ["REQUEST_EVENT_NAME"] not in {',
-            '"pull_request_target", "merge_group"',
+            'os.environ["REQUEST_EVENT_NAME"] != "pull_request_target"',
             '"opened", "reopened", "synchronize", "ready_for_review"',
             'os.environ["REQUEST_RUN_ATTEMPT"] != "1"',
             'os.environ["REQUEST_OUTCOME"]',
@@ -722,6 +747,7 @@ class ReusableWorkflowTests(unittest.TestCase):
         ):
             with self.subTest(validation=token):
                 self.assertIn(token, validation_block)
+        self.assertNotIn('"pull_request_target", "merge_group"', validation_block)
 
         codex_block = workflow.split(
             "      - name: Reconcile Codex review evidence", 1

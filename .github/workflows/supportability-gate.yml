@@ -249,36 +249,16 @@ jobs:
           if not sha_re.fullmatch(os.environ["REQUEST_WORKFLOW_SHA"]):
               print("Invalid request workflow SHA", file=sys.stderr)
               raise SystemExit(64)
-          if os.environ["REQUEST_EVENT_NAME"] not in {
-              "pull_request_target", "merge_group"
-          }:
+          if os.environ["REQUEST_EVENT_NAME"] != "pull_request_target":
               print("Invalid request event", file=sys.stderr)
               raise SystemExit(64)
           allowed_actions = {
               "opened", "reopened", "synchronize", "ready_for_review",
-              "checks_requested",
           }
           if os.environ["REQUEST_EVENT_ACTION"] not in allowed_actions:
               print("Invalid request event action", file=sys.stderr)
               raise SystemExit(64)
-          if os.environ["REQUEST_EVENT_NAME"] == "merge_group":
-              if (
-                  os.environ["REQUEST_EVENT_ACTION"] != "checks_requested"
-                  or os.environ["MERGE_GROUP_SHA"] != os.environ["TARGET_HEAD_SHA"]
-                  or os.environ["TARGET_PR_BASE_SHA"] != os.environ["TARGET_BASE_SHA"]
-                  or not sha_re.fullmatch(os.environ["MERGE_GROUP_SHA"])
-                  or not os.environ["MERGE_GROUP_REF"].startswith(
-                      "gh-readonly-queue/"
-                  )
-                  or not re.fullmatch(
-                      r"merge-group:[1-9][0-9]*:[1-9][0-9]*",
-                      os.environ["MERGE_GROUP_EVENT_ID"],
-                  )
-                  or not valid_timestamp(os.environ["EVENT_CREATED_AT"])
-              ):
-                  print("Invalid merge-group authority inputs", file=sys.stderr)
-                  raise SystemExit(64)
-          elif (
+          if (
               os.environ["TARGET_PR_HEAD_SHA"] != os.environ["TARGET_HEAD_SHA"]
               or os.environ["TARGET_PR_BASE_SHA"] != os.environ["TARGET_BASE_SHA"]
               or os.environ["MERGE_GROUP_SHA"]
@@ -386,7 +366,7 @@ jobs:
           PY
       - name: Provision pinned governance toolchain
         id: toolchain
-        uses: ./governance/.github/actions/setup-governance-toolchain
+        uses: markheck-solutions/governance/.github/actions/setup-governance-toolchain@50a7c1c958fe06056206429d7e2f194e0288738c
         with:
           context-kind: SUPPORTABILITY_EVALUATION
           governance-root: governance

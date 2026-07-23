@@ -81,7 +81,9 @@ class SelfUpdatePolicyTests(unittest.TestCase):
                     any("protected checker change" in error for error in errors)
                 )
 
-    def test_architecture_runner_transition_is_exact_workflow_change(self) -> None:
+    def test_historical_architecture_runner_transition_hashes_are_immutable(
+        self,
+    ) -> None:
         base = (REPO_ROOT / ".github/workflows/supportability-gate.yml").read_text(
             encoding="utf-8"
         )
@@ -91,16 +93,15 @@ class SelfUpdatePolicyTests(unittest.TestCase):
             1,
         )
 
-        self.assertTrue(
+        self.assertEqual(
+            architecture_policy._ARCHITECTURE_WORKFLOW_TRANSITION_SHA256,
+            (
+                "bdabb33a0b4f7baaa9adc930446cbff1ea720046e32aab746e0e5578af1efcc4",
+                "90498709dcb54a50431be386f7c40ae432c5fbfc3c4ae3894ff61728b173a92a",
+            ),
+        )
+        self.assertFalse(
             architecture_policy.architecture_workflow_transition_allowed(base, head)
-        )
-        self.assertEqual(
-            hashlib.sha256(base.encode()).hexdigest(),
-            architecture_policy._ARCHITECTURE_WORKFLOW_TRANSITION_SHA256[0],
-        )
-        self.assertEqual(
-            hashlib.sha256(head.encode()).hexdigest(),
-            architecture_policy._ARCHITECTURE_WORKFLOW_TRANSITION_SHA256[1],
         )
 
     def test_architecture_runner_transition_rejects_companion_workflow_change(

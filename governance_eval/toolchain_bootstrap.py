@@ -79,7 +79,7 @@ _SHADOW_CONTEXT_FIELDS = (
     "expected_artifact_name",
 )
 _EVALUATION_ACTIONS = frozenset(
-    {"opened", "reopened", "synchronize", "ready_for_review", "checks_requested"}
+    {"opened", "reopened", "synchronize", "ready_for_review"}
 )
 _ARTIFACT_AUTHORITY_FIELDS = (
     "artifact_id",
@@ -507,13 +507,8 @@ def _validated_evaluation_context(
         expected_kind="SUPPORTABILITY_EVALUATION",
         label="evaluation",
     )
-    if context["event_name"] not in {"pull_request_target", "merge_group"}:
+    if context["event_name"] != "pull_request_target":
         raise BootstrapError("authoritative evaluation event invalid")
-    if (
-        context["event_name"] == "merge_group"
-        and context["event_action"] != "checks_requested"
-    ):
-        raise BootstrapError("authoritative merge-group evaluation action invalid")
     if context["event_action"] not in _EVALUATION_ACTIONS:
         raise BootstrapError("authoritative evaluation action invalid")
     pull_request_number = context["pull_request_number"]
