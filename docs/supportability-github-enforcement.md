@@ -1,6 +1,6 @@
 # GitHub supportability enforcement
 
-This repository provides repo-agnostic, reusable GitHub Actions. Application repositories supply a typed supportability configuration and pin reusable workflows to an exact Governance commit SHA.
+This repository publishes repo-agnostic Governance components. Adopter repositories supply typed configuration and pin an exact certified Governance SHA. Governance source uses separate source qualification; every Governance product workflow on Governance source is diagnostic.
 
 ## Merge decision
 
@@ -29,18 +29,18 @@ These values are fixed by schema. Target repositories cannot substitute reviewer
 
 ## Event model
 
-`supportability-enforcement.yml` uses `pull_request_target` so GitHub loads the caller from the protected base branch, not from candidate code. It runs only for pull-request head transitions:
+The standard adopter profile accepts only `pull_request_target` request evidence for these pull-request head transitions:
 
 - `opened`
 - `reopened`
 - `synchronize`
 - `ready_for_review`
 
-The workflow attempts one `@codex review` request bound to the exact new head, then starts the evidence window. GitHub may reject a GitHub Actions bot-to-bot trigger with `403 Resource not accessible by integration`; the request job records that transport failure as a warning and continues into deterministic reconciliation. No PAT or Copilot fallback is required. That bounded request job has `issues: write`; evaluator and receipt jobs remain read-only. Candidate code is checked out with `persist-credentials: false`, and configured commands receive an empty `GH_TOKEN`. There is no comment-triggered rerun loop and no `actions: write` permission. The protected baseline and delivery workflows are pinned to an exact publication commit; the candidate evaluator is separately exercised against the PR head. Each reusable workflow has a hard ten-minute timeout. The Codex collector performs at most one bounded sleep and one final recollection after the five-minute deadline.
+Candidate execution belongs in a separate `pull_request` workflow with no secrets, no write token, and no authoritative check identity. It may upload only untrusted evidence. The external verifier never checks out or executes candidate code; it validates hostile artifacts and exact identities before its dedicated GitHub App publishes the adopter's required result. Merge-group support is a later optional profile and requires live eligibility proof.
 
 ## Required checks
 
-Protect `main` with the existing four check contexts produced by the enforcement workflow. Do not rename or delete required contexts during bootstrap. Apply protection changes only through the controlled procedure in `TASK.md`.
+On Governance source, require only `Governance Source Qualification`; product contexts are diagnostic. On an adopter, require the one stable context published by the dedicated external verifier App. Apply protection only through the evidence-backed procedure in `TASK.md`.
 
 ## Evidence artifacts
 
@@ -57,4 +57,4 @@ The delivery workflow rejects missing artifacts, mismatched artifact digests, in
 
 ## Adoption boundary
 
-Do not roll this framework into target repositories until Governance passes its own protected checks and positive/negative canaries. Target repositories remain read-only during Governance Phase 1 evaluation.
+Do not roll this framework into application repositories until exact publication qualification, verifier-App binding, rollback proof, and every disposable positive/negative canary pass. Target repositories remain read-only until an explicit installation.

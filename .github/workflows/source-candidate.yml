@@ -1,0 +1,131 @@
+name: Governance Source Candidate
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  source-static:
+    name: Governance Source Static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted toolchain
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-governance
+          persist-credentials: false
+      - name: Checkout exact candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+      - name: Install pinned source toolchain
+        working-directory: trusted-governance
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-governance.lock
+      - name: Run source lint
+        working-directory: candidate
+        run: python -I -m ruff check --isolated --target-version py312 .
+      - name: Run source format check
+        working-directory: candidate
+        run: python -I -m ruff format --check --isolated --target-version py312 .
+      - name: Run source complexity check
+        working-directory: candidate
+        run: python -I -m ruff check --isolated --select C901 --config "lint.mccabe.max-complexity=10" --target-version py312 governance_eval
+      - name: Run source type check
+        working-directory: candidate
+        run: python -I -m mypy --config-file ../trusted-governance/pyproject.toml governance_eval
+
+  source-tests:
+    name: Governance Source Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted toolchain
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-governance
+          persist-credentials: false
+      - name: Checkout exact candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+      - name: Install pinned source toolchain
+        working-directory: trusted-governance
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-governance.lock
+      - name: Run source tests
+        working-directory: candidate
+        run: python -I -m unittest discover -s tests -p 'test_*.py'
+
+  source-build:
+    name: Governance Source Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted toolchain
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-governance
+          persist-credentials: false
+      - name: Checkout exact candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up exact Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+      - name: Install pinned source toolchain
+        working-directory: trusted-governance
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-governance.lock
+      - name: Build source wheel
+        working-directory: candidate
+        run: python -I -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+
+  source-candidate:
+    name: Governance Source Candidate Result
+    if: ${{ always() }}
+    needs:
+      - source-static
+      - source-tests
+      - source-build
+    permissions: {}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    env:
+      STATIC_RESULT: ${{ needs.source-static.result }}
+      TEST_RESULT: ${{ needs.source-tests.result }}
+      BUILD_RESULT: ${{ needs.source-build.result }}
+    steps:
+      - name: Enforce exact candidate results
+        shell: bash
+        run: |
+          test "$STATIC_RESULT" = "success"
+          test "$TEST_RESULT" = "success"
+          test "$BUILD_RESULT" = "success"

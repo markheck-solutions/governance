@@ -934,6 +934,7 @@ class SupportabilityGateTests(unittest.TestCase):
                 "tests/test_codex_connector_evidence.py",
                 "tests/test_codex_review_gate.py",
                 "tests/test_self_update_policy.py",
+                "tests/test_source_boundary.py",
                 "tests/test_supportability.py",
                 "tests/test_trusted_command.py",
                 "tests/test_workflows.py",
