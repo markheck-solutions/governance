@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import stat
 import tempfile
 import unittest
 from hashlib import sha256
@@ -15,6 +16,7 @@ from governance_eval.standard_profile import (
     _fixed_commands,
     _import_cycle_errors,
     _integrity_result,
+    _release_workspace_directories,
     _source_snapshot,
 )
 from governance_eval.unittest_runner import _accepted
@@ -98,6 +100,17 @@ class StandardProfileTests(unittest.TestCase):
             result = _integrity_result(root, initial)
             self.assertEqual(result["status"], "BLOCK_TECHNICAL")
             self.assertEqual(result["evidence"]["changed_files"], ["created.py"])
+
+    def test_releases_container_owned_directories_for_host_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "generated" / "nested"
+            nested.mkdir(parents=True)
+            nested.chmod(0o500)
+
+            _release_workspace_directories(root, nested.stat().st_uid)
+
+            self.assertEqual(stat.S_IMODE(nested.stat().st_mode), 0o777)
 
     def test_profile_marker_requires_exact_typed_capabilities(self) -> None:
         plan = compile_execution_plan_v2(

@@ -67,12 +67,26 @@ def run_standard_profile(
         if all(item["status"] == "PASS" for item in results)
         else "BLOCK_TECHNICAL"
     )
+    _release_workspace_directories(root)
     return {
         "schema_version": "1.0",
         "profile": "python.standard.v1",
         "status": status,
         "capabilities": results,
     }
+
+
+def _release_workspace_directories(root: Path, owner: int | None = None) -> None:
+    if owner is None:
+        getuid = getattr(os, "getuid", None)
+        if not callable(getuid):
+            raise RuntimeError("standard profile requires POSIX ownership")
+        owner = int(getuid())
+    for current, directories, _files in os.walk(root, topdown=True):
+        for name in directories:
+            path = Path(current) / name
+            if not path.is_symlink() and path.stat().st_uid == owner:
+                path.chmod(0o777)
 
 
 def _fixed_commands(
