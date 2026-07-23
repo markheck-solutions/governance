@@ -67,6 +67,7 @@ def registration_url() -> str:
         ("url", APP_HOMEPAGE),
         ("public", "false"),
         ("webhook_active", "false"),
+        ("webhook_url", APP_HOMEPAGE),
         ("request_oauth_on_install", "false"),
         ("setup_on_update", "false"),
         *sorted(APP_PERMISSIONS.items()),

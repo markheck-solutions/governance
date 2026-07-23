@@ -54,6 +54,10 @@ class GitHubAppManifestTests(unittest.TestCase):
         self.assertEqual({key: query[key] for key in APP_PERMISSIONS}, APP_PERMISSIONS)
         self.assertEqual(query["public"], "false")
         self.assertEqual(query["webhook_active"], "false")
+        self.assertEqual(
+            query["webhook_url"],
+            "https://github.com/markheck-solutions/governance-verifier",
+        )
         self.assertNotIn("callback_urls[]", query)
         self.assertNotIn("events[]", query)
 
