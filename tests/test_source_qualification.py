@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import unittest
+from datetime import UTC, datetime
 from typing import Any
 
 from governance_eval.source_qualification import (
@@ -17,6 +18,7 @@ REPOSITORY = "markheck-solutions/governance"
 HEAD_SHA = "a" * 40
 PR_NUMBER = 101
 RUN_ID = 7001
+EVENT_UPDATED_AT = datetime(2026, 7, 23, 16, 0, tzinfo=UTC)
 
 
 def _run() -> dict[str, Any]:
@@ -26,6 +28,7 @@ def _run() -> dict[str, Any]:
         "path": ".github/workflows/source-candidate.yml",
         "event": "pull_request",
         "head_sha": HEAD_SHA,
+        "created_at": "2026-07-23T16:00:01Z",
         "run_attempt": 1,
         "repository": {"full_name": REPOSITORY},
         "pull_requests": [{"number": PR_NUMBER}],
@@ -71,6 +74,7 @@ class SourceQualificationTests(unittest.TestCase):
                 repository=REPOSITORY,
                 head_sha=HEAD_SHA,
                 pr_number=PR_NUMBER,
+                event_updated_at=EVENT_UPDATED_AT,
             ),
             [],
         )
@@ -95,6 +99,7 @@ class SourceQualificationTests(unittest.TestCase):
                         repository=REPOSITORY,
                         head_sha=HEAD_SHA,
                         pr_number=PR_NUMBER,
+                        event_updated_at=EVENT_UPDATED_AT,
                     ),
                     [],
                 )
@@ -132,7 +137,42 @@ class SourceQualificationTests(unittest.TestCase):
         payload = {"workflow_runs": [wrong_pr, wrong_head, valid]}
 
         self.assertEqual(
-            _matching_runs(payload, head_sha=HEAD_SHA, pr_number=PR_NUMBER), [valid]
+            _matching_runs(
+                payload,
+                head_sha=HEAD_SHA,
+                pr_number=PR_NUMBER,
+                event_updated_at=EVENT_UPDATED_AT,
+            ),
+            [valid],
+        )
+
+    def test_matching_runs_rejects_prior_run_for_reused_head(self) -> None:
+        stale = _run()
+        stale["created_at"] = "2026-07-23T15:59:59Z"
+        current = _run()
+        current["id"] = RUN_ID + 1
+        payload = {"workflow_runs": [stale, current]}
+
+        self.assertEqual(
+            _matching_runs(
+                payload,
+                head_sha=HEAD_SHA,
+                pr_number=PR_NUMBER,
+                event_updated_at=EVENT_UPDATED_AT,
+            ),
+            [current],
+        )
+        self.assertTrue(
+            any(
+                "predates the current pull-request event" in error
+                for error in candidate_run_errors(
+                    stale,
+                    repository=REPOSITORY,
+                    head_sha=HEAD_SHA,
+                    pr_number=PR_NUMBER,
+                    event_updated_at=EVENT_UPDATED_AT,
+                )
+            )
         )
 
 

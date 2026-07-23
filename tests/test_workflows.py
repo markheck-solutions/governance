@@ -586,6 +586,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(
             "python -m governance_eval.source_qualification", source_qualifier
         )
+        self.assertIn(
+            "SOURCE_EVENT_UPDATED_AT: ${{ github.event.pull_request.updated_at }}",
+            source_qualifier,
+        )
 
     def test_codex_reconciliation_uses_pre_execution_bound_config_without_architecture_drift(
         self,

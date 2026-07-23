@@ -48,4 +48,5 @@ jobs:
           SOURCE_REPOSITORY: ${{ github.repository }}
           SOURCE_PR_NUMBER: ${{ github.event.pull_request.number }}
           SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SOURCE_EVENT_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
         run: python -m governance_eval.source_qualification

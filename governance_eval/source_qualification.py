@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -26,6 +27,16 @@ _EXPECTED_JOBS = frozenset(
 _POLL_ATTEMPTS = 54
 _POLL_SECONDS = 10
 _MAX_RESPONSE_BYTES = 1_000_000
+_UTC_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+
+
+def _parse_utc_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or _UTC_TIMESTAMP.fullmatch(value) is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 def _pull_request_numbers(run: dict[str, Any]) -> set[int]:
@@ -42,7 +53,11 @@ def _pull_request_numbers(run: dict[str, Any]) -> set[int]:
 
 
 def _matching_runs(
-    payload: object, *, head_sha: str, pr_number: int
+    payload: object,
+    *,
+    head_sha: str,
+    pr_number: int,
+    event_updated_at: datetime,
 ) -> list[dict[str, Any]]:
     if not isinstance(payload, dict) or not isinstance(
         payload.get("workflow_runs"), list
@@ -55,11 +70,18 @@ def _matching_runs(
         and run.get("head_sha") == head_sha
         and run.get("event") == "pull_request"
         and pr_number in _pull_request_numbers(run)
+        and (created_at := _parse_utc_timestamp(run.get("created_at"))) is not None
+        and created_at >= event_updated_at
     ]
 
 
 def candidate_run_errors(
-    run: object, *, repository: str, head_sha: str, pr_number: int
+    run: object,
+    *,
+    repository: str,
+    head_sha: str,
+    pr_number: int,
+    event_updated_at: datetime,
 ) -> list[str]:
     if not isinstance(run, dict):
         return ["candidate workflow run is not an object"]
@@ -88,6 +110,9 @@ def candidate_run_errors(
         errors.append("candidate workflow did not complete successfully")
     if type(run.get("id")) is not int or run["id"] <= 0:
         errors.append("candidate workflow run ID is invalid")
+    created_at = _parse_utc_timestamp(run.get("created_at"))
+    if created_at is None or created_at < event_updated_at:
+        errors.append("candidate workflow run predates the current pull-request event")
     return errors
 
 
@@ -134,7 +159,12 @@ def _api_json(url: str, token: str) -> object:
 
 
 def _wait_for_candidate_run(
-    *, repository: str, head_sha: str, pr_number: int, token: str
+    *,
+    repository: str,
+    head_sha: str,
+    pr_number: int,
+    event_updated_at: datetime,
+    token: str,
 ) -> dict[str, Any]:
     query = urlencode(
         {"event": "pull_request", "head_sha": head_sha, "per_page": "100"}
@@ -142,7 +172,10 @@ def _wait_for_candidate_run(
     url = f"{_API_ROOT}/repos/{repository}/actions/workflows/{_WORKFLOW_FILE}/runs?{query}"
     for attempt in range(_POLL_ATTEMPTS):
         matches = _matching_runs(
-            _api_json(url, token), head_sha=head_sha, pr_number=pr_number
+            _api_json(url, token),
+            head_sha=head_sha,
+            pr_number=pr_number,
+            event_updated_at=event_updated_at,
         )
         if len(matches) > 1:
             raise ValueError("multiple candidate workflow runs match the exact PR head")
@@ -153,10 +186,13 @@ def _wait_for_candidate_run(
     raise TimeoutError("candidate workflow did not complete before the source cutoff")
 
 
-def _validated_environment() -> tuple[str, int, str, str]:
+def _validated_environment() -> tuple[str, int, str, datetime, str]:
     repository = os.environ.get("SOURCE_REPOSITORY", "")
     pr_text = os.environ.get("SOURCE_PR_NUMBER", "")
     head_sha = os.environ.get("SOURCE_HEAD_SHA", "")
+    event_updated_at = _parse_utc_timestamp(
+        os.environ.get("SOURCE_EVENT_UPDATED_AT", "")
+    )
     token = os.environ.get("GH_TOKEN", "")
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
         raise ValueError("source repository identity is invalid")
@@ -164,21 +200,28 @@ def _validated_environment() -> tuple[str, int, str, str]:
         raise ValueError("source pull-request number is invalid")
     if re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
         raise ValueError("source head SHA is invalid")
+    if event_updated_at is None:
+        raise ValueError("source pull-request event timestamp is invalid")
     if not token:
         raise ValueError("source GitHub token is missing")
-    return repository, int(pr_text), head_sha, token
+    return repository, int(pr_text), head_sha, event_updated_at, token
 
 
 def reconcile() -> dict[str, object]:
-    repository, pr_number, head_sha, token = _validated_environment()
+    repository, pr_number, head_sha, event_updated_at, token = _validated_environment()
     run = _wait_for_candidate_run(
         repository=repository,
         head_sha=head_sha,
         pr_number=pr_number,
+        event_updated_at=event_updated_at,
         token=token,
     )
     errors = candidate_run_errors(
-        run, repository=repository, head_sha=head_sha, pr_number=pr_number
+        run,
+        repository=repository,
+        head_sha=head_sha,
+        pr_number=pr_number,
+        event_updated_at=event_updated_at,
     )
     run_id = run.get("id")
     if type(run_id) is int and run_id > 0:
