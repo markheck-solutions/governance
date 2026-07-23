@@ -44,6 +44,15 @@ jobs:
           python-version: "3.12.13"
           check-latest: false
 
+      - name: Pull exact candidate runtime image
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+        run: |
+          set -euo pipefail
+          timeout 120 docker pull "python@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d"
+
       - name: Provision pinned candidate toolchain
         shell: bash
         env:

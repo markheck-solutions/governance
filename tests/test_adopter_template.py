@@ -38,6 +38,10 @@ class AdopterTemplateTests(unittest.TestCase):
         self.assertIn("--read-only", self._runtime_source())
         self.assertIn("--security-opt=no-new-privileges:true", self._runtime_source())
         self.assertNotIn("docker.sock", rendered)
+        self.assertIn(
+            'timeout 120 docker pull "python@sha256:',
+            rendered,
+        )
 
     def test_rejects_mutable_or_malformed_governance_refs(self) -> None:
         for value in ("main", "v1", "A" * 40, "a" * 39, "a" * 41):
