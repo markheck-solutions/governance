@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class CapabilityAdapter:
     capability: str
     adapter_id: str
+    assurance_class: str
     runtime_id: str
     module: str
     arguments: tuple[str, ...]
@@ -19,6 +20,7 @@ _ADAPTERS = {
     ("lint", "python.ruff-check.v1"): CapabilityAdapter(
         capability="lint",
         adapter_id="python.ruff-check.v1",
+        assurance_class="EVALUATOR_AUTHORITATIVE",
         runtime_id="evaluator.python-isolated.v1",
         module="ruff",
         arguments=("check", "--isolated", "--no-cache", "--no-respect-gitignore", "."),

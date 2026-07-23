@@ -1,0 +1,109 @@
+name: Governance Authoritative Verifier
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Exact adopter repository (owner/name)
+        required: true
+        type: string
+      pull_request:
+        description: Pull request number
+        required: true
+        type: number
+      run_id:
+        description: Candidate workflow run ID
+        required: true
+        type: number
+      run_attempt:
+        description: Candidate workflow run attempt
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governance-verifier-${{ inputs.repository }}-${{ inputs.pull_request }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Governance Authoritative Verifier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact Governance verifier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: markheck-solutions/governance
+          ref: __GOVERNANCE_SHA__
+          path: governance
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up exact Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+          check-latest: false
+
+      - name: Create minimum verifier App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.GOVERNANCE_VERIFIER_CLIENT_ID }}
+          private-key: ${{ secrets.GOVERNANCE_VERIFIER_APP_PRIVATE_KEY }}
+          owner: markheck-solutions
+          permission-actions: read
+          permission-checks: write
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: read
+
+      - name: Install exact verifier code
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          PYTHONHOME: ""
+          PYTHONPATH: ""
+        run: |
+          set -euo pipefail
+          runtime="${RUNNER_TEMP}/governance-verifier-runtime"
+          install_source="${RUNNER_TEMP}/governance-verifier-source"
+          mkdir -p "$install_source"
+          git -C governance archive --format=tar HEAD | tar -xf - -C "$install_source"
+          python -m venv "$runtime"
+          "$runtime/bin/python" -I -m pip install \
+            --disable-pip-version-check \
+            --no-deps \
+            --no-build-isolation \
+            "$install_source"
+
+      - name: Verify fresh evidence and publish exact-head App check
+        shell: bash
+        env:
+          GOVERNANCE_VERIFIER_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHONHOME: ""
+          PYTHONPATH: ""
+        run: |
+          set -euo pipefail
+          runtime="${RUNNER_TEMP}/governance-verifier-runtime"
+          "$runtime/bin/python" -I -m governance_eval.verifier_pipeline \
+            --repository "${{ inputs.repository }}" \
+            --pull-request "${{ inputs.pull_request }}" \
+            --run-id "${{ inputs.run_id }}" \
+            --run-attempt "${{ inputs.run_attempt }}" \
+            --evaluator-sha "__GOVERNANCE_SHA__" \
+            --verifier-app-id "${{ vars.GOVERNANCE_VERIFIER_APP_ID }}" \
+            --output-directory "${RUNNER_TEMP}/governance-verification"
+
+      - name: Upload verifier receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: governance-verifier-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/governance-verification
+          if-no-files-found: warn
+          retention-days: 30

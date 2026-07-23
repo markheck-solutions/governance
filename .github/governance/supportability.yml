@@ -62,6 +62,10 @@ architecture_policy:
       kind: docs
       owner: governance
       purpose: governance documentation
+    - path: templates
+      kind: ci_config
+      owner: governance
+      purpose: exact-pin adopter and verifier deployment templates
     - path: artifacts
       kind: generated_artifact
       owner: governance
@@ -104,6 +108,7 @@ architecture_policy:
       - "fixtures/**"
       - "target_packs/**"
       - "targets/**"
+      - "templates/**"
       - "**/*.md"
       - "**/*.json"
   vague_names:
@@ -179,6 +184,24 @@ architecture_policy:
       forbidden_dependencies:
         - artifacts
       test_strategy: workflow text and behavior assertions
+      limits:
+        max_file_lines: 500
+        max_function_lines: 0
+        max_class_lines: 0
+        max_functions_per_file: 0
+        max_classes_per_file: 0
+    templates:
+      path: templates
+      owner: governance
+      purpose: exact-pin adopter and verifier deployment templates
+      classification: ci
+      domain: github-enforcement
+      allowed_dependencies:
+        - governance_eval
+      forbidden_dependencies:
+        - artifacts
+        - tests
+      test_strategy: template rendering and workflow contract assertions
       limits:
         max_file_lines: 500
         max_function_lines: 0

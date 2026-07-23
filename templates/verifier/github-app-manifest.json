@@ -1,0 +1,21 @@
+{
+  "callback_urls": [],
+  "default_events": [],
+  "default_permissions": {
+    "actions": "read",
+    "checks": "write",
+    "contents": "read",
+    "metadata": "read",
+    "pull_requests": "read"
+  },
+  "description": "Verifies exact Governance evidence and writes the authoritative PR check.",
+  "hook_attributes": {
+    "active": false,
+    "url": "https://github.com/markheck-solutions/governance-verifier"
+  },
+  "name": "MarkHeck Governance Verifier",
+  "public": false,
+  "request_oauth_on_install": false,
+  "setup_on_update": false,
+  "url": "https://github.com/markheck-solutions/governance-verifier"
+}

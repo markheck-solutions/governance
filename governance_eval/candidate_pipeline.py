@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from governance_eval.candidate_bundle import (
+    build_candidate_bundle,
+    write_candidate_bundle,
+)
+from governance_eval.checkout_receipt import bind_checkout
+from governance_eval.docker_runtime import execute_ruff_docker
+from governance_eval.execution_plan_v2 import compile_execution_plan_v2
+from governance_eval.hashing import sha256_file
+
+
+GOVERNANCE_REPOSITORY = "markheck-solutions/governance"
+GOVERNANCE_REPOSITORY_ID = 1280677092
+
+
+class CandidatePipelineError(ValueError):
+    pass
+
+
+def run_candidate_pipeline(
+    *,
+    target_root: Path,
+    evaluator_root: Path,
+    event_path: Path,
+    config_path: Path,
+    standard_path: Path,
+    workflow_path: str,
+    workflow_ref: str,
+    workflow_commit_sha: str,
+    evaluator_sha: str,
+    run_id: int,
+    run_attempt: int,
+    toolchain_binary: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    target = target_root.resolve()
+    evaluator = evaluator_root.resolve()
+    event = _load_event(event_path)
+    repository = _mapping(event.get("repository"), "repository")
+    pull_request = _mapping(event.get("pull_request"), "pull request")
+    docker = _executable("docker")
+    workflow_file = _inside(target, target / workflow_path, "workflow")
+    receipt = bind_checkout(
+        target_root=target,
+        evaluator_root=evaluator,
+        event=event,
+        pull_request=pull_request,
+        repository=repository,
+        evaluator_repository={
+            "id": GOVERNANCE_REPOSITORY_ID,
+            "full_name": GOVERNANCE_REPOSITORY,
+        },
+        workflow={
+            "workflow_ref": workflow_ref,
+            "workflow_sha": workflow_commit_sha,
+            "evaluator_sha": evaluator_sha,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+            "server_url": "https://github.com",
+            "api_url": "https://api.github.com",
+            "observed_at": _observed_at(pull_request),
+        },
+        config_path=_inside(target, config_path, "configuration"),
+        standard_path=_inside(target, standard_path, "standard"),
+        runtime={
+            "docker_path": str(docker),
+            "docker_sha256": sha256_file(docker),
+            "docker_host": os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock"),
+        },
+    )
+    plan = compile_execution_plan_v2(
+        receipt, capability="lint", adapter_id="python.ruff-check.v1"
+    )
+    result = execute_ruff_docker(
+        plan=plan,
+        receipt=receipt,
+        target_root=target,
+        evaluator_root=evaluator,
+        toolchain_binary=toolchain_binary.resolve(strict=True),
+    )
+    payloads = build_candidate_bundle(
+        receipt=receipt,
+        plan=plan,
+        result=result,
+        workflow_path=workflow_path,
+        workflow_commit_sha=workflow_commit_sha,
+        workflow_file_sha256=sha256_file(workflow_file),
+        event_name="pull_request",
+        ai_review={"status": "AI_REVIEW_UNAVAILABLE", "findings": []},
+    )
+    write_candidate_bundle(output_dir, payloads, target_root=target)
+    return json.loads(payloads["candidate-bundle.json"])
+
+
+def _load_event(path: Path) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CandidatePipelineError("GitHub event is malformed") from exc
+    return _mapping(payload, "GitHub event")
+
+
+def _mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise CandidatePipelineError(f"{label} must be an object")
+    return value
+
+
+def _observed_at(pull_request: Mapping[str, Any]) -> str:
+    value = pull_request.get("updated_at") or pull_request.get("created_at")
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise CandidatePipelineError("pull request timestamp is unavailable")
+    return value
+
+
+def _inside(root: Path, path: Path, label: str) -> Path:
+    resolved = path.resolve(strict=True)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise CandidatePipelineError(f"{label} path escapes target checkout") from exc
+    if not resolved.is_file() or resolved.is_symlink():
+        raise CandidatePipelineError(f"{label} path is invalid")
+    return resolved
+
+
+def _executable(name: str) -> Path:
+    discovered = shutil.which(name)
+    if discovered is None:
+        raise CandidatePipelineError(f"{name} executable is unavailable")
+    path = Path(discovered).resolve()
+    if not path.is_file():
+        raise CandidatePipelineError(f"{name} executable is invalid")
+    return path
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise CandidatePipelineError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def _reject_constant(value: str) -> Any:
+    raise CandidatePipelineError(f"unsupported JSON constant: {value}")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run untrusted Governance candidate evaluation"
+    )
+    parser.add_argument("--target-root", required=True, type=Path)
+    parser.add_argument("--evaluator-root", required=True, type=Path)
+    parser.add_argument("--event-path", required=True, type=Path)
+    parser.add_argument("--config-path", required=True, type=Path)
+    parser.add_argument("--standard-path", required=True, type=Path)
+    parser.add_argument("--workflow-path", required=True)
+    parser.add_argument("--workflow-ref", required=True)
+    parser.add_argument("--workflow-commit-sha", required=True)
+    parser.add_argument("--evaluator-sha", required=True)
+    parser.add_argument("--run-id", required=True, type=int)
+    parser.add_argument("--run-attempt", required=True, type=int)
+    parser.add_argument("--toolchain-binary", required=True, type=Path)
+    parser.add_argument("--output-dir", required=True, type=Path)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    manifest = run_candidate_pipeline(**vars(arguments))
+    print(json.dumps(manifest["decision"], sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
