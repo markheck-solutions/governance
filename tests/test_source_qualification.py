@@ -5,6 +5,8 @@ import unittest
 from typing import Any
 
 from governance_eval.source_qualification import (
+    _POLL_ATTEMPTS,
+    _POLL_SECONDS,
     _matching_runs,
     candidate_job_errors,
     candidate_run_errors,
@@ -56,6 +58,12 @@ def _jobs() -> dict[str, Any]:
 
 
 class SourceQualificationTests(unittest.TestCase):
+    def test_poll_window_covers_declared_candidate_job_budget(self) -> None:
+        last_poll_seconds = (_POLL_ATTEMPTS - 1) * _POLL_SECONDS
+
+        self.assertGreaterEqual(last_poll_seconds, 8 * 60)
+        self.assertLess(last_poll_seconds, 10 * 60)
+
     def test_exact_candidate_run_and_jobs_pass(self) -> None:
         self.assertEqual(
             candidate_run_errors(

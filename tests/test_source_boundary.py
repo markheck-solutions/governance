@@ -106,6 +106,25 @@ class SourceBoundaryTests(unittest.TestCase):
         self.assertTrue(any("is not immutable" in error for error in errors))
         self.assertFalse(any("called workflow is missing" in error for error in errors))
 
+    def test_reusable_permission_closure_includes_yaml_workflows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow_root = root / ".github" / "workflows"
+            workflow_root.mkdir(parents=True)
+            (workflow_root / "added.yaml").write_text(
+                "name: Added\n"
+                "on: pull_request\n"
+                "permissions: {}\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: markheck-solutions/governance/.github/workflows/supportability-gate.yml@main\n",
+                encoding="utf-8",
+            )
+
+            errors = reusable_permission_closure_errors(root)
+
+        self.assertTrue(any("is not immutable" in error for error in errors))
+
     def test_reusable_permission_closure_honors_job_level_ceiling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -413,6 +432,192 @@ class SourceBoundaryTests(unittest.TestCase):
                     (("    steps:\n", "    steps:\n" + inserted),)
                 )
                 self.assertTrue(any("exact allowlist" in error for error in errors))
+
+    def test_source_qualification_rejects_unpinned_actions_in_added_workflow(
+        self,
+    ) -> None:
+        for action_step in (
+            "      - uses: attacker/example@main\n",
+            '      - "uses": attacker/example@main\n',
+            '      - "\\u0075ses": attacker/example@main\n',
+            "      - {uses: attacker/example@main}\n",
+            "      - ? uses\n        : attacker/example@main\n",
+        ):
+            with (
+                self.subTest(action_step=action_step),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                workflow_root = root / ".github" / "workflows"
+                workflow_root.mkdir(parents=True)
+                for name in ("source-candidate.yml", "source-qualification.yml"):
+                    shutil.copyfile(
+                        self.root / ".github" / "workflows" / name,
+                        workflow_root / name,
+                    )
+                (workflow_root / "added.yml").write_text(
+                    "name: Added\n"
+                    "on: pull_request\n"
+                    "permissions: {}\n"
+                    "jobs:\n"
+                    "  check:\n"
+                    "    runs-on: ubuntu-24.04\n"
+                    "    steps:\n" + action_step,
+                    encoding="utf-8",
+                )
+
+                errors = source_workflow_contract_errors(root)
+
+            self.assertTrue(
+                any(
+                    "workflow action use" in error
+                    or "workflow YAML key syntax" in error
+                    for error in errors
+                )
+            )
+
+    def test_source_qualification_rejects_unpinned_composite_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow_root = root / ".github" / "workflows"
+            workflow_root.mkdir(parents=True)
+            for name in ("source-candidate.yml", "source-qualification.yml"):
+                shutil.copyfile(
+                    self.root / ".github" / "workflows" / name,
+                    workflow_root / name,
+                )
+            action = root / ".github/actions/example/action.yml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                "name: Example\n"
+                "runs:\n"
+                "  using: composite\n"
+                "  steps:\n"
+                "    - uses: attacker/example@main\n",
+                encoding="utf-8",
+            )
+
+            errors = source_workflow_contract_errors(root)
+
+        self.assertTrue(any("workflow action use" in error for error in errors))
+
+    def test_source_qualification_rejects_local_action_outside_authority(self) -> None:
+        for local_action in (
+            "./tools/evil",
+            "./.github/actions/../workflows/evil",
+            "./governance/.github/actions/evil",
+        ):
+            with self.subTest(local_action=local_action):
+                errors = self._source_errors_after_replacements(
+                    (
+                        (
+                            "uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+                            f"uses: {local_action}",
+                        ),
+                    ),
+                    "source-candidate.yml",
+                )
+
+                self.assertTrue(any("workflow action use" in error for error in errors))
+
+    def test_source_qualification_rejects_symlinked_local_action_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow_root = root / ".github" / "workflows"
+            workflow_root.mkdir(parents=True)
+            for name in ("source-candidate.yml", "source-qualification.yml"):
+                shutil.copyfile(
+                    self.root / ".github" / "workflows" / name,
+                    workflow_root / name,
+                )
+            (workflow_root / "local-action.yml").write_text(
+                "name: Local action\n"
+                "on: pull_request\n"
+                "permissions: {}\n"
+                "jobs:\n"
+                "  check:\n"
+                "    runs-on: ubuntu-24.04\n"
+                "    steps:\n"
+                "      - uses: ./.github/actions/link\n",
+                encoding="utf-8",
+            )
+            action = root / ".github/actions/link/action.yml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                "name: Link\nruns:\n  using: composite\n  steps: []\n",
+                encoding="utf-8",
+            )
+            real_is_symlink = Path.is_symlink
+
+            def fake_is_symlink(path: Path) -> bool:
+                return path == action.parent or real_is_symlink(path)
+
+            with patch.object(Path, "is_symlink", fake_is_symlink):
+                errors = source_workflow_contract_errors(root)
+
+        self.assertTrue(any("contains a symlink" in error for error in errors))
+
+    def test_source_qualification_rejects_anchor_alias_action_key(self) -> None:
+        for anchor_name in ("action_key", "1"):
+            with (
+                self.subTest(anchor_name=anchor_name),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                workflow_root = root / ".github" / "workflows"
+                workflow_root.mkdir(parents=True)
+                for name in ("source-candidate.yml", "source-qualification.yml"):
+                    shutil.copyfile(
+                        self.root / ".github" / "workflows" / name,
+                        workflow_root / name,
+                    )
+                (workflow_root / "anchor.yml").write_text(
+                    f"name: &{anchor_name} uses\n"
+                    "on: pull_request\n"
+                    "permissions: {}\n"
+                    "jobs:\n"
+                    "  check:\n"
+                    "    runs-on: ubuntu-24.04\n"
+                    "    steps:\n"
+                    f"      - *{anchor_name}: attacker/example@main\n",
+                    encoding="utf-8",
+                )
+
+                errors = source_workflow_contract_errors(root)
+
+            self.assertTrue(
+                any("workflow YAML key syntax" in error for error in errors)
+            )
+
+    def test_source_qualification_ignores_uses_text_in_run_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow_root = root / ".github" / "workflows"
+            workflow_root.mkdir(parents=True)
+            for name in ("source-candidate.yml", "source-qualification.yml"):
+                shutil.copyfile(
+                    self.root / ".github" / "workflows" / name,
+                    workflow_root / name,
+                )
+            (workflow_root / "script.yml").write_text(
+                "name: Script\n"
+                "on: pull_request\n"
+                "permissions: {}\n"
+                "jobs:\n"
+                "  check:\n"
+                "    name: Script check\n"
+                "    runs-on: ubuntu-24.04\n"
+                "    steps:\n"
+                "      - name: Explain syntax\n"
+                "        run: |2\n"
+                "          echo 'uses: documentation'\n",
+                encoding="utf-8",
+            )
+
+            errors = source_workflow_contract_errors(root)
+
+        self.assertFalse(any("workflow action use" in error for error in errors))
+        self.assertFalse(any("workflow YAML key syntax" in error for error in errors))
 
     def test_source_qualification_rejects_runner_or_timeout_drift(self) -> None:
         for old, new in (

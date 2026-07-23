@@ -23,7 +23,7 @@ _EXPECTED_JOBS = frozenset(
         "Governance Source Candidate Result",
     }
 )
-_POLL_ATTEMPTS = 48
+_POLL_ATTEMPTS = 54
 _POLL_SECONDS = 10
 _MAX_RESPONSE_BYTES = 1_000_000
 

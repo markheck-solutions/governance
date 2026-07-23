@@ -118,7 +118,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('python-version: "3.12.13"', workflow)
         self.assertIn("id: setup-python", workflow)
         self.assertIn(
-            "uses: ./governance/.github/actions/setup-governance-toolchain",
+            "uses: markheck-solutions/governance/.github/actions/"
+            "setup-governance-toolchain@50a7c1c958fe06056206429d7e2f194e0288738c",
             workflow,
         )
         self.assertNotIn(

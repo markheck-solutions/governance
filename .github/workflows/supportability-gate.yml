@@ -366,7 +366,7 @@ jobs:
           PY
       - name: Provision pinned governance toolchain
         id: toolchain
-        uses: ./governance/.github/actions/setup-governance-toolchain
+        uses: markheck-solutions/governance/.github/actions/setup-governance-toolchain@50a7c1c958fe06056206429d7e2f194e0288738c
         with:
           context-kind: SUPPORTABILITY_EVALUATION
           governance-root: governance

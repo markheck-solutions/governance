@@ -23,7 +23,7 @@ _SOURCE_WORKFLOW_SHA256 = (
     "f14453327e5a77f3c2433498487f3a19efa124273a265101b0ed50c99e0c8c9a"
 )
 _SOURCE_CANDIDATE_WORKFLOW_SHA256 = (
-    "6911a8cd68209020c4b28dc43737f1f1c30ac05c1b00dd7cac9a14e6da61d4c9"
+    "729a13276949ce97b108c9638a4bacecf441b42e1a1e623bf7846486ed50bff8"
 )
 _STANDARD_VALIDATION_SHA256 = (
     "dfcea58955a4a12c8992a9655f7e9d9fb0ce1486daf6e89bde57507bd9515fe4"
@@ -38,6 +38,25 @@ _TRUSTED_SOURCE_AUTHORITY_PATHS = (
     "requirements-governance.lock",
 )
 _LITERAL_JOB_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}")
+_USES_KEY = re.compile(r"(?<![A-Za-z0-9_-])['\"]?uses['\"]?\s*:")
+_USES_LINE = re.compile(r"\s*(?:-\s+)?uses:\s+(\S+)\s*")
+_LOCAL_USE = re.compile(
+    r"\./\.github/actions/"
+    r"(?!\.{1,2}(?:/|$))[A-Za-z0-9_.-]+"
+    r"(?:/(?!\.{1,2}(?:/|$))[A-Za-z0-9_.-]+)*"
+)
+_REMOTE_USE = re.compile(
+    r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}"
+)
+_DOCKER_USE = re.compile(r"docker://[^@\s]+@sha256:[0-9a-f]{64}")
+_BLOCK_SCALAR = re.compile(
+    r"\s*(?:-\s+)?[A-Za-z0-9_-]+:\s*[>|](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+#.*)?"
+)
+_QUOTED_YAML_KEY = re.compile(r"(?:^\s*(?:-\s*)?|\{\s*|,\s*)['\"][^'\"]*['\"]\s*:")
+_QUOTED_YAML_START = re.compile(r"^\s*(?:-\s*)?['\"]|\{\s*['\"]")
+_EXPLICIT_YAML_KEY = re.compile(r"^\s*(?:-\s*)?\?")
+_TAGGED_YAML_KEY = re.compile(r"(?:^\s*(?:-\s*)?|\{\s*|,\s*)(?:!!|!<)")
+_YAML_ANCHOR_OR_ALIAS = re.compile(r"(?:^|[\s:\[,{])(?:&(?!&)|\*(?!\*))[^\s\[\]{},]+")
 
 
 def _job_blocks(workflow: str) -> dict[str, list[str]]:
@@ -287,7 +306,11 @@ def reusable_permission_closure_errors(
     initial = (
         [entry_workflow]
         if entry_workflow is not None
-        else sorted(path.name for path in workflow_root.glob("*.yml"))
+        else sorted(
+            path.name
+            for pattern in ("*.yml", "*.yaml")
+            for path in workflow_root.glob(pattern)
+        )
     )
     pending = deque(initial)
     visited: set[str] = set()
@@ -507,6 +530,106 @@ def _job_name_contract_errors(repository: Path) -> list[str]:
     return errors
 
 
+def _action_reference_is_immutable(reference: str) -> bool:
+    return any(
+        pattern.fullmatch(reference) is not None
+        for pattern in (_LOCAL_USE, _REMOTE_USE, _DOCKER_USE)
+    )
+
+
+def _local_action_path_errors(
+    repository: Path, reference: str, label: str
+) -> list[str]:
+    action_path = repository
+    for part in reference.removeprefix("./").split("/"):
+        action_path /= part
+        if action_path.is_symlink():
+            return [f"local action path contains a symlink: {label} {reference}"]
+    if not action_path.is_dir():
+        return [f"local action directory is missing: {label} {reference}"]
+    manifests = [
+        action_path / name
+        for name in ("action.yml", "action.yaml")
+        if (action_path / name).exists()
+    ]
+    if len(manifests) != 1 or not manifests[0].is_file():
+        return [f"local action manifest is not unique: {label} {reference}"]
+    if manifests[0].is_symlink():
+        return [f"local action manifest is a symlink: {label} {reference}"]
+    return []
+
+
+def _active_yaml_lines(source: str) -> list[tuple[int, str]]:
+    active: list[tuple[int, str]] = []
+    block_indent: int | None = None
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        indent = len(line) - len(line.lstrip())
+        if block_indent is not None:
+            if not line.strip() or indent > block_indent:
+                continue
+            block_indent = None
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        active.append((line_number, line))
+        if _BLOCK_SCALAR.fullmatch(line) is not None:
+            block_indent = indent
+    return active
+
+
+def _action_authority_paths(repository: Path) -> list[Path]:
+    workflow_root = repository / ".github" / "workflows"
+    action_root = repository / ".github" / "actions"
+    paths = list(workflow_root.glob("*.y*ml"))
+    for pattern in ("action.yml", "action.yaml"):
+        paths.extend(action_root.glob(f"**/{pattern}"))
+    return sorted(paths)
+
+
+def _yaml_key_syntax_is_canonical(line: str) -> bool:
+    return not any(
+        pattern.search(line) is not None
+        for pattern in (
+            _QUOTED_YAML_KEY,
+            _QUOTED_YAML_START,
+            _EXPLICIT_YAML_KEY,
+            _TAGGED_YAML_KEY,
+            _YAML_ANCHOR_OR_ALIAS,
+        )
+    )
+
+
+def _action_pin_errors(repository: Path) -> list[str]:
+    errors: list[str] = []
+    for path in _action_authority_paths(repository):
+        label = path.relative_to(repository).as_posix()
+        for line_number, line in _active_yaml_lines(path.read_text(encoding="utf-8")):
+            if not _yaml_key_syntax_is_canonical(line):
+                errors.append(
+                    f"workflow YAML key syntax is not canonical: {label}:{line_number}"
+                )
+                continue
+            if _USES_KEY.search(line) is None:
+                continue
+            declaration = _USES_LINE.fullmatch(line)
+            if declaration is None:
+                errors.append(
+                    f"workflow action use is not canonical: {label}:{line_number}"
+                )
+                continue
+            reference = declaration.group(1)
+            if _LOCAL_USE.fullmatch(reference) is not None:
+                errors.extend(
+                    _local_action_path_errors(
+                        repository, reference, f"{label}:{line_number}"
+                    )
+                )
+            elif not _action_reference_is_immutable(reference):
+                errors.append(
+                    f"workflow action use is not immutable: {label}:{line_number}"
+                )
+    return errors
+
+
 def _top_level_syntax_errors(path: Path, lines: list[str]) -> list[str]:
     top_key = re.compile(r"(?:name|on|permissions|jobs):(?:\s.*)?")
     for line in lines:
@@ -597,6 +720,7 @@ def source_workflow_contract_errors(repository: Path) -> list[str]:
     errors = _source_header_errors(workflow)
     errors.extend(_all_workflow_job_syntax_errors(repository))
     errors.extend(_job_name_contract_errors(repository))
+    errors.extend(_action_pin_errors(repository))
     if sha256(workflow.encode()).hexdigest() != _SOURCE_WORKFLOW_SHA256:
         errors.append("source qualification workflow differs from the exact allowlist")
     if (
