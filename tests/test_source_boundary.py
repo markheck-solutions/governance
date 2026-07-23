@@ -195,40 +195,6 @@ class SourceBoundaryTests(unittest.TestCase):
             )
         )
 
-    def test_workflow_permissions_reject_privilege_expansion(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            workflow_root = root / ".github" / "workflows"
-            shutil.copytree(self.root / ".github" / "workflows", workflow_root)
-            caller = workflow_root / "supportability-enforcement.yml"
-            caller.write_text(
-                caller.read_text(encoding="utf-8").replace(
-                    "  checks: read\n", "  checks: read\n  id-token: write\n", 1
-                ),
-                encoding="utf-8",
-            )
-
-            errors = permission_scope_errors(root)
-
-        self.assertTrue(any("authority ceiling" in error for error in errors))
-
-    def test_workflow_permissions_reject_write_all_syntax(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            workflow_root = root / ".github" / "workflows"
-            shutil.copytree(self.root / ".github" / "workflows", workflow_root)
-            workflow = workflow_root / "governance-shadow.yml"
-            workflow.write_text(
-                workflow.read_text(encoding="utf-8").replace(
-                    "permissions:\n  contents: read", "permissions: write-all", 1
-                ),
-                encoding="utf-8",
-            )
-
-            errors = permission_scope_errors(root)
-
-        self.assertTrue(any("malformed" in error for error in errors))
-
     def test_standard_profile_event_contract_is_pull_request_only(self) -> None:
         self.assertEqual(standard_event_contract_errors(self.root), [])
 
@@ -765,6 +731,127 @@ class SourceBoundaryTests(unittest.TestCase):
             for phrase in forbidden:
                 with self.subTest(path=relative_path, phrase=phrase):
                     self.assertNotIn(phrase, text)
+
+
+class PermissionScopeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = repo_root(Path(__file__).resolve())
+
+    def test_workflow_permissions_reject_privilege_expansion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow_root = root / ".github" / "workflows"
+            shutil.copytree(self.root / ".github" / "workflows", workflow_root)
+            caller = workflow_root / "supportability-enforcement.yml"
+            caller.write_text(
+                caller.read_text(encoding="utf-8").replace(
+                    "  checks: read\n", "  checks: read\n  id-token: write\n", 1
+                ),
+                encoding="utf-8",
+            )
+
+            errors = permission_scope_errors(root)
+
+        self.assertTrue(any("authority ceiling" in error for error in errors))
+
+    def test_workflow_permissions_require_explicit_top_level_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow_root = root / ".github" / "workflows"
+            workflow_root.mkdir(parents=True)
+            (workflow_root / "implicit.yml").write_text(
+                "name: Implicit\n"
+                "on: pull_request_target\n"
+                "jobs:\n"
+                "  check:\n"
+                "    runs-on: ubuntu-24.04\n"
+                "    steps:\n"
+                "      - run: true\n",
+                encoding="utf-8",
+            )
+
+            errors = permission_scope_errors(root)
+
+        self.assertTrue(any("declaration is missing" in error for error in errors))
+
+    def test_workflow_permissions_reject_bare_null_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow_root = root / ".github" / "workflows"
+            workflow_root.mkdir(parents=True)
+            (workflow_root / "null.yml").write_text(
+                "name: Null\n"
+                "on: pull_request_target\n"
+                "permissions:\n"
+                "jobs:\n"
+                "  check:\n"
+                "    runs-on: ubuntu-24.04\n"
+                "    steps:\n"
+                "      - run: true\n",
+                encoding="utf-8",
+            )
+
+            errors = permission_scope_errors(root)
+
+        self.assertTrue(any("declaration is malformed" in error for error in errors))
+
+    def test_workflow_permissions_reject_duplicate_keys(self) -> None:
+        cases = {
+            "workflow-block": (
+                "permissions:\n"
+                "  contents: write\n"
+                "  contents: read\n"
+                "jobs:\n"
+                "  check:\n"
+                "    runs-on: ubuntu-24.04\n"
+            ),
+            "workflow-inline": (
+                "permissions: {contents: write, contents: read}\n"
+                "jobs:\n"
+                "  check:\n"
+                "    runs-on: ubuntu-24.04\n"
+            ),
+            "job-inline": (
+                "permissions: {}\n"
+                "jobs:\n"
+                "  check:\n"
+                "    permissions: {contents: write, contents: read}\n"
+                "    runs-on: ubuntu-24.04\n"
+            ),
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                workflow_root = root / ".github" / "workflows"
+                workflow_root.mkdir(parents=True)
+                (workflow_root / "duplicate.yml").write_text(
+                    f"name: Duplicate\non: pull_request_target\n{body}",
+                    encoding="utf-8",
+                )
+
+                errors = permission_scope_errors(root)
+
+                self.assertTrue(
+                    any("declaration is malformed" in error for error in errors),
+                    errors,
+                )
+
+    def test_workflow_permissions_reject_write_all_syntax(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow_root = root / ".github" / "workflows"
+            shutil.copytree(self.root / ".github" / "workflows", workflow_root)
+            workflow = workflow_root / "governance-shadow.yml"
+            workflow.write_text(
+                workflow.read_text(encoding="utf-8").replace(
+                    "permissions:\n  contents: read", "permissions: write-all", 1
+                ),
+                encoding="utf-8",
+            )
+
+            errors = permission_scope_errors(root)
+
+        self.assertTrue(any("malformed" in error for error in errors))
 
 
 if __name__ == "__main__":

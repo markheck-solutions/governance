@@ -91,7 +91,10 @@ def _inline_permission_mapping(inline: str) -> dict[str, str]:
         match = re.fullmatch(r"\s*([a-z-]+):\s*(none|read|write)\s*", item)
         if match is None:
             return {}
-        parsed[match.group(1)] = match.group(2)
+        permission = match.group(1)
+        if permission in parsed:
+            return {}
+        parsed[permission] = match.group(2)
     return parsed
 
 
@@ -105,7 +108,10 @@ def _block_permission_mapping(
             continue
         match = entry.fullmatch(line)
         if match is not None:
-            mapping[match.group(1)] = match.group(2)
+            permission = match.group(1)
+            if permission in mapping:
+                return {}
+            mapping[permission] = match.group(2)
             continue
         if len(line) - len(line.lstrip()) <= indent:
             break
@@ -134,24 +140,32 @@ def _inline_permission_syntax_is_valid(inline: str) -> bool:
         return True
     if not (inline.startswith("{") and inline.endswith("}")):
         return False
-    return all(
-        re.fullmatch(r"\s*[a-z-]+:\s*(none|read|write)\s*", item) is not None
-        for item in inline[1:-1].split(",")
-    )
+    seen: set[str] = set()
+    for item in inline[1:-1].split(","):
+        match = re.fullmatch(r"\s*([a-z-]+):\s*(none|read|write)\s*", item)
+        if match is None or match.group(1) in seen:
+            return False
+        seen.add(match.group(1))
+    return True
 
 
 def _block_permission_syntax_is_valid(
     lines: list[str], start: int, indent: int
 ) -> bool:
-    entry = re.compile(rf"^\s{{{indent + 2}}}[a-z-]+:\s*(none|read|write)\s*$")
+    entry = re.compile(rf"^\s{{{indent + 2}}}([a-z-]+):\s*(none|read|write)\s*$")
+    found_entry = False
+    seen: set[str] = set()
     for line in lines[start + 1 :]:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if len(line) - len(line.lstrip()) <= indent:
             break
-        if entry.fullmatch(line) is None:
+        match = entry.fullmatch(line)
+        if match is None or match.group(1) in seen:
             return False
-    return True
+        seen.add(match.group(1))
+        found_entry = True
+    return found_entry
 
 
 def _permission_syntax_errors(lines: list[str], indent: int, label: str) -> list[str]:
@@ -201,10 +215,13 @@ def permission_scope_errors(repository: Path) -> list[str]:
         workflow = path.read_text(encoding="utf-8")
         header = workflow.split("\njobs:", 1)[0].splitlines()
         errors.extend(_permission_syntax_errors(header, 0, f"{path.name}:workflow"))
-        errors.extend(
-            _permission_authority_errors(
-                _permission_mapping(header, 0), path.name, "workflow"
+        workflow_permissions = _permission_mapping(header, 0)
+        if workflow_permissions is None:
+            errors.append(
+                f"workflow permission declaration is missing: {path.name}:workflow"
             )
+        errors.extend(
+            _permission_authority_errors(workflow_permissions, path.name, "workflow")
         )
         for job_name, block in _job_blocks(workflow).items():
             errors.extend(
