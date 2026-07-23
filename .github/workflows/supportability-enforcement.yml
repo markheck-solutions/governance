@@ -1,4 +1,5 @@
 name: Supportability Enforcement
+# Phase 2.5 harmless source-edit canary; remove after live proof.
 
 on:
   pull_request_target:
