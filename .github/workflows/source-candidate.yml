@@ -77,7 +77,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-governance.lock
       - name: Run source tests
         working-directory: candidate
-        run: python -I -m unittest discover -s tests -p 'test_*.py'
+        run: python -I -c "import pathlib,sys,unittest;sys.path.insert(0,str(pathlib.Path.cwd()));result=unittest.TextTestRunner().run(unittest.defaultTestLoader.discover('tests',pattern='test_*.py'));raise SystemExit(not result.wasSuccessful())"
 
   source-build:
     name: Governance Source Build

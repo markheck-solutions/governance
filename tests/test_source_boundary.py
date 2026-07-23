@@ -315,8 +315,8 @@ class SourceBoundaryTests(unittest.TestCase):
         errors = self._source_errors_after_replacements(
             (
                 (
-                    "run: python -I -m unittest discover -s tests -p 'test_*.py'",
-                    "run: echo skipped # python -I -m unittest discover -s tests -p 'test_*.py'",
+                    "run: python -I -c ",
+                    "run: echo skipped # python -I -c ",
                 ),
             ),
             "source-candidate.yml",
