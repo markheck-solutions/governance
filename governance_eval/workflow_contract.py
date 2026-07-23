@@ -49,6 +49,19 @@ _REMOTE_USE = re.compile(
     r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}"
 )
 _DOCKER_USE = re.compile(r"docker://[^@\s]+@sha256:[0-9a-f]{64}")
+_TRUSTED_REMOTE_USES = frozenset(
+    {
+        "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+        "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+        "markheck-solutions/governance/.github/actions/"
+        "setup-governance-toolchain@50a7c1c958fe06056206429d7e2f194e0288738c",
+        "markheck-solutions/governance/.github/workflows/"
+        "delivery-receipt.yml@50a7c1c958fe06056206429d7e2f194e0288738c",
+        "markheck-solutions/governance/.github/workflows/"
+        "supportability-gate.yml@50a7c1c958fe06056206429d7e2f194e0288738c",
+    }
+)
 _BLOCK_SCALAR = re.compile(
     r"\s*(?:-\s+)?[A-Za-z0-9_-]+:\s*[>|](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+#.*)?"
 )
@@ -640,9 +653,14 @@ def _action_pin_errors(repository: Path) -> list[str]:
                         repository, reference, f"{label}:{line_number}"
                     )
                 )
-            elif not _action_reference_is_immutable(reference):
+            elif reference not in _TRUSTED_REMOTE_USES:
+                requirement = (
+                    "immutable"
+                    if not _action_reference_is_immutable(reference)
+                    else "in the trusted allowlist"
+                )
                 errors.append(
-                    f"workflow action use is not immutable: {label}:{line_number}"
+                    f"workflow action use is not {requirement}: {label}:{line_number}"
                 )
     return errors
 

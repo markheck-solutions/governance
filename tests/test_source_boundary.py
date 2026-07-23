@@ -467,6 +467,41 @@ class SourceBoundaryTests(unittest.TestCase):
 
         self.assertTrue(any("workflow action use" in error for error in errors))
 
+    def test_source_qualification_rejects_unapproved_immutable_pins(self) -> None:
+        substitutions = (
+            (
+                "supportability-enforcement.yml",
+                "50a7c1c958fe06056206429d7e2f194e0288738c",
+                "1234567890abcdef1234567890abcdef12345678",
+            ),
+            (
+                "governance-shadow.yml",
+                "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+                "attacker/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+            ),
+        )
+        for workflow_name, original, replacement in substitutions:
+            with (
+                self.subTest(replacement=replacement),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                workflow_root = root / ".github" / "workflows"
+                shutil.copytree(self.root / ".github" / "workflows", workflow_root)
+                workflow = workflow_root / workflow_name
+                workflow.write_text(
+                    workflow.read_text(encoding="utf-8").replace(
+                        original, replacement, 1
+                    ),
+                    encoding="utf-8",
+                )
+
+                errors = source_workflow_contract_errors(root)
+
+            self.assertTrue(
+                any("trusted allowlist" in error for error in errors), errors
+            )
+
     def test_source_qualification_rejects_local_action_outside_authority(self) -> None:
         for local_action in (
             "./tools/evil",
