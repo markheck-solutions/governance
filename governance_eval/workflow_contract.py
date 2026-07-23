@@ -254,7 +254,23 @@ def trusted_source_authority_errors(repository: Path) -> list[str]:
     if candidate_root == trusted_root:
         return []
     errors: list[str] = []
-    for relative_path in _TRUSTED_SOURCE_AUTHORITY_PATHS:
+    action_prefix = Path(".github/actions")
+    trusted_actions = {
+        path.relative_to(trusted_root).as_posix()
+        for path in (trusted_root / action_prefix).rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    candidate_actions = {
+        path.relative_to(candidate_root).as_posix()
+        for path in (candidate_root / action_prefix).rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if candidate_actions != trusted_actions:
+        errors.append("trusted local action authority paths changed")
+    authority_paths = sorted(
+        set(_TRUSTED_SOURCE_AUTHORITY_PATHS) | trusted_actions | candidate_actions
+    )
+    for relative_path in authority_paths:
         trusted = trusted_root / relative_path
         candidate = candidate_root / relative_path
         authority_parts = relative_path.split("/")
@@ -666,12 +682,26 @@ def _action_pin_errors(repository: Path) -> list[str]:
 
 
 def _top_level_syntax_errors(path: Path, lines: list[str]) -> list[str]:
-    top_key = re.compile(r"(?:name|on|permissions|jobs):(?:\s.*)?")
+    top_key = re.compile(r"(name|on|permissions|jobs):(?:\s.*)?")
+    seen: set[str] = set()
+    errors: list[str] = []
     for line in lines:
         if line.strip() and not line.lstrip().startswith("#"):
-            if not line.startswith(" ") and top_key.fullmatch(line) is None:
-                return [f"workflow top-level syntax is not canonical: {path.name}"]
-    return []
+            if line.startswith(" "):
+                continue
+            match = top_key.fullmatch(line)
+            if match is None:
+                errors.append(
+                    f"workflow top-level syntax is not canonical: {path.name}"
+                )
+            elif match.group(1) in seen:
+                errors.append(
+                    f"workflow top-level declaration is duplicated: "
+                    f"{path.name}:{match.group(1)}"
+                )
+            else:
+                seen.add(match.group(1))
+    return errors
 
 
 def _jobs_block_syntax_errors(

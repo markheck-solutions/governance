@@ -388,6 +388,30 @@ class SourceBoundaryTests(unittest.TestCase):
 
             self.assertNotEqual(errors, [])
 
+    def test_source_qualification_rejects_duplicate_top_level_keys(self) -> None:
+        for declaration in ("name: Override\n", "on: push\n"):
+            with (
+                self.subTest(declaration=declaration),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                workflow_root = root / ".github" / "workflows"
+                shutil.copytree(self.root / ".github" / "workflows", workflow_root)
+                workflow = workflow_root / "supportability-enforcement.yml"
+                workflow.write_text(
+                    workflow.read_text(encoding="utf-8").replace(
+                        "\npermissions:\n", f"\n{declaration}permissions:\n", 1
+                    ),
+                    encoding="utf-8",
+                )
+
+                errors = source_workflow_contract_errors(root)
+
+            self.assertTrue(
+                any("top-level declaration is duplicated" in error for error in errors),
+                errors,
+            )
+
     def test_source_qualification_rejects_extra_nameless_steps(self) -> None:
         for inserted in (
             "      - uses: attacker/example@main\n",
@@ -672,6 +696,34 @@ class SourceBoundaryTests(unittest.TestCase):
             errors = trusted_source_authority_errors(candidate)
 
         self.assertTrue(any("source_qualification.py" in error for error in errors))
+
+    def test_trusted_source_authority_freezes_local_action_tree(self) -> None:
+        paths = (
+            ".github/workflows/source-candidate.yml",
+            ".github/workflows/source-qualification.yml",
+            "governance_eval/source_qualification.py",
+            "governance_eval/workflow_contract.py",
+            "pyproject.toml",
+            "requirements-governance.lock",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate = Path(tmp)
+            for relative_path in paths:
+                target = candidate / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(self.root / relative_path, target)
+            shutil.copytree(
+                self.root / ".github/actions", candidate / ".github/actions"
+            )
+            action = candidate / ".github/actions/setup-governance-toolchain/action.yml"
+            action.write_text(
+                action.read_text(encoding="utf-8") + "\n# candidate drift\n",
+                encoding="utf-8",
+            )
+
+            errors = trusted_source_authority_errors(candidate)
+
+        self.assertTrue(any("setup-governance-toolchain" in error for error in errors))
 
     def test_trusted_source_authority_rejects_symlinked_path_component(self) -> None:
         paths = (
