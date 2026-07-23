@@ -7,6 +7,9 @@ from typing import Sequence
 
 
 GOVERNANCE_SHA_PLACEHOLDER = "__GOVERNANCE_SHA__"
+PYTHON_IMAGE = (
+    "python@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d"
+)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _ACTION_PINS = {
     "actions/checkout": "df4cb1c069e1874edd31b4311f1884172cec0e10",
@@ -104,6 +107,7 @@ def _validate_common_contract(workflow: str) -> None:
         "--require-hashes",
         "--only-binary=:all:",
         "git -C .governance/evaluator archive --format=tar HEAD",
+        f'timeout 120 docker pull "{PYTHON_IMAGE}"',
         "governance_eval.candidate_pipeline",
         '--toolchain-root "$runtime"',
         '--workflow-path ".github/workflows/governance-candidate.yml"',

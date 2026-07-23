@@ -380,6 +380,7 @@ class VerifierPipelineTests(unittest.TestCase):
         }
         run = {
             "id": 1234,
+            "check_suite_id": 777,
             "run_attempt": 2,
             "event": "pull_request",
             "status": "completed",
@@ -387,7 +388,6 @@ class VerifierPipelineTests(unittest.TestCase):
             "head_sha": self.head,
             "path": WORKFLOW_PATH,
             "repository": {"id": 101, "full_name": self.repository},
-            "app": {"id": 15368},
             "pull_requests": [
                 {
                     "number": 42,
@@ -413,6 +413,11 @@ class VerifierPipelineTests(unittest.TestCase):
             repository_path: {"id": 101, "full_name": self.repository},
             f"{repository_path}/pulls/42": pr,
             f"{repository_path}/actions/runs/1234": run,
+            f"{repository_path}/check-suites/777": {
+                "id": 777,
+                "head_sha": self.head,
+                "app": {"id": 15368},
+            },
             f"{repository_path}/actions/runs/1234/artifacts?per_page=100": {
                 "total_count": 1,
                 "artifacts": [artifact],

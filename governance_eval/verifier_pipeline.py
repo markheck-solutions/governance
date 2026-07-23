@@ -367,7 +367,8 @@ def _collect_context(
     run = api.get_json(
         f"/repos/{_repository_path(target.repository)}/actions/runs/{target.run_id}"
     )
-    _validate_run(run, target, repository, base_sha, head_sha)
+    run_app_id = _run_app_id(api, target.repository, run, head_sha)
+    _validate_run(run, target, repository, base_sha, head_sha, run_app_id)
     artifact = _artifact(api, target, repository["id"], head_sha)
     artifact_id = _positive_integer(artifact.get("id"), "artifact id")
     api.download(
@@ -413,7 +414,7 @@ def _collect_context(
         run_event=str(run.get("event")),
         run_status=str(run.get("status")),
         run_conclusion=str(run.get("conclusion")),
-        run_app_id=_positive_integer(_nested(run, "app").get("id"), "run App id"),
+        run_app_id=run_app_id,
         artifact_id=artifact_id,
         artifact_name=str(artifact.get("name")),
         artifact_digest=_digest(artifact.get("digest")),
@@ -456,6 +457,7 @@ def _validate_run(
     repository: Mapping[str, Any],
     base_sha: str,
     head_sha: str,
+    run_app_id: int,
 ) -> None:
     expected = {
         "id": target.run_id,
@@ -474,7 +476,7 @@ def _validate_run(
         or run_repository.get("full_name") != repository["full_name"]
     ):
         raise VerifierPipelineError("candidate workflow repository mismatch")
-    if _nested(run, "app").get("id") != GITHUB_ACTIONS_APP_ID:
+    if run_app_id != GITHUB_ACTIONS_APP_ID:
         raise VerifierPipelineError("candidate workflow producer mismatch")
     pull_requests = run.get("pull_requests")
     if not isinstance(pull_requests, list) or not any(
@@ -482,6 +484,21 @@ def _validate_run(
         for item in pull_requests
     ):
         raise VerifierPipelineError("candidate workflow pull request mismatch")
+
+
+def _run_app_id(
+    api: VerifierAPI,
+    repository: str,
+    run: Mapping[str, Any],
+    head_sha: str,
+) -> int:
+    suite_id = _positive_integer(run.get("check_suite_id"), "run check suite id")
+    suite = api.get_json(
+        f"/repos/{_repository_path(repository)}/check-suites/{suite_id}"
+    )
+    if suite.get("id") != suite_id or suite.get("head_sha") != head_sha:
+        raise VerifierPipelineError("candidate workflow check suite mismatch")
+    return _positive_integer(_nested(suite, "app").get("id"), "run App id")
 
 
 def _run_pull_request_matches(
