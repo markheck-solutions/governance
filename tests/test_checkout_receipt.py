@@ -260,6 +260,14 @@ class CheckoutReceiptTests(unittest.TestCase):
             event=target_event,
             pull_request=target_pr,
             evaluator_repository=self.repository,
+            workflow={
+                **self.workflow,
+                "workflow_ref": (
+                    "example/target/.github/workflows/"
+                    "governance-candidate.yml@refs/heads/main"
+                ),
+                "evaluator_sha": self.evaluator_sha,
+            },
         )
 
         self.assertEqual(receipt.repository, target_repository)

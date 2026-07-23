@@ -75,7 +75,10 @@ def bind_checkout(
     _validate_checkout(evaluator_root, "evaluator")
     _match_target(target_root, trusted_repository, pr_identity)
     evaluator_identity = _match_evaluator(
-        evaluator_root, trusted_evaluator_repository, workflow
+        evaluator_root,
+        trusted_evaluator_repository,
+        trusted_repository,
+        workflow,
     )
     config_path = _trusted_input(target_root, config_path, "config")
     standard_path = _trusted_input(target_root, standard_path, "standard")
@@ -198,14 +201,18 @@ def _match_target(
 
 
 def _match_evaluator(
-    root: Path, repository: Mapping[str, Any], workflow: Mapping[str, Any]
+    root: Path,
+    repository: Mapping[str, Any],
+    workflow_repository: Mapping[str, Any],
+    workflow: Mapping[str, Any],
 ) -> dict[str, Any]:
-    sha = _required_sha(workflow, "workflow_sha")
+    sha_field = "evaluator_sha" if "evaluator_sha" in workflow else "workflow_sha"
+    sha = _required_sha(workflow, sha_field)
     if _git(root, "rev-parse", "HEAD") != sha:
         raise CheckoutReceiptError("workflow sha does not match evaluator checkout")
     workflow_ref = workflow.get("workflow_ref")
     if not isinstance(workflow_ref, str) or not workflow_ref.startswith(
-        f"{repository['full_name']}/.github/workflows/"
+        f"{workflow_repository['full_name']}/.github/workflows/"
     ):
         raise CheckoutReceiptError("workflow ref does not match repository")
     if _origin_repository(root) != repository["full_name"].lower():

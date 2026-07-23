@@ -3,12 +3,17 @@ from __future__ import annotations
 import base64
 import unittest
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from os import chdir
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from governance_eval.docker_runtime import runtime_root_path
+from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
+from governance_eval.docker_runtime import (
+    _result as host_result,
+)
+from governance_eval.docker_runtime import docker_run_argv, runtime_root_path
 from governance_eval.execution_plan_v2 import ExecutionPlanV2, compile_execution_plan_v2
 from governance_eval.execution_result_v2 import validate_execution_result_v2
 from governance_eval.hashing import sha256_json
@@ -87,6 +92,64 @@ def _result() -> tuple[dict[str, object], object, object]:
 
 
 class ExecutionResultV2Tests(unittest.TestCase):
+    def test_accepts_typed_profile_and_rejects_assurance_mutation(self) -> None:
+        receipt = _receipt()
+        plan = compile_execution_plan_v2(
+            receipt,
+            capability="standard_profile",
+            adapter_id="python.standard-profile.v1",
+        )
+        root = runtime_root_path(plan)
+        command = docker_run_argv(
+            docker=Path(plan.runtime["docker_path"]),
+            docker_host=plan.runtime["docker_host"],
+            plan=plan,
+            workspace=root / "workspace",
+            toolchain_root=root / "toolchain",
+            container_name="governance-profile",
+        )
+        capabilities = [
+            {
+                "capability": capability,
+                "adapter_id": adapter_id,
+                "assurance_class": assurance,
+                "status": "PASS",
+                "evidence": {},
+            }
+            for capability, adapter_id, assurance in STANDARD_PROFILE_ADAPTERS
+        ]
+        started = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+        outcome = {
+            "termination": "EXITED",
+            "exit_code": 0,
+            "stdout": _stream(),
+            "stderr": _stream(),
+            "started_at": started,
+            "completed_at": started + timedelta(seconds=1),
+        }
+        payload = host_result(
+            plan,
+            receipt,
+            None,
+            plan.runtime["docker_host"],
+            command,
+            started,
+            outcome=outcome,
+            errors=[],
+            profile=capabilities,
+        )
+        self.assertEqual(
+            validate_execution_result_v2(payload, plan, receipt)["integrity_status"],
+            "INTEGRITY_VALID",
+        )
+
+        payload["capabilities"][5]["assurance_class"] = "EVALUATOR_AUTHORITATIVE"
+        payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
+        self.assertEqual(
+            validate_execution_result_v2(payload, plan, receipt)["integrity_status"],
+            "INTEGRITY_INVALID",
+        )
+
     def test_accepts_exact_host_result(self) -> None:
         payload, plan, receipt = _result()
 

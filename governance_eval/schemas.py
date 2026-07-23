@@ -51,8 +51,8 @@ SCHEMA_VERSIONS = {
 
 _PACKAGED_SCHEMA_SHA256 = {
     "checkout_receipt": "8856cd39a7093eafcfad0b8cfb509e74b33c17eb24985e8205aef4b1c7eed90a",
-    "execution_plan_v2": "22177474a601c4c6dcfa23399173099b47974a5f984dc7d2944269abcb0b6cd9",
-    "execution_result_v2": "b7418511e88fb99f541841bb4658e3bb10e3241e67631c275931ba3aa64fe1fd",
+    "execution_plan_v2": "d24bde4cb053cbe95e8194842329ba1e29309b9039ffe1dba99b940c7664e4e5",
+    "execution_result_v2": "a00295160db612a2a859d1ba2d823ff7121e6566db3aaf0f2d76f3f55ea12984",
 }
 
 

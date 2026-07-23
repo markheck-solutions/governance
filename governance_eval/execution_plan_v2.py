@@ -16,6 +16,9 @@ _IMAGE = (
 )
 _POLICY_ID = "docker.lockdown.v1"
 _RUFF_SHA256 = "68971e86ff2a4bd44f45dc2dd28e590e785fea12dc966410ae269173ce6d64db"
+_PROFILE_TOOLCHAIN_SHA256 = (
+    "a3febf305b754c41ab62abeee10437ad550b82d7810d8492393ca0cae5b3784d"
+)
 
 
 class ExecutionPlanV2Error(ValueError):
@@ -58,7 +61,28 @@ def compile_execution_plan_v2(
         raise ExecutionPlanV2Error(
             f"unsupported capability adapter: {capability}/{adapter_id}"
         ) from exc
-    if (capability, adapter_id) != ("lint", "python.ruff-check.v1"):
+    if (capability, adapter_id) == ("lint", "python.ruff-check.v1"):
+        toolchain_sha256 = _RUFF_SHA256
+        toolchain = {"ruff": "0.15.21"}
+        argv = ["/opt/governance-toolchain/ruff", *adapter.arguments]
+    elif (capability, adapter_id) == (
+        "standard_profile",
+        "python.standard-profile.v1",
+    ):
+        toolchain_sha256 = _PROFILE_TOOLCHAIN_SHA256
+        toolchain = {
+            "governance-eval": "0.1.0",
+            "mypy": "2.2.0",
+            "ruff": "0.15.21",
+            "setuptools": "83.0.0",
+        }
+        argv = [
+            "python",
+            *adapter.arguments,
+            "--evaluator-sha",
+            receipt.evaluator["commit_sha"],
+        ]
+    else:
         raise ExecutionPlanV2Error("adapter has no authenticated Docker implementation")
     plan = ExecutionPlanV2(
         schema_version="2.0",
@@ -83,7 +107,7 @@ def compile_execution_plan_v2(
             "pids_limit": 128,
             "memory_bytes": 536870912,
             "cpus": "1.0",
-            "toolchain_sha256": _RUFF_SHA256,
+            "toolchain_sha256": toolchain_sha256,
             "docker_path": receipt.docker["path"],
             "docker_sha256": receipt.docker["sha256"],
             "docker_host": receipt.docker["host"],
@@ -91,11 +115,8 @@ def compile_execution_plan_v2(
         step={
             "step_id": adapter.capability,
             "adapter_id": adapter.adapter_id,
-            "toolchain": {"ruff": "0.15.21"},
-            "argv": [
-                "/opt/governance-toolchain/ruff",
-                *adapter.arguments,
-            ],
+            "toolchain": toolchain,
+            "argv": argv,
             "working_directory": "/workspace",
             "timeout_seconds": adapter.timeout_seconds,
             "output_limit_bytes": adapter.output_limit_bytes,
@@ -107,8 +128,13 @@ def compile_execution_plan_v2(
 def assess_execution_plan_v2(payload: Any, receipt: CheckoutReceipt) -> dict[str, Any]:
     errors: list[str] = []
     try:
+        step = payload.get("step") if isinstance(payload, dict) else None
+        raw_capability = step.get("step_id") if isinstance(step, dict) else ""
+        raw_adapter_id = step.get("adapter_id") if isinstance(step, dict) else ""
+        capability = raw_capability if isinstance(raw_capability, str) else ""
+        adapter_id = raw_adapter_id if isinstance(raw_adapter_id, str) else ""
         expected = compile_execution_plan_v2(
-            receipt, capability="lint", adapter_id="python.ruff-check.v1"
+            receipt, capability=capability, adapter_id=adapter_id
         ).to_json()
     except ExecutionPlanV2Error as exc:
         errors.append(str(exc))

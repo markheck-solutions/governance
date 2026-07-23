@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import importlib.metadata
+import json
 import os
 import shutil
 import subprocess
@@ -14,8 +17,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from governance_eval.checkout_receipt import CheckoutReceipt
+from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
 from governance_eval.execution_plan_v2 import (
     ExecutionPlanV2,
+    _RUFF_SHA256,
     assess_execution_plan_v2,
 )
 from governance_eval.hashing import sha256_file, sha256_json
@@ -41,7 +46,7 @@ def docker_run_argv(
 ) -> list[str]:
     runtime = plan.runtime
     step = plan.step
-    return [
+    command = [
         str(docker),
         f"--host={docker_host}",
         "run",
@@ -59,6 +64,11 @@ def docker_run_argv(
         "--env=TMPDIR=/workspace/.tmp",
         "--env=PYTHONNOUSERSITE=1",
         "--env=PYTHONDONTWRITEBYTECODE=1",
+    ]
+    if step["adapter_id"] == "python.standard-profile.v1":
+        command.append("--env=PYTHONPATH=/opt/governance-toolchain/site-packages")
+    return [
+        *command,
         f"--workdir={step['working_directory']}",
         "--mount",
         f"type=bind,src={workspace},dst=/workspace",
@@ -94,6 +104,7 @@ def execute_ruff_docker(
     outcome: dict[str, Any] | None = None
     errors: list[str] = []
     runtime_root: Path | None = None
+    profile: list[dict[str, Any]] | None = None
     docker_host = str(plan.runtime.get("docker_host", "unknown"))
     try:
         _validate_plan_binding(plan, receipt)
@@ -110,7 +121,7 @@ def execute_ruff_docker(
         runtime_root = candidate_root
         workspace = runtime_root / "workspace"
         toolchain_root = runtime_root / "toolchain"
-        _seal_toolchain(toolchain_binary, toolchain_root, plan)
+        _seal_toolchain(toolchain_binary, toolchain_root, plan, evaluator_root)
         _materialize_tree(target_root, plan.target, workspace, git)
         container_name = f"governance-{plan.plan_id[:12]}-{uuid.uuid4().hex[:8]}"
         command = docker_run_argv(
@@ -130,6 +141,9 @@ def execute_ruff_docker(
             output_limit=plan.step["output_limit_bytes"],
         )
         errors.extend(outcome["errors"])
+        profile = _profile_payload(plan, outcome)
+        if plan.step["adapter_id"] == "python.standard-profile.v1" and profile is None:
+            errors.append("standard profile evidence is missing or malformed")
     except (DockerRuntimeError, OSError, subprocess.SubprocessError) as exc:
         errors.append(str(exc))
     finally:
@@ -145,6 +159,7 @@ def execute_ruff_docker(
         started,
         outcome=outcome,
         errors=errors,
+        profile=profile,
     )
 
 
@@ -229,7 +244,15 @@ def _validate_evaluator(root: Path, evaluator: dict[str, Any], git: Path) -> Non
         raise DockerRuntimeError("evaluator tree changed after receipt")
 
 
-def _seal_toolchain(source: Path, destination: Path, plan: ExecutionPlanV2) -> None:
+def _seal_toolchain(
+    source: Path,
+    destination: Path,
+    plan: ExecutionPlanV2,
+    evaluator_root: Path,
+) -> None:
+    if plan.step["adapter_id"] == "python.standard-profile.v1":
+        _seal_profile_toolchain(source, destination, plan, evaluator_root)
+        return
     source = source.resolve()
     if not source.is_file():
         raise DockerRuntimeError("Ruff toolchain binary is unavailable")
@@ -243,6 +266,189 @@ def _seal_toolchain(source: Path, destination: Path, plan: ExecutionPlanV2) -> N
         raise DockerRuntimeError("sealed Ruff toolchain digest mismatch")
     if os.name != "nt":
         sealed.chmod(0o555)
+
+
+def _seal_profile_toolchain(
+    source: Path,
+    destination: Path,
+    plan: ExecutionPlanV2,
+    evaluator_root: Path,
+) -> None:
+    if source.is_symlink():
+        raise DockerRuntimeError("standard profile toolchain root is invalid")
+    source = source.resolve()
+    if not source.is_dir():
+        raise DockerRuntimeError("standard profile toolchain root is invalid")
+    lock = evaluator_root.resolve() / "requirements-governance.lock"
+    if not lock.is_file() or sha256_file(lock) != plan.runtime["toolchain_sha256"]:
+        raise DockerRuntimeError("standard profile lock digest mismatch")
+    site_packages = _site_packages(source)
+    versions = _profile_package_versions(site_packages)
+    expected = plan.step["toolchain"]
+    if any(versions.get(name) != [version] for name, version in expected.items()):
+        raise DockerRuntimeError("standard profile package versions mismatch")
+    _verify_installed_evaluator(site_packages, evaluator_root)
+    ruff = source / "bin" / "ruff"
+    if ruff.is_symlink() or not ruff.is_file() or sha256_file(ruff) != _RUFF_SHA256:
+        raise DockerRuntimeError("standard profile Ruff binary mismatch")
+    _reject_links(site_packages)
+    destination.mkdir()
+    shutil.copyfile(ruff, destination / "ruff")
+    shutil.copytree(
+        site_packages,
+        destination / "site-packages",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    _copy_profile_benchmark(evaluator_root, destination / "benchmark")
+    if os.name != "nt":
+        (destination / "ruff").chmod(0o555)
+
+
+def _profile_package_versions(site_packages: Path) -> dict[str, list[str]]:
+    versions: dict[str, list[str]] = {}
+    for distribution in importlib.metadata.distributions(path=[str(site_packages)]):
+        name = distribution.metadata["Name"]
+        if name:
+            normalized = str(name).lower().replace("_", "-")
+            versions.setdefault(normalized, []).append(distribution.version)
+    return versions
+
+
+def _copy_profile_benchmark(evaluator_root: Path, benchmark: Path) -> None:
+    benchmark.mkdir()
+    for name in ("cases", "fixtures", "schemas", "target_packs", "targets"):
+        source_path = evaluator_root / name
+        _reject_links(source_path)
+        shutil.copytree(source_path, benchmark / name)
+    for name in ("AGENTS.md", "TASK.md", "requirements-governance.lock"):
+        source_path = evaluator_root / name
+        if not source_path.is_file() or source_path.is_symlink():
+            raise DockerRuntimeError("standard profile benchmark asset is invalid")
+        shutil.copyfile(source_path, benchmark / name)
+
+
+def _site_packages(root: Path) -> Path:
+    candidates = [
+        *root.glob("lib/python*/site-packages"),
+        root / "Lib" / "site-packages",
+    ]
+    matches = [path for path in candidates if path.is_dir()]
+    if len(matches) != 1:
+        raise DockerRuntimeError("standard profile site-packages is ambiguous")
+    candidate = matches[0]
+    current = root
+    for part in candidate.relative_to(root).parts:
+        current = current / part
+        if current.is_symlink():
+            raise DockerRuntimeError("standard profile site-packages contains a link")
+    return candidate.resolve()
+
+
+def _verify_installed_evaluator(site_packages: Path, evaluator_root: Path) -> None:
+    source = evaluator_root.resolve() / "governance_eval"
+    installed = site_packages / "governance_eval"
+    if not source.is_dir() or not installed.is_dir():
+        raise DockerRuntimeError("installed evaluator package is unavailable")
+    _reject_links(source)
+    _reject_links(installed)
+    expected = {
+        path.relative_to(source).as_posix(): sha256_file(path)
+        for path in source.rglob("*")
+        if path.is_file()
+        and not path.is_symlink()
+        and (path.suffix == ".py" or "schema_data" in path.parts)
+        and "__pycache__" not in path.parts
+    }
+    observed = {
+        path.relative_to(installed).as_posix(): sha256_file(path)
+        for path in installed.rglob("*")
+        if path.is_file()
+        and not path.is_symlink()
+        and (path.suffix == ".py" or "schema_data" in path.parts)
+        and "__pycache__" not in path.parts
+    }
+    if not expected or observed != expected:
+        raise DockerRuntimeError("installed evaluator package differs from checkout")
+
+
+def _reject_links(root: Path) -> None:
+    if root.is_symlink() or any(path.is_symlink() for path in root.rglob("*")):
+        raise DockerRuntimeError("standard profile toolchain contains a link")
+
+
+def _profile_payload(
+    plan: ExecutionPlanV2, outcome: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    if plan.step["adapter_id"] != "python.standard-profile.v1":
+        return None
+    payload = _decode_profile_payload(outcome["stdout"])
+    if payload is None or set(payload) != {
+        "schema_version",
+        "profile",
+        "status",
+        "capabilities",
+    }:
+        return None
+    capabilities = payload["capabilities"]
+    if not isinstance(capabilities, list) or len(capabilities) != len(
+        STANDARD_PROFILE_ADAPTERS
+    ):
+        return None
+    if not all(
+        _valid_profile_capability(item, expected)
+        for item, expected in zip(capabilities, STANDARD_PROFILE_ADAPTERS, strict=True)
+    ):
+        return None
+    expected_status = (
+        "PASS"
+        if all(item["status"] == "PASS" for item in capabilities)
+        else "BLOCK_TECHNICAL"
+    )
+    if (
+        payload["schema_version"] != "1.0"
+        or payload["profile"] != "python.standard.v1"
+        or payload["status"] != expected_status
+    ):
+        return None
+    return capabilities
+
+
+def _decode_profile_payload(stream: dict[str, Any]) -> dict[str, Any] | None:
+    if stream["truncated"]:
+        return None
+    try:
+        raw = base64.b64decode(stream["captured_base64"], validate=True)
+        text = raw.decode("utf-8")
+        lines = text.splitlines()
+        if len(lines) != 1 or not lines[0].startswith(
+            "__GOVERNANCE_STANDARD_PROFILE_V1__"
+        ):
+            return None
+        payload = json.loads(
+            lines[0].removeprefix("__GOVERNANCE_STANDARD_PROFILE_V1__")
+        )
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _valid_profile_capability(item: Any, expected: tuple[str, str, str]) -> bool:
+    if not isinstance(item, dict) or set(item) != {
+        "capability",
+        "adapter_id",
+        "assurance_class",
+        "status",
+        "evidence",
+    }:
+        return False
+    capability, adapter_id, assurance = expected
+    return (
+        item["capability"] == capability
+        and item["adapter_id"] == adapter_id
+        and item["assurance_class"] == assurance
+        and item["status"] in {"PASS", "BLOCK_TECHNICAL"}
+        and isinstance(item["evidence"], dict)
+    )
 
 
 def _materialize_tree(
@@ -465,6 +671,7 @@ def _result(
     *,
     outcome: dict[str, Any] | None,
     errors: list[str],
+    profile: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     completed = datetime.now(UTC)
     if outcome:
@@ -481,13 +688,22 @@ def _result(
         and outcome["termination"] == "EXITED"
         and outcome["exit_code"] == 0
         and not errors
+        and (
+            plan.step["adapter_id"] != "python.standard-profile.v1"
+            or profile is not None
+            and all(item["status"] == "PASS" for item in profile)
+        )
         else "BLOCK_TECHNICAL",
         "runtime": {
             "image": plan.runtime["image"],
             "policy_id": plan.runtime["policy_id"],
             "docker_path": plan.runtime["docker_path"],
             "docker_sha256": plan.runtime["docker_sha256"],
-            "toolchain": "ruff==0.15.21",
+            "toolchain": (
+                "python.standard-profile.v1"
+                if plan.step["adapter_id"] == "python.standard-profile.v1"
+                else "ruff==0.15.21"
+            ),
             "toolchain_sha256": plan.runtime["toolchain_sha256"],
             "docker_host": docker_host,
         },
@@ -502,6 +718,8 @@ def _result(
         "stderr": outcome["stderr"] if outcome else empty,
         "errors": errors,
     }
+    if profile is not None:
+        payload["capabilities"] = profile
     payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
     return payload
 

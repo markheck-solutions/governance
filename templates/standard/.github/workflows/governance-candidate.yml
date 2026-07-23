@@ -1,0 +1,104 @@
+name: Governance Candidate Evidence
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governance-candidate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  candidate-evidence:
+    name: Governance Candidate Evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: target
+
+      - name: Checkout exact Governance evaluator
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: markheck-solutions/governance
+          ref: __GOVERNANCE_SHA__
+          path: .governance/evaluator
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up exact Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+          check-latest: false
+
+      - name: Provision pinned candidate toolchain
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          PYTHONHOME: ""
+          PYTHONPATH: ""
+        run: |
+          set -euo pipefail
+          runtime="${RUNNER_TEMP}/governance-candidate-toolchain"
+          install_source="${RUNNER_TEMP}/governance-evaluator-source"
+          mkdir -p "$install_source"
+          git -C .governance/evaluator archive --format=tar HEAD \
+            | tar -xf - -C "$install_source"
+          python -m venv "$runtime"
+          "$runtime/bin/python" -I -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r .governance/evaluator/requirements-governance.lock
+          "$runtime/bin/python" -I -m pip install \
+            --disable-pip-version-check \
+            --no-deps \
+            --no-build-isolation \
+            "$install_source"
+
+      - name: Run contained non-authoritative candidate evaluation
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          PYTHONHOME: ""
+          PYTHONPATH: ""
+        run: |
+          set -euo pipefail
+          runtime="${RUNNER_TEMP}/governance-candidate-toolchain"
+          "$runtime/bin/python" -I -m governance_eval.candidate_pipeline \
+            --target-root "${GITHUB_WORKSPACE}/target" \
+            --evaluator-root "${GITHUB_WORKSPACE}/.governance/evaluator" \
+            --event-path "${GITHUB_EVENT_PATH}" \
+            --config-path "${GITHUB_WORKSPACE}/target/.github/governance/supportability.yml" \
+            --standard-path "${GITHUB_WORKSPACE}/target/.github/governance/supportability-standard.md" \
+            --workflow-path ".github/workflows/governance-candidate.yml" \
+            --workflow-ref "${GITHUB_WORKFLOW_REF}" \
+            --workflow-commit-sha "${{ github.event.pull_request.head.sha }}" \
+            --evaluator-sha "__GOVERNANCE_SHA__" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --toolchain-root "$runtime" \
+            --output-dir "${RUNNER_TEMP}/governance-candidate-evidence"
+
+      - name: Upload untrusted candidate evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: governance-candidate-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/governance-candidate-evidence
+          if-no-files-found: error
+          retention-days: 7

@@ -35,6 +35,7 @@ def run_benchmark(
     repeat: int = 3,
     artifacts_dir: Path | None = None,
     exact_commands: list[str] | None = None,
+    evaluator_git_sha: str | None = None,
 ) -> dict[str, Any]:
     resolved_root = repo_root(root)
     started = time.perf_counter()
@@ -72,7 +73,7 @@ def run_benchmark(
         "run_id": run_id,
         "generated_at": run_id,
         "governance_repository_url": GOVERNANCE_REPOSITORY_URL,
-        "governance_evaluator_git_sha": git_sha(resolved_root),
+        "governance_evaluator_git_sha": evaluator_git_sha or git_sha(resolved_root),
         "governance_target_pack_hash": target_pack_hash(
             resolved_root / DEFAULT_TARGET_PACK
         ),

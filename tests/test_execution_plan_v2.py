@@ -59,6 +59,37 @@ def _receipt() -> CheckoutReceipt:
 
 
 class ExecutionPlanV2Tests(unittest.TestCase):
+    def test_compiles_fixed_standard_profile_from_receipt(self) -> None:
+        plan = compile_execution_plan_v2(
+            _receipt(),
+            capability="standard_profile",
+            adapter_id="python.standard-profile.v1",
+        )
+
+        payload = plan.to_json()
+        validate_named("execution_plan_v2", payload)
+        self.assertEqual(payload["step"]["timeout_seconds"], 300)
+        self.assertEqual(
+            payload["runtime"]["toolchain_sha256"],
+            "a3febf305b754c41ab62abeee10437ad550b82d7810d8492393ca0cae5b3784d",
+        )
+        self.assertEqual(
+            payload["step"]["argv"],
+            [
+                "python",
+                "-P",
+                "-s",
+                "-m",
+                "governance_eval.standard_profile",
+                "--workspace",
+                "/workspace",
+                "--benchmark-root",
+                "/opt/governance-toolchain/benchmark",
+                "--evaluator-sha",
+                "e" * 40,
+            ],
+        )
+
     def test_compiles_only_from_authenticated_checkout_receipt(self) -> None:
         plan = compile_execution_plan_v2(
             _receipt(), capability="lint", adapter_id="python.ruff-check.v1"
