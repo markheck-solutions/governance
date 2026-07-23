@@ -38,6 +38,7 @@ API_VERSION = "2022-11-28"
 MAX_JSON_BYTES = 4 * 1024 * 1024
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -47,6 +48,8 @@ class VerifierPipelineError(RuntimeError):
 
 class VerifierAPI(Protocol):
     def get_json(self, path: str) -> Mapping[str, Any]: ...
+
+    def get_list(self, path: str) -> list[Any]: ...
 
     def post_json(self, path: str, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
@@ -65,6 +68,11 @@ class VerificationTarget:
     run_attempt: int
     evaluator_sha: str
     verifier_app_id: int
+    repository_id: int
+    workflow_sha256: str
+    configuration_sha256: str
+    standard_sha256: str
+    required_context: str
 
 
 class GitHubAPIClient:
@@ -78,7 +86,13 @@ class GitHubAPIClient:
         self.opener = urllib.request.build_opener(_SafeRedirectHandler())
 
     def get_json(self, path: str) -> Mapping[str, Any]:
-        return self._json_request(path, method="GET")
+        return _mapping(self._json_request(path, method="GET"), "GitHub API response")
+
+    def get_list(self, path: str) -> list[Any]:
+        value = self._json_request(path, method="GET")
+        if not isinstance(value, list):
+            raise VerifierPipelineError("GitHub API response must be an array")
+        return value
 
     def post_json(self, path: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         return self._json_request(
@@ -107,7 +121,7 @@ class GitHubAPIClient:
 
     def _json_request(
         self, path: str, *, method: str, data: bytes | None = None
-    ) -> Mapping[str, Any]:
+    ) -> Any:
         request = self._request(path, method=method, data=data)
         try:
             with self.opener.open(request, timeout=30) as response:
@@ -120,7 +134,7 @@ class GitHubAPIClient:
             value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise VerifierPipelineError("GitHub API returned malformed JSON") from exc
-        return _mapping(value, "GitHub API response")
+        return value
 
     def _request(
         self, path: str, *, method: str, data: bytes | None = None
@@ -175,8 +189,11 @@ def verify_and_publish(
     _validate_target(target)
     _prepare_output(output_directory)
     repository = _repository(api, target.repository)
+    if repository["id"] != target.repository_id:
+        raise VerifierPipelineError("enrolled repository id mismatch")
     pull_request = _pull_request(api, target, repository)
     initial_head = _sha(_nested(pull_request, "head").get("sha"), "PR head")
+    request: Mapping[str, Any]
     try:
         archive = output_directory / "candidate-artifact.zip"
         context = _collect_context(
@@ -209,27 +226,14 @@ def verify_and_publish(
             "result": "REJECT",
             "errors": ["pull request head changed during verification"],
         }
-    check_path = f"/repos/{_repository_path(target.repository)}/check-runs"
-    started = api.post_json(check_path, _begin_check_request(request))
-    check_id = _positive_integer(started.get("id"), "created check run id")
-    actual_app_id = _positive_integer(
-        _nested(started, "app").get("id"), "created check App id"
+    started, response, check_id, request, identity_valid = _publish_check(
+        api, target.repository, target.verifier_app_id, request
     )
-    if (
-        actual_app_id != target.verifier_app_id
-        or started.get("name") != REQUIRED_CONTEXT
-        or started.get("head_sha") != request["head_sha"]
-    ):
-        request = _rejection_request(
-            str(request["head_sha"]), "created check App or head identity mismatch"
-        )
+    if not identity_valid:
         receipt = {
             "result": "REJECT",
             "errors": ["created check App or head identity mismatch"],
         }
-    response = api.patch_json(
-        f"{check_path}/{check_id}", _check_update_request(request)
-    )
     _write_json(output_directory / "verifier-receipt.json", receipt)
     _write_json(output_directory / "check-run-request.json", request)
     _write_json(output_directory / "check-run-created.json", started)
@@ -239,6 +243,113 @@ def verify_and_publish(
         "head_sha": request["head_sha"],
         "check_run_id": check_id,
     }
+
+
+def publish_rejection(
+    *,
+    api: VerifierAPI,
+    repository: str,
+    repository_id: int,
+    pull_request: int,
+    head_sha: str,
+    verifier_app_id: int,
+    error: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    if not _REPOSITORY_RE.fullmatch(repository) or repository != repository.lower():
+        raise VerifierPipelineError("target repository must use canonical owner/name")
+    _positive_integer(repository_id, "repository id")
+    _positive_integer(pull_request, "pull request")
+    _positive_integer(verifier_app_id, "verifier App id")
+    _sha(head_sha, "PR head")
+    _prepare_output(output_directory)
+    observed_repository = _repository(api, repository)
+    if observed_repository["id"] != repository_id:
+        raise VerifierPipelineError("enrolled repository id mismatch")
+    pull = api.get_json(f"/repos/{_repository_path(repository)}/pulls/{pull_request}")
+    if pull.get("state") != "open" or pull.get("number") != pull_request:
+        raise VerifierPipelineError("pull request identity or state mismatch")
+    current_head = _sha(_nested(pull, "head").get("sha"), "PR head")
+    if current_head != head_sha:
+        raise VerifierPipelineError("pull request head changed before rejection")
+    request: Mapping[str, Any] = _rejection_request(head_sha, error)
+    started, response, check_id, request, _identity_valid = _publish_check(
+        api, repository, verifier_app_id, request
+    )
+    receipt = {"result": "REJECT", "errors": [error]}
+    _write_json(output_directory / "verifier-receipt.json", receipt)
+    _write_json(output_directory / "check-run-request.json", request)
+    _write_json(output_directory / "check-run-created.json", started)
+    _write_json(output_directory / "check-run-response.json", response)
+    return {"result": "REJECT", "head_sha": head_sha, "check_run_id": check_id}
+
+
+def _publish_check(
+    api: VerifierAPI,
+    repository: str,
+    verifier_app_id: int,
+    request: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any], int, Mapping[str, Any], bool]:
+    check_path = f"/repos/{_repository_path(repository)}/check-runs"
+    started = _existing_check(
+        api, repository, verifier_app_id, str(request["head_sha"])
+    )
+    if started is None:
+        started = api.post_json(check_path, _begin_check_request(request))
+    check_id = _positive_integer(started.get("id"), "authoritative check run id")
+    actual_app_id = _positive_integer(
+        _nested(started, "app").get("id"), "created check App id"
+    )
+    identity_valid = (
+        actual_app_id == verifier_app_id
+        and started.get("name") == REQUIRED_CONTEXT
+        and started.get("head_sha") == request["head_sha"]
+    )
+    final_request = (
+        request
+        if identity_valid
+        else _rejection_request(
+            str(request["head_sha"]), "created check App or head identity mismatch"
+        )
+    )
+    response = api.patch_json(
+        f"{check_path}/{check_id}", _check_update_request(final_request)
+    )
+    return started, response, check_id, final_request, identity_valid
+
+
+def _existing_check(
+    api: VerifierAPI, repository: str, verifier_app_id: int, head_sha: str
+) -> Mapping[str, Any] | None:
+    name = quote(REQUIRED_CONTEXT, safe="")
+    base_path = (
+        f"/repos/{_repository_path(repository)}/commits/{head_sha}/check-runs"
+        f"?check_name={name}&per_page=100"
+    )
+    values: list[Any] = []
+    for page in range(1, 101):
+        path = base_path if page == 1 else f"{base_path}&page={page}"
+        payload = api.get_json(path)
+        page_values = payload.get("check_runs")
+        if not isinstance(page_values, list) or len(page_values) > 100:
+            raise VerifierPipelineError("authoritative check listing is invalid")
+        values.extend(page_values)
+        if len(page_values) < 100:
+            break
+    else:
+        raise VerifierPipelineError("authoritative check pagination exceeded")
+    matches = [
+        item
+        for item in values
+        if isinstance(item, Mapping)
+        and item.get("name") == REQUIRED_CONTEXT
+        and isinstance(item.get("app"), Mapping)
+        and item["app"].get("id") == verifier_app_id
+        and item.get("head_sha") == head_sha
+    ]
+    if len(matches) > 1:
+        raise VerifierPipelineError("authoritative check identity is ambiguous")
+    return matches[0] if matches else None
 
 
 def _collect_context(
@@ -269,6 +380,17 @@ def _collect_context(
         raise VerifierPipelineError("Governance evaluator repository id mismatch")
     head_commit = _commit(api, target.repository, head_sha)
     evaluator_commit = _commit(api, GOVERNANCE_REPOSITORY, target.evaluator_sha)
+    workflow_sha256 = _content_sha256(api, target.repository, WORKFLOW_PATH, head_sha)
+    configuration_sha256 = _content_sha256(
+        api, target.repository, CONFIGURATION_PATH, head_sha
+    )
+    standard_sha256 = _content_sha256(api, target.repository, STANDARD_PATH, head_sha)
+    if (
+        workflow_sha256 != target.workflow_sha256
+        or configuration_sha256 != target.configuration_sha256
+        or standard_sha256 != target.standard_sha256
+    ):
+        raise VerifierPipelineError("enrolled workflow or configuration hash mismatch")
     return VerifierContext(
         repository_id=repository["id"],
         repository_full_name=repository["full_name"],
@@ -279,19 +401,13 @@ def _collect_context(
         current_head_sha=head_sha,
         workflow_path=WORKFLOW_PATH,
         workflow_commit_sha=head_sha,
-        workflow_file_sha256=_content_sha256(
-            api, target.repository, WORKFLOW_PATH, head_sha
-        ),
+        workflow_file_sha256=workflow_sha256,
         evaluator_repository_id=evaluator["id"],
         evaluator_repository_full_name=evaluator["full_name"],
         evaluator_sha=target.evaluator_sha,
         evaluator_tree_sha=_tree_sha(evaluator_commit),
-        configuration_sha256=_content_sha256(
-            api, target.repository, CONFIGURATION_PATH, head_sha
-        ),
-        standard_sha256=_content_sha256(
-            api, target.repository, STANDARD_PATH, head_sha
-        ),
+        configuration_sha256=configuration_sha256,
+        standard_sha256=standard_sha256,
         run_id=target.run_id,
         run_attempt=target.run_attempt,
         run_event=str(run.get("event")),
@@ -389,13 +505,23 @@ def _artifact(
     repository_id: int,
     head_sha: str,
 ) -> Mapping[str, Any]:
-    payload = api.get_json(
-        f"/repos/{_repository_path(target.repository)}/actions/runs/{target.run_id}/artifacts?per_page=100"
+    base_path = (
+        f"/repos/{_repository_path(target.repository)}/actions/runs/"
+        f"{target.run_id}/artifacts?per_page=100"
     )
-    artifacts = payload.get("artifacts")
+    artifacts: list[Any] = []
+    for page in range(1, 101):
+        path = base_path if page == 1 else f"{base_path}&page={page}"
+        payload = api.get_json(path)
+        page_values = payload.get("artifacts")
+        if not isinstance(page_values, list) or len(page_values) > 100:
+            raise VerifierPipelineError("candidate artifact listing is invalid")
+        artifacts.extend(page_values)
+        if len(page_values) < 100:
+            break
+    else:
+        raise VerifierPipelineError("candidate artifact pagination exceeded")
     expected_name = artifact_name(target.run_id, target.run_attempt)
-    if not isinstance(artifacts, list):
-        raise VerifierPipelineError("candidate artifact listing is invalid")
     matches = [
         item
         for item in artifacts
@@ -465,7 +591,19 @@ def _validate_target(target: VerificationTarget) -> None:
     if target.pull_request < 1 or target.run_id < 1 or target.run_attempt < 1:
         raise VerifierPipelineError("target numeric identity must be positive")
     _positive_integer(target.verifier_app_id, "verifier App id")
+    _positive_integer(target.repository_id, "repository id")
     _sha(target.evaluator_sha, "evaluator")
+    if any(
+        not _HASH_RE.fullmatch(value)
+        for value in (
+            target.workflow_sha256,
+            target.configuration_sha256,
+            target.standard_sha256,
+        )
+    ):
+        raise VerifierPipelineError("enrolled content hash is invalid")
+    if target.required_context != REQUIRED_CONTEXT:
+        raise VerifierPipelineError("required context differs from Governance contract")
 
 
 def _prepare_output(path: Path) -> None:
@@ -586,11 +724,16 @@ def _parser() -> argparse.ArgumentParser:
         description="Verify candidate evidence and publish the authoritative App check"
     )
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--repository-id", required=True, type=int)
     parser.add_argument("--pull-request", required=True, type=int)
     parser.add_argument("--run-id", required=True, type=int)
     parser.add_argument("--run-attempt", required=True, type=int)
     parser.add_argument("--evaluator-sha", required=True)
     parser.add_argument("--verifier-app-id", required=True, type=int)
+    parser.add_argument("--workflow-sha256", required=True)
+    parser.add_argument("--configuration-sha256", required=True)
+    parser.add_argument("--standard-sha256", required=True)
+    parser.add_argument("--required-context", required=True)
     parser.add_argument("--output-directory", required=True, type=Path)
     return parser
 
@@ -610,6 +753,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_attempt=arguments.run_attempt,
             evaluator_sha=arguments.evaluator_sha,
             verifier_app_id=arguments.verifier_app_id,
+            repository_id=arguments.repository_id,
+            workflow_sha256=arguments.workflow_sha256,
+            configuration_sha256=arguments.configuration_sha256,
+            standard_sha256=arguments.standard_sha256,
+            required_context=arguments.required_context,
         ),
         output_directory=arguments.output_directory,
     )

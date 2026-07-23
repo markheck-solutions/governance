@@ -8,9 +8,12 @@ confirms the server-reported App ID and exact head, then completes that same che
 
 Required repository configuration:
 
-- variable `GOVERNANCE_VERIFIER_CLIENT_ID`
 - variable `GOVERNANCE_VERIFIER_APP_ID`
+- variable `GOVERNANCE_VERIFIER_APP_SLUG`
 - secret `GOVERNANCE_VERIFIER_APP_PRIVATE_KEY`
 
 The App installation must use selected repositories and only `Actions: read`,
 `Checks: write`, `Contents: read`, `Metadata: read`, and `Pull requests: read`.
+
+`enrollments.json` is the explicit repository allowlist. Scheduled and diagnostic
+runs use the same controller; no unenrolled repository is scanned.

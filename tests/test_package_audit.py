@@ -15,6 +15,7 @@ from governance_eval.docker_runtime import DockerRuntimeError
 from governance_eval.package_audit import (
     _copy_build_input,
     _contained_build_argv,
+    audit_candidate_wheel,
     audit_wheel,
     run_package_audit,
 )
@@ -23,6 +24,17 @@ LIVE_DOCKER = os.environ.get("GOVERNANCE_LIVE_DOCKER") == "1"
 
 
 class PackageAuditTests(unittest.TestCase):
+    def test_generic_candidate_audit_validates_metadata_and_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_source(root)
+            wheel = self._write_wheel(root / "candidate.whl", include_schema=True)
+
+            evidence, errors = audit_candidate_wheel(root, wheel)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(evidence["metadata"]["name"], "governance-eval")
+
     def test_rejected_repo_local_artifact_path_creates_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

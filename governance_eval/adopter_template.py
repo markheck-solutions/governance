@@ -105,6 +105,7 @@ def _validate_common_contract(workflow: str) -> None:
         "--only-binary=:all:",
         "git -C .governance/evaluator archive --format=tar HEAD",
         "governance_eval.candidate_pipeline",
+        '--toolchain-root "$runtime"',
         '--workflow-path ".github/workflows/governance-candidate.yml"',
         "Upload untrusted candidate evidence",
     )

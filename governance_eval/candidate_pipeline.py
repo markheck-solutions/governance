@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from governance_eval.adoption import AdoptionError, validate_adoption_config
 from governance_eval.candidate_bundle import (
     build_candidate_bundle,
     write_candidate_bundle,
@@ -38,7 +39,7 @@ def run_candidate_pipeline(
     evaluator_sha: str,
     run_id: int,
     run_attempt: int,
-    toolchain_binary: Path,
+    toolchain_root: Path,
     output_dir: Path,
 ) -> dict[str, Any]:
     target = target_root.resolve()
@@ -48,6 +49,9 @@ def run_candidate_pipeline(
     pull_request = _mapping(event.get("pull_request"), "pull request")
     docker = _executable("docker")
     workflow_file = _inside(target, target / workflow_path, "workflow")
+    config_file = _inside(target, config_path, "configuration")
+    standard_file = _inside(target, standard_path, "standard")
+    _validate_configuration(config_file, standard_file, evaluator_sha)
     receipt = bind_checkout(
         target_root=target,
         evaluator_root=evaluator,
@@ -68,8 +72,8 @@ def run_candidate_pipeline(
             "api_url": "https://api.github.com",
             "observed_at": _observed_at(pull_request),
         },
-        config_path=_inside(target, config_path, "configuration"),
-        standard_path=_inside(target, standard_path, "standard"),
+        config_path=config_file,
+        standard_path=standard_file,
         runtime={
             "docker_path": str(docker),
             "docker_sha256": sha256_file(docker),
@@ -77,14 +81,16 @@ def run_candidate_pipeline(
         },
     )
     plan = compile_execution_plan_v2(
-        receipt, capability="lint", adapter_id="python.ruff-check.v1"
+        receipt,
+        capability="standard_profile",
+        adapter_id="python.standard-profile.v1",
     )
     result = execute_ruff_docker(
         plan=plan,
         receipt=receipt,
         target_root=target,
         evaluator_root=evaluator,
-        toolchain_binary=toolchain_binary.resolve(strict=True),
+        toolchain_binary=toolchain_root.resolve(strict=True),
     )
     payloads = build_candidate_bundle(
         receipt=receipt,
@@ -110,6 +116,37 @@ def _load_event(path: Path) -> Mapping[str, Any]:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CandidatePipelineError("GitHub event is malformed") from exc
     return _mapping(payload, "GitHub event")
+
+
+def _validate_configuration(
+    config_path: Path, standard_path: Path, evaluator_sha: str
+) -> None:
+    config = _load_json(config_path, "adoption configuration")
+    verifier = _mapping(config.get("verifier"), "verifier configuration")
+    app_id = verifier.get("app_id")
+    if not isinstance(app_id, int) or isinstance(app_id, bool) or app_id < 1:
+        raise CandidatePipelineError("verifier App id must be positive")
+    try:
+        validate_adoption_config(
+            config, governance_sha=evaluator_sha, verifier_app_id=app_id
+        )
+    except AdoptionError as exc:
+        raise CandidatePipelineError(str(exc)) from exc
+    standard = _mapping(config.get("standard"), "standard configuration")
+    if standard.get("sha256") != sha256_file(standard_path):
+        raise CandidatePipelineError("adoption standard hash mismatch")
+
+
+def _load_json(path: Path, label: str) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CandidatePipelineError(f"{label} is malformed") from exc
+    return _mapping(payload, label)
 
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
@@ -174,7 +211,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--evaluator-sha", required=True)
     parser.add_argument("--run-id", required=True, type=int)
     parser.add_argument("--run-attempt", required=True, type=int)
-    parser.add_argument("--toolchain-binary", required=True, type=Path)
+    parser.add_argument("--toolchain-root", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     return parser
 

@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
 from governance_eval.checkout_receipt import CheckoutReceipt
 from governance_eval.docker_runtime import docker_run_argv, runtime_root_path
 from governance_eval.execution_plan_v2 import ExecutionPlanV2, assess_execution_plan_v2
@@ -36,6 +37,27 @@ def validate_execution_result_v2(
 def _integrity_error(
     payload: Any, plan: ExecutionPlanV2, receipt: CheckoutReceipt
 ) -> str | None:
+    identity_error = _identity_error(payload, plan, receipt)
+    if identity_error is not None:
+        return identity_error
+    binding_error = _runtime_error(payload, plan)
+    if binding_error is not None:
+        return binding_error
+    output_error = _output_error(payload, plan)
+    if output_error is not None:
+        return output_error
+    outcome_error = _outcome_error(payload)
+    if outcome_error is not None:
+        return outcome_error
+    profile_error = _profile_error(payload, plan)
+    if profile_error is not None:
+        return profile_error
+    return _timing_error(payload, plan.step["timeout_seconds"])
+
+
+def _identity_error(
+    payload: Any, plan: ExecutionPlanV2, receipt: CheckoutReceipt
+) -> str | None:
     plan_assessment = assess_execution_plan_v2(plan.to_json(), receipt)
     if plan_assessment["capability_status"] != "PASS":
         return "execution result v2 plan is not evaluator-owned"
@@ -51,16 +73,7 @@ def _integrity_error(
         return "execution result v2 plan id mismatch"
     if payload["checkout_receipt_id"] != receipt.receipt_id:
         return "execution result v2 checkout receipt mismatch"
-    binding_error = _runtime_error(payload, plan)
-    if binding_error is not None:
-        return binding_error
-    output_error = _output_error(payload, plan)
-    if output_error is not None:
-        return output_error
-    outcome_error = _outcome_error(payload)
-    if outcome_error is not None:
-        return outcome_error
-    return _timing_error(payload, plan.step["timeout_seconds"])
+    return None
 
 
 def _output_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
@@ -83,10 +96,15 @@ def _output_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
 
 def _runtime_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
     runtime = payload["runtime"]
+    toolchain = (
+        "python.standard-profile.v1"
+        if plan.step["adapter_id"] == "python.standard-profile.v1"
+        else "ruff==0.15.21"
+    )
     expected = {
         "image": plan.runtime["image"],
         "policy_id": plan.runtime["policy_id"],
-        "toolchain": "ruff==0.15.21",
+        "toolchain": toolchain,
         "toolchain_sha256": plan.runtime["toolchain_sha256"],
         "docker_path": plan.runtime["docker_path"],
         "docker_sha256": plan.runtime["docker_sha256"],
@@ -191,6 +209,44 @@ def _outcome_error(payload: dict[str, Any]) -> str | None:
     )
     if passed != clean_exit:
         return "execution result v2 outcome is inconsistent"
+    return None
+
+
+def _profile_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
+    capabilities = payload.get("capabilities")
+    is_profile = plan.step["adapter_id"] == "python.standard-profile.v1"
+    if not is_profile:
+        return (
+            "execution result v2 unexpected profile capabilities"
+            if capabilities is not None
+            else None
+        )
+    if capabilities is None:
+        return (
+            "execution result v2 PASS profile evidence is missing"
+            if payload["capability_status"] == "PASS"
+            else None
+        )
+    if payload["termination"] != "EXITED":
+        return "execution result v2 profile evidence has invalid termination"
+    if not isinstance(capabilities, list) or len(capabilities) != len(
+        STANDARD_PROFILE_ADAPTERS
+    ):
+        return "execution result v2 profile capability set is invalid"
+    for item, expected in zip(capabilities, STANDARD_PROFILE_ADAPTERS, strict=True):
+        capability, adapter_id, assurance = expected
+        if (
+            not isinstance(item, dict)
+            or item.get("capability") != capability
+            or item.get("adapter_id") != adapter_id
+            or item.get("assurance_class") != assurance
+            or item.get("status") not in {"PASS", "BLOCK_TECHNICAL"}
+            or not isinstance(item.get("evidence"), dict)
+        ):
+            return "execution result v2 profile capability identity is invalid"
+    all_passed = all(item["status"] == "PASS" for item in capabilities)
+    if payload["capability_status"] == "PASS" and not all_passed:
+        return "execution result v2 profile outcome is inconsistent"
     return None
 
 

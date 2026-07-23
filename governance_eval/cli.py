@@ -12,6 +12,8 @@ from governance_eval.cases import load_cases
 from governance_eval.decision import decide
 from governance_eval.detectors import run_detectors
 from governance_eval.architecture_gate import main as architecture_gate_main
+from governance_eval.adoption import bundle_main as adoption_bundle_main
+from governance_eval.adoption import proof_main as adoption_proof_main
 from governance_eval.lock import write_spaghetti_lock
 from governance_eval.package_audit import run_package_audit
 from governance_eval.paths import repo_root
@@ -22,16 +24,9 @@ from governance_eval.target_pack import validate_target_request
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] == "architecture-gate":
-        return architecture_gate_main(argv)
-    if argv and argv[0] in {
-        "supportability-config",
-        "supportability-gate",
-        "delivery-receipt",
-        "bootstrap-receipt",
-        "verify-receipt",
-    }:
-        return supportability_main(argv)
+    routed = _product_command(argv)
+    if routed is not None:
+        return routed
     parser = argparse.ArgumentParser(prog="governance-eval")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -181,7 +176,34 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
-    raise AssertionError(args.command)
+    raise AssertionError("unreachable command")
+
+
+def _product_command(argv: list[str]) -> int | None:
+    if not argv:
+        return None
+    command = argv[0]
+    direct = {
+        "adoption-bundle": adoption_bundle_main,
+        "adoption-proof": adoption_proof_main,
+    }
+    if command in direct:
+        return direct[command](argv[1:])
+    if command == "verify-candidate":
+        from governance_eval.verifier_pipeline import main as verifier_main
+
+        return verifier_main(argv[1:])
+    if command == "architecture-gate":
+        return architecture_gate_main(argv)
+    if command in {
+        "supportability-config",
+        "supportability-gate",
+        "delivery-receipt",
+        "bootstrap-receipt",
+        "verify-receipt",
+    }:
+        return supportability_main(argv)
+    return None
 
 
 def _run_case(case_id: str, root: Path) -> int:

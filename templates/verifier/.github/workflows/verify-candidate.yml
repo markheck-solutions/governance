@@ -1,30 +1,24 @@
 name: Governance Authoritative Verifier
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       repository:
-        description: Exact adopter repository (owner/name)
-        required: true
+        description: Optional enrolled repository (owner/name)
+        required: false
         type: string
       pull_request:
-        description: Pull request number
-        required: true
-        type: number
-      run_id:
-        description: Candidate workflow run ID
-        required: true
-        type: number
-      run_attempt:
-        description: Candidate workflow run attempt
-        required: true
-        type: number
+        description: Optional pull request number
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: governance-verifier-${{ inputs.repository }}-${{ inputs.pull_request }}
+  group: governance-verifier-controller
   cancel-in-progress: false
 
 jobs:
@@ -33,6 +27,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Checkout exact verifier registry
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          path: verifier
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Checkout exact Governance verifier
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -52,7 +53,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          client-id: ${{ vars.GOVERNANCE_VERIFIER_CLIENT_ID }}
+          app-id: ${{ vars.GOVERNANCE_VERIFIER_APP_ID }}
           private-key: ${{ secrets.GOVERNANCE_VERIFIER_APP_PRIVATE_KEY }}
           owner: markheck-solutions
           permission-actions: read
@@ -78,26 +79,32 @@ jobs:
           "$runtime/bin/python" -I -m pip install \
             --disable-pip-version-check \
             --no-deps \
-            --no-build-isolation \
             "$install_source"
 
-      - name: Verify fresh evidence and publish exact-head App check
+      - name: Process enrolled repositories and publish exact-head App checks
         shell: bash
         env:
           GOVERNANCE_VERIFIER_TOKEN: ${{ steps.app-token.outputs.token }}
+          DIAGNOSTIC_REPOSITORY: ${{ inputs.repository }}
+          DIAGNOSTIC_PULL_REQUEST: ${{ inputs.pull_request }}
           PYTHONHOME: ""
           PYTHONPATH: ""
         run: |
           set -euo pipefail
           runtime="${RUNNER_TEMP}/governance-verifier-runtime"
-          "$runtime/bin/python" -I -m governance_eval.verifier_pipeline \
-            --repository "${{ inputs.repository }}" \
-            --pull-request "${{ inputs.pull_request }}" \
-            --run-id "${{ inputs.run_id }}" \
-            --run-attempt "${{ inputs.run_attempt }}" \
-            --evaluator-sha "__GOVERNANCE_SHA__" \
-            --verifier-app-id "${{ vars.GOVERNANCE_VERIFIER_APP_ID }}" \
+          args=(
+            --registry "${GITHUB_WORKSPACE}/verifier/enrollments.json"
             --output-directory "${RUNNER_TEMP}/governance-verification"
+            --governance-sha "__GOVERNANCE_SHA__"
+            --verifier-app-id "${{ vars.GOVERNANCE_VERIFIER_APP_ID }}"
+          )
+          if [[ -n "${DIAGNOSTIC_REPOSITORY}" ]]; then
+            args+=(--repository "${DIAGNOSTIC_REPOSITORY}")
+          fi
+          if [[ -n "${DIAGNOSTIC_PULL_REQUEST}" ]]; then
+            args+=(--pull-request "${DIAGNOSTIC_PULL_REQUEST}")
+          fi
+          "$runtime/bin/python" -I -m governance_eval.verifier_controller "${args[@]}"
 
       - name: Upload verifier receipt
         if: always()

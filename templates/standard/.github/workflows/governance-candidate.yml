@@ -92,7 +92,7 @@ jobs:
             --evaluator-sha "__GOVERNANCE_SHA__" \
             --run-id "${GITHUB_RUN_ID}" \
             --run-attempt "${GITHUB_RUN_ATTEMPT}" \
-            --toolchain-binary "$runtime/bin/ruff" \
+            --toolchain-root "$runtime" \
             --output-dir "${RUNNER_TEMP}/governance-candidate-evidence"
 
       - name: Upload untrusted candidate evidence

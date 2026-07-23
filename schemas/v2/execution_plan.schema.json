@@ -24,7 +24,7 @@
         "pids_limit": {"type": "integer", "minimum": 1, "maximum": 128},
         "memory_bytes": {"type": "integer", "minimum": 67108864, "maximum": 536870912},
         "cpus": {"type": "string", "enum": ["1.0"]},
-        "toolchain_sha256": {"type": "string", "enum": ["68971e86ff2a4bd44f45dc2dd28e590e785fea12dc966410ae269173ce6d64db"]},
+        "toolchain_sha256": {"type": "string", "enum": ["68971e86ff2a4bd44f45dc2dd28e590e785fea12dc966410ae269173ce6d64db", "a3febf305b754c41ab62abeee10437ad550b82d7810d8492393ca0cae5b3784d"]},
         "docker_path": {"type": "string", "minLength": 1},
         "docker_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "docker_host": {"type": "string", "enum": ["unix:///var/run/docker.sock", "npipe:////./pipe/docker_engine"]}
@@ -32,18 +32,46 @@
       "additionalProperties": false
     },
     "step": {
-      "type": "object",
-      "required": ["step_id", "adapter_id", "toolchain", "argv", "working_directory", "timeout_seconds", "output_limit_bytes"],
-      "properties": {
-        "step_id": {"type": "string", "enum": ["lint"]},
-        "adapter_id": {"type": "string", "enum": ["python.ruff-check.v1"]},
-        "toolchain": {"type": "object", "required": ["ruff"], "properties": {"ruff": {"type": "string", "enum": ["0.15.21"]}}, "additionalProperties": false},
-        "argv": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "string", "minLength": 1}},
-        "working_directory": {"type": "string", "enum": ["/workspace"]},
-        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
-        "output_limit_bytes": {"type": "integer", "minimum": 1, "maximum": 65536}
-      },
-      "additionalProperties": false
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["step_id", "adapter_id", "toolchain", "argv", "working_directory", "timeout_seconds", "output_limit_bytes"],
+          "properties": {
+            "step_id": {"type": "string", "enum": ["lint"]},
+            "adapter_id": {"type": "string", "enum": ["python.ruff-check.v1"]},
+            "toolchain": {"type": "object", "required": ["ruff"], "properties": {"ruff": {"type": "string", "enum": ["0.15.21"]}}, "additionalProperties": false},
+            "argv": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "string", "minLength": 1}},
+            "working_directory": {"type": "string", "enum": ["/workspace"]},
+            "timeout_seconds": {"type": "integer", "enum": [120]},
+            "output_limit_bytes": {"type": "integer", "enum": [65536]}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["step_id", "adapter_id", "toolchain", "argv", "working_directory", "timeout_seconds", "output_limit_bytes"],
+          "properties": {
+            "step_id": {"type": "string", "enum": ["standard_profile"]},
+            "adapter_id": {"type": "string", "enum": ["python.standard-profile.v1"]},
+            "toolchain": {
+              "type": "object",
+              "required": ["governance-eval", "mypy", "ruff", "setuptools"],
+              "properties": {
+                "governance-eval": {"type": "string", "enum": ["0.1.0"]},
+                "mypy": {"type": "string", "enum": ["2.2.0"]},
+                "ruff": {"type": "string", "enum": ["0.15.21"]},
+                "setuptools": {"type": "string", "enum": ["83.0.0"]}
+              },
+              "additionalProperties": false
+            },
+            "argv": {"type": "array", "minItems": 11, "maxItems": 11, "items": {"type": "string", "minLength": 1}},
+            "working_directory": {"type": "string", "enum": ["/workspace"]},
+            "timeout_seconds": {"type": "integer", "enum": [300]},
+            "output_limit_bytes": {"type": "integer", "enum": [65536]}
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   },
   "$defs": {

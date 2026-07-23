@@ -8,6 +8,7 @@ import importlib.metadata
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -414,6 +415,103 @@ def audit_wheel(repo_root: Path, wheel_path: Path) -> tuple[dict[str, Any], list
             return evidence, errors
     except (KeyError, OSError, UnicodeError, ValueError, zipfile.BadZipFile) as exc:
         return evidence, [f"wheel archive malformed: {type(exc).__name__}"]
+
+
+def audit_candidate_wheel(
+    repo_root: Path, wheel_path: Path
+) -> tuple[dict[str, Any], list[str]]:
+    evidence: dict[str, Any] = {
+        "name": wheel_path.name,
+        "sha256": sha256_file(wheel_path) if wheel_path.is_file() else None,
+        "member_count": 0,
+        "uncompressed_bytes": 0,
+        "members": [],
+        "metadata": None,
+    }
+    if not wheel_path.is_file() or wheel_path.is_symlink():
+        return evidence, ["wheel archive missing or linked"]
+    if wheel_path.stat().st_size > MAX_ARCHIVE_BYTES:
+        return evidence, [f"wheel archive size exceeds {MAX_ARCHIVE_BYTES}"]
+    try:
+        project = tomllib.loads(
+            (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+        )["project"]
+        with zipfile.ZipFile(wheel_path) as archive:
+            return _audit_candidate_archive(archive, project, evidence)
+    except (KeyError, OSError, UnicodeError, ValueError, zipfile.BadZipFile) as exc:
+        return evidence, [f"wheel archive malformed: {type(exc).__name__}"]
+
+
+def _audit_candidate_archive(
+    archive: zipfile.ZipFile, project: dict[str, Any], evidence: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    infos = archive.infolist()
+    names = [item.filename for item in infos]
+    evidence.update(
+        {
+            "member_count": len(names),
+            "uncompressed_bytes": sum(item.file_size for item in infos),
+            "members": sorted(names),
+        }
+    )
+    errors = _archive_errors(infos)
+    if len(names) != len(set(name.casefold() for name in names)):
+        errors.append("wheel contains case-insensitive duplicate members")
+    suffix_errors: list[str] = []
+    metadata_name = _one_suffix(names, ".dist-info/METADATA", suffix_errors)
+    wheel_name = _one_suffix(names, ".dist-info/WHEEL", suffix_errors)
+    record_name = _one_suffix(names, ".dist-info/RECORD", suffix_errors)
+    entry_names = [
+        name for name in names if name.endswith(".dist-info/entry_points.txt")
+    ]
+    if len(entry_names) > 1:
+        suffix_errors.append(
+            f"expected at most one .dist-info/entry_points.txt, found {len(entry_names)}"
+        )
+    errors.extend(suffix_errors)
+    if errors or not metadata_name or not wheel_name or not record_name:
+        return evidence, errors
+    by_name = {item.filename: item for item in infos}
+    metadata_bytes = _read_member_bytes(archive, by_name[metadata_name])
+    metadata = BytesParser().parsebytes(metadata_bytes)
+    observed_name = str(metadata.get("Name") or "")
+    observed_version = str(metadata.get("Version") or "")
+    evidence["metadata"] = {"name": observed_name, "version": observed_version}
+    if _normalized_project_name(observed_name) != _normalized_project_name(
+        str(project["name"])
+    ):
+        errors.append("wheel metadata project name mismatch")
+    if observed_version != str(project["version"]):
+        errors.append("wheel metadata version mismatch")
+    errors.extend(_record_errors(archive, by_name, record_name))
+    expected_scripts = project.get("scripts", {})
+    if expected_scripts and not entry_names:
+        errors.append("wheel console entry points are missing")
+    elif entry_names:
+        entry_text = _read_member_bytes(archive, by_name[entry_names[0]]).decode(
+            "utf-8"
+        )
+        errors.extend(_candidate_entry_point_errors(entry_text, project))
+    return evidence, errors
+
+
+def _normalized_project_name(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def _candidate_entry_point_errors(text: str, project: dict[str, Any]) -> list[str]:
+    parser = _EntryPointParser(interpolation=None, strict=True)
+    try:
+        parser.read_string(text)
+    except configparser.Error:
+        return ["wheel entry points are malformed"]
+    expected = project.get("scripts", {})
+    observed = (
+        dict(parser.items("console_scripts"))
+        if parser.has_section("console_scripts")
+        else {}
+    )
+    return [] if observed == expected else ["wheel console entry points mismatch"]
 
 
 def _empty_wheel_evidence(wheel_path: Path, expected: set[str]) -> dict[str, Any]:

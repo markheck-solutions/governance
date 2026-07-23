@@ -30,6 +30,10 @@ class VerifierTemplateTests(unittest.TestCase):
         self.assertEqual(workflow.count(self.sha), 2)
         self.assertIn("permission-checks: write", workflow)
         self.assertIn("permission-actions: read", workflow)
+        self.assertIn('cron: "*/5 * * * *"', workflow)
+        self.assertIn("governance_eval.verifier_controller", workflow)
+        self.assertIn("app-id: ${{ vars.GOVERNANCE_VERIFIER_APP_ID }}", workflow)
+        self.assertNotIn("--no-build-isolation", workflow)
         self.assertNotIn("__GOVERNANCE_SHA__", workflow)
         self.assertNotIn("pull_request_target", workflow)
 

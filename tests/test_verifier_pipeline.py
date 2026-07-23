@@ -17,6 +17,8 @@ from governance_eval.verifier_pipeline import (
     WORKFLOW_PATH,
     VerificationTarget,
     VerifierPipelineError,
+    _artifact,
+    _existing_check,
     verify_and_publish,
 )
 
@@ -35,6 +37,9 @@ class _FakeAPI:
                 return deepcopy(value.pop(0))
             return deepcopy(value[0])
         return deepcopy(value)
+
+    def get_list(self, path: str) -> list[Any]:
+        return deepcopy(self.responses[path])
 
     def post_json(self, path: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         self.posts.append((path, deepcopy(payload)))
@@ -67,6 +72,11 @@ class VerifierPipelineTests(unittest.TestCase):
             run_attempt=2,
             evaluator_sha=self.evaluator,
             verifier_app_id=7654321,
+            repository_id=101,
+            workflow_sha256=sha256(b"workflow\n").hexdigest(),
+            configuration_sha256=sha256(b"config\n").hexdigest(),
+            standard_sha256=sha256(b"standard\n").hexdigest(),
+            required_context=REQUIRED_CONTEXT,
         )
         self.responses = self._responses()
 
@@ -125,6 +135,50 @@ class VerifierPipelineTests(unittest.TestCase):
                 api.patches[0][0], f"/repos/{self.repository}/check-runs/987654"
             )
 
+    def test_paginates_artifacts_and_app_checks_before_selecting_identity(self) -> None:
+        responses = deepcopy(self.responses)
+        artifact_base = (
+            f"/repos/{self.repository}/actions/runs/1234/artifacts?per_page=100"
+        )
+        expected_artifact = responses[artifact_base]["artifacts"][0]
+        responses[artifact_base] = {
+            "artifacts": [
+                {"id": index, "name": f"unrelated-{index}"} for index in range(1, 101)
+            ]
+        }
+        responses[f"{artifact_base}&page=2"] = {"artifacts": [expected_artifact]}
+        check_base = (
+            f"/repos/{self.repository}/commits/{self.head}/check-runs"
+            "?check_name=Governance%20%2F%20Authoritative%20Decision&per_page=100"
+        )
+        responses[check_base] = {
+            "check_runs": [
+                {
+                    "id": index,
+                    "name": REQUIRED_CONTEXT,
+                    "head_sha": self.head,
+                    "app": {"id": 1},
+                }
+                for index in range(1, 101)
+            ]
+        }
+        expected_check = {
+            "id": 1001,
+            "name": REQUIRED_CONTEXT,
+            "head_sha": self.head,
+            "app": {"id": self.target.verifier_app_id},
+        }
+        responses[f"{check_base}&page=2"] = {"check_runs": [expected_check]}
+        api = _FakeAPI(responses)
+
+        artifact = _artifact(api, self.target, 101, self.head)
+        check = _existing_check(
+            api, self.repository, self.target.verifier_app_id, self.head
+        )
+
+        self.assertEqual(artifact["id"], 555)
+        self.assertEqual(check, expected_check)
+
     def test_rejects_cross_pr_run_before_reading_candidate_content(self) -> None:
         responses = deepcopy(self.responses)
         responses[f"/repos/{self.repository}/actions/runs/1234"]["pull_requests"][0][
@@ -173,6 +227,10 @@ class VerifierPipelineTests(unittest.TestCase):
         changed = deepcopy(responses[pr_path])
         changed["head"]["sha"] = "f" * 40
         responses[pr_path] = [responses[pr_path], changed]
+        responses[
+            f"/repos/{self.repository}/commits/{'f' * 40}/check-runs"
+            "?check_name=Governance%20%2F%20Authoritative%20Decision&per_page=100"
+        ] = {"check_runs": []}
         api = _FakeAPI(responses)
         with TemporaryDirectory() as temporary_directory:
             with (
@@ -235,14 +293,69 @@ class VerifierPipelineTests(unittest.TestCase):
             "App or head identity mismatch", api.patches[0][1]["output"]["summary"]
         )
 
+    def test_reuses_one_existing_app_check_for_same_head(self) -> None:
+        responses = deepcopy(self.responses)
+        check_path = (
+            f"/repos/{self.repository}/commits/{self.head}/check-runs"
+            "?check_name=Governance%20%2F%20Authoritative%20Decision&per_page=100"
+        )
+        responses[check_path] = {
+            "check_runs": [
+                {
+                    "id": 111,
+                    "name": REQUIRED_CONTEXT,
+                    "head_sha": self.head,
+                    "app": {"id": 7654321},
+                }
+            ]
+        }
+        api = _FakeAPI(responses)
+        with TemporaryDirectory() as temporary_directory:
+            with (
+                mock.patch(
+                    "governance_eval.verifier_pipeline.verify_candidate_artifact",
+                    return_value={"result": "PASS", "errors": []},
+                ),
+                mock.patch(
+                    "governance_eval.verifier_pipeline.check_run_request",
+                    return_value={
+                        "name": REQUIRED_CONTEXT,
+                        "head_sha": self.head,
+                        "status": "completed",
+                        "conclusion": "success",
+                        "external_id": "d" * 64,
+                        "output": {"title": "PASS", "summary": "verified"},
+                    },
+                ),
+            ):
+                result = verify_and_publish(
+                    api=api,
+                    target=self.target,
+                    output_directory=Path(temporary_directory) / "proof",
+                )
+
+        self.assertEqual(result["check_run_id"], 111)
+        self.assertEqual(api.posts, [])
+        self.assertEqual(api.patches[0][0], f"/repos/{self.repository}/check-runs/111")
+
+    def test_rejects_candidate_changed_enrolled_hash(self) -> None:
+        api = _FakeAPI(self.responses)
+        with TemporaryDirectory() as temporary_directory:
+            result = verify_and_publish(
+                api=api,
+                target=replace(self.target, workflow_sha256="f" * 64),
+                output_directory=Path(temporary_directory) / "proof",
+            )
+
+        self.assertEqual(result["result"], "REJECT")
+        self.assertIn("enrolled workflow", api.patches[0][1]["output"]["summary"])
+
     def test_rejects_noncanonical_or_mutable_target_identity(self) -> None:
         cases = (
-            VerificationTarget(
-                "MarkHeck-Solutions/example", 1, 1, 1, self.evaluator, 1
-            ),
-            VerificationTarget(self.repository, 0, 1, 1, self.evaluator, 1),
-            VerificationTarget(self.repository, 1, 1, 1, "main", 1),
-            VerificationTarget(self.repository, 1, 1, 1, self.evaluator, 0),
+            replace(self.target, repository="MarkHeck-Solutions/example"),
+            replace(self.target, pull_request=0),
+            replace(self.target, evaluator_sha="main"),
+            replace(self.target, verifier_app_id=0),
         )
         for target in cases:
             with self.subTest(target=target):
@@ -315,6 +428,10 @@ class VerifierPipelineTests(unittest.TestCase):
             f"/repos/markheck-solutions/governance/git/commits/{self.evaluator}": {
                 "sha": self.evaluator,
                 "tree": {"sha": "e" * 40},
+            },
+            f"{repository_path}/commits/{self.head}/check-runs"
+            "?check_name=Governance%20%2F%20Authoritative%20Decision&per_page=100": {
+                "check_runs": []
             },
         }
         for path, content in (

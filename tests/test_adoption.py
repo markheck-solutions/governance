@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from governance_eval.adoption import (
+    AdoptionError,
+    CONFIG_PATH,
+    generate_adoption_bundle,
+    prove_adoption_bundle,
+    validate_adoption_config,
+)
+
+
+class AdoptionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.source = Path(__file__).resolve().parents[1]
+        self.governance_sha = "a" * 40
+        self.rollback_sha = "b" * 40
+
+    def test_bundle_is_byte_stable_and_proof_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            self._target(target)
+            before = self._state(target)
+            first = root / "first"
+            second = root / "second"
+            manifests = [
+                generate_adoption_bundle(
+                    repo_root=target,
+                    output_dir=output,
+                    github_repository="owner/repository",
+                    repository_id=123,
+                    governance_sha=self.governance_sha,
+                    verifier_app_id=456,
+                    rollback_sha=self.rollback_sha,
+                    source_root=self.source,
+                )
+                for output in (first, second)
+            ]
+
+            self.assertEqual(manifests[0], manifests[1])
+            self.assertEqual(self._files(first), self._files(second))
+            proof = prove_adoption_bundle(
+                repo_root=target,
+                bundle_dir=first,
+                artifacts_dir=root / "proof",
+                github_repository="owner/repository",
+            )
+            self.assertEqual(proof["status"], "PASS")
+            self.assertEqual(before, self._state(target))
+            self.assertEqual(len(proof["capabilities"]), 10)
+
+    def test_proof_rejects_arbitrary_configuration_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            self._target(target)
+            bundle = root / "bundle"
+            generate_adoption_bundle(
+                repo_root=target,
+                output_dir=bundle,
+                github_repository="owner/repository",
+                repository_id=123,
+                governance_sha=self.governance_sha,
+                verifier_app_id=456,
+                rollback_sha=self.rollback_sha,
+                source_root=self.source,
+            )
+            config_path = bundle / CONFIG_PATH
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["command"] = "python attacker.py"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaises(AdoptionError):
+                prove_adoption_bundle(
+                    repo_root=target,
+                    bundle_dir=bundle,
+                    artifacts_dir=root / "proof",
+                    github_repository="owner/repository",
+                )
+
+    def test_configuration_rejects_every_target_control_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            self._target(target)
+            bundle = root / "bundle"
+            generate_adoption_bundle(
+                repo_root=target,
+                output_dir=bundle,
+                github_repository="owner/repository",
+                repository_id=123,
+                governance_sha=self.governance_sha,
+                verifier_app_id=456,
+                rollback_sha=self.rollback_sha,
+                source_root=self.source,
+            )
+            original = json.loads((bundle / CONFIG_PATH).read_text(encoding="utf-8"))
+            mutations = {
+                "executable": {"executable": "python"},
+                "command": {"command": "python attacker.py"},
+                "arguments": {"arguments": ["--exit-zero"]},
+                "environment": {"environment": {"TOKEN": "attacker"}},
+                "threshold": {"max_complexity": 99},
+                "include": {"include": ["safe.py"]},
+                "exclude": {"exclude": ["unsafe.py"]},
+                "traversal": {"evaluation_root": "../../outside"},
+            }
+            for name, mutation in mutations.items():
+                with self.subTest(name=name):
+                    hostile = {**original, **mutation}
+                    with self.assertRaises(AdoptionError):
+                        validate_adoption_config(
+                            hostile,
+                            governance_sha=self.governance_sha,
+                            verifier_app_id=456,
+                        )
+
+    def _target(self, path: Path) -> None:
+        path.mkdir()
+        for command in (
+            ("init", "-q"),
+            ("config", "user.email", "governance@example.invalid"),
+            ("config", "user.name", "Governance Test"),
+        ):
+            subprocess.run(["git", *command], cwd=path, check=True, timeout=10)
+        (path / "pyproject.toml").write_text(
+            '[project]\nname = "fixture"\nversion = "0.0.1"\nrequires-python = ">=3.12"\n',
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=path, check=True, timeout=10)
+        subprocess.run(
+            ["git", "commit", "-qm", "fixture"], cwd=path, check=True, timeout=10
+        )
+
+    def _state(self, path: Path) -> tuple[str, str]:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        return head, status
+
+    def _files(self, root: Path) -> dict[str, bytes]:
+        return {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+
+if __name__ == "__main__":
+    unittest.main()

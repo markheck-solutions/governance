@@ -16,9 +16,11 @@ APP_DESCRIPTION = (
 APP_PRIVATE_KEY_SECRET = "GOVERNANCE_VERIFIER_APP_PRIVATE_KEY"
 APP_CLIENT_ID_VARIABLE = "GOVERNANCE_VERIFIER_CLIENT_ID"
 APP_ID_VARIABLE = "GOVERNANCE_VERIFIER_APP_ID"
+APP_SLUG_VARIABLE = "GOVERNANCE_VERIFIER_APP_SLUG"
 APP_INSTALLATIONS = (
     "markheck-solutions/governance",
     "markheck-solutions/governance-verifier",
+    "markheck-solutions/governance-runtime-disposable-20260721",
 )
 APP_PERMISSIONS = {
     "actions": "read",

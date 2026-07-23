@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Sequence
 
 from governance_eval.github_app_manifest import (
-    APP_CLIENT_ID_VARIABLE,
     APP_ID_VARIABLE,
     APP_PRIVATE_KEY_SECRET,
 )
@@ -66,7 +65,6 @@ def _validate_common(workflow: str) -> None:
     forbidden = (
         "pull_request_target",
         "\n  pull_request:\n",
-        "\n  schedule:\n",
         "administration: read",
         "administration: write",
         "contents: write",
@@ -79,23 +77,25 @@ def _validate_common(workflow: str) -> None:
     if any(value in workflow for value in forbidden):
         raise VerifierTemplateError("verifier workflow contains forbidden authority")
     required = (
-        "on:\n  workflow_dispatch:\n",
+        '  schedule:\n    - cron: "*/5 * * * *"\n',
+        "  workflow_dispatch:\n",
         "permissions:\n  contents: read\n",
         f"actions/create-github-app-token@{CREATE_APP_TOKEN_SHA}",
-        f"vars.{APP_CLIENT_ID_VARIABLE}",
         f"vars.{APP_ID_VARIABLE}",
         f"secrets.{APP_PRIVATE_KEY_SECRET}",
+        "app-id: ${{ vars.GOVERNANCE_VERIFIER_APP_ID }}",
         "permission-actions: read",
         "permission-checks: write",
         "permission-contents: read",
         "permission-metadata: read",
         "permission-pull-requests: read",
-        "governance_eval.verifier_pipeline",
-        "Verify fresh evidence and publish exact-head App check",
+        "governance_eval.verifier_controller",
+        "Process enrolled repositories and publish exact-head App checks",
+        'args+=(--repository "${DIAGNOSTIC_REPOSITORY}")',
     )
     if any(value not in workflow for value in required):
         raise VerifierTemplateError("verifier workflow contract is incomplete")
-    if workflow.count("persist-credentials: false") != 1:
+    if workflow.count("persist-credentials: false") != 2:
         raise VerifierTemplateError("verifier checkout credentials are unsafe")
 
 

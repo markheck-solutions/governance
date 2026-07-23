@@ -13,6 +13,7 @@ from governance_eval.github_app_manifest import (
     APP_INSTALLATIONS,
     APP_PERMISSIONS,
     APP_PRIVATE_KEY_SECRET,
+    APP_SLUG_VARIABLE,
     GitHubAppManifestError,
     github_app_manifest,
     registration_url,
@@ -91,11 +92,13 @@ class GitHubAppManifestTests(unittest.TestCase):
         self.assertEqual(APP_PRIVATE_KEY_SECRET, "GOVERNANCE_VERIFIER_APP_PRIVATE_KEY")
         self.assertEqual(APP_CLIENT_ID_VARIABLE, "GOVERNANCE_VERIFIER_CLIENT_ID")
         self.assertEqual(APP_ID_VARIABLE, "GOVERNANCE_VERIFIER_APP_ID")
+        self.assertEqual(APP_SLUG_VARIABLE, "GOVERNANCE_VERIFIER_APP_SLUG")
         self.assertEqual(
             APP_INSTALLATIONS,
             (
                 "markheck-solutions/governance",
                 "markheck-solutions/governance-verifier",
+                "markheck-solutions/governance-runtime-disposable-20260721",
             ),
         )
 

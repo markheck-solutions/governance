@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://markheck-solutions.github.io/governance/schemas/v1/verifier_enrollment.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "repositories"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "repositories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repository",
+          "repository_id",
+          "candidate_workflow_path",
+          "governance_sha",
+          "workflow_sha256",
+          "configuration_sha256",
+          "standard_sha256",
+          "required_context",
+          "verifier_app_id"
+        ],
+        "properties": {
+          "repository": {"type": "string", "pattern": "^[a-z0-9_.-]+/[a-z0-9_.-]+$"},
+          "repository_id": {"type": "integer", "minimum": 1},
+          "candidate_workflow_path": {"const": ".github/workflows/governance-candidate.yml"},
+          "governance_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "workflow_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "configuration_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "standard_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "required_context": {"const": "Governance / Authoritative Decision"},
+          "verifier_app_id": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}
